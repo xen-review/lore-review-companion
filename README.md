@@ -170,7 +170,15 @@ changes creation chronology only, not content, author or existing edit time.
 Same-key retries are idempotent; stale evidence, changed intent, unsupported
 verification claims and revoked grants are refused. Original import replay
 does not reset a correction or rewrite legacy content. Corrections are not
-automatic or part of the companion worker; provenance UI is still pending.
+automatic or part of the companion worker.
+
+The web UI shows unverified participant identity, importing account, lore link,
+source time/quality and actual import time on PR covers, conversation messages,
+review headers and inline threads, including exact historical patch views.
+Correction history is expandable and bounded to the latest 100 entries, with
+truncation made explicit. Ordinary issue/PR/comment/review read APIs expose the
+same `review_import` metadata and audit history under normal repository read
+permissions; no import credential is needed merely to inspect provenance.
 
 ## Coordinated Dry Run
 

@@ -46,6 +46,9 @@ No automatic pushes. Forgejo changes belong to the separate parent repository.
 - F05 `DONE`: validated original chronology initializes only new imported
   objects; actual import/update times remain separate in UTC. Scoped corrections
   are evidence-bound, idempotent and audited without changing bodies/authors/edits.
+- F06 `DONE`: web and ordinary read APIs show importer/participant identities,
+  lore source, original chronology/quality, actual import time and bounded
+  correction history. Desktop/mobile layout and ordinary reviews are checked.
 - S01 `DONE`: new imported publication uses paired immutable base/head refs and
   one participant-authored PR per revision by default. V2 links to V1 without
   rewriting V1. Protected Git/API credentials and uncertainty approvals are
@@ -104,7 +107,7 @@ revision state here; do not stage them into a companion commit.
 | F03 | DONE | F01, F02 | Existing-PR conversation import and scoped operation lookup preserve mapped author, importer, source time/hash and atomic operation keys. Replay keeps IDs; changed payload/target/local content or reused Message-ID with different bytes/author conflicts. No notifications, mentions or cross-reference actions. Opt-in companion client rechecks capabilities, safely replays uncertain POSTs and never uses ordinary mutation APIs. |
 | F04 | DONE | F03 | Participant-authored PRs retain pinned branches/commits, use CAS-only pull refs and reject duplicate revision-message claims. Fresh non-voting reviews/replies validate exact historical patch parents and old/new ranges without draft theft or notifications. Scoped clients preserve uncertain replay and validate returned IDs/pins. Real-Git API cases pass; per-patch companion wiring is C05/S01/S03. No ordinary before-commit API extension was necessary. |
 | F05 | DONE | F03, F04 | New imported PRs, conversations, reviews/ranges and replies receive validated original creation chronology; actual import/update timestamps remain separate in UTC. Scoped original-importer corrections bind prior payload/time/basis, retain body/author/edit time and append idempotent reason/actor/time audits. All six isolated import API tests and affected model/service/migration packages pass; unknown/UTC/future/unsupported quality/stale evidence/revocation/replay cases are covered. |
-| F06 | TODO | F03, F04, F05 | API and web render both participant and importer, lore link and source chronology/quality. Reuse existing UI; no forged identity verification or layout regressions. |
+| F06 | DONE | F03, F04, F05 | Shared localized provenance on PR covers, conversation/review headers, timeline inline threads and exact files-changed views. Ordinary issue/PR/comment/review/range read APIs expose separate importer/participant names and IDs, source chronology/quality, actual import times and bounded correction history with explicit truncation. Six import and seven ordinary review API cases, models/converters, locales, schemas and desktop/mobile checks pass. |
 
 ## Publication And Automation
 
@@ -711,3 +714,34 @@ Bring them into scope only through an explicit decision.
   explicit operator API, not worker self-approval or a legacy migration. F05 is
   complete; readable API/web provenance and correction history are F06.
 - Commit subject: `docs: record verified imported source chronology`.
+
+### 2026-10-30: F06 Readable Imported Provenance
+
+- Added read-only per-object import mapping with importer/participant profiles
+  and the latest 100 corrections, explicitly signaling truncation. A shared
+  localized metadata partial fits existing PR/comment layouts and appears on
+  covers, conversations, review headers, inline threads and exact patch views.
+  Retained names are displayed independently of global username preference;
+  generated logins remain distinct and identities are always unverified.
+- Normal issue/PR/comment/review/range read APIs expose shared `review_import`
+  provenance under existing read authorization. No broad import credential,
+  source email, password or token is needed/exposed. Actual import/correction
+  times stay separate from source estimates. API history retains actor, old/new
+  quality/time and reason; web history is expandable and ordinary content is
+  unchanged. Private-draft filtering remains in the existing path.
+- Browser preview used only an explicitly opted-in loopback integration fixture.
+  Screenshots and DOM checks at 1440x1000 and 390x844 showed all four root/range/
+  reply blocks with loaded assets and no page-level horizontal overflow or
+  metadata overflow. The preview shut down cleanly and the test passed. No live
+  service, HOME, SSH or database was used. Browser inspection found generated
+  login text under username preference; retained-name fallback fixed it and
+  focused web/API tests reran.
+- All six import API cases passed (8.086 seconds), all seven ordinary review
+  cases passed (11.750 seconds), and models/issues plus services/convert passed.
+  Exact historical old-side replies were verified against before..after, not
+  an unrelated cumulative diff. Locale/usage lint, formatting, diagnostics,
+  whitespace and all five generated read-schema assertions passed. Existing
+  unrelated locale/Swagger warnings remain. Parent worktree is uncommitted.
+- F06 is complete. Remaining work is C05/V01 whole-workflow acceptance, S04's
+  explicit unattended policy/supervisor and V02/R01 security/operations handoff.
+- Commit subject: `docs: record verified imported provenance views`.
