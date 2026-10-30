@@ -6,6 +6,8 @@ import base64
 import binascii
 import hashlib
 import json
+import mailbox
+import tempfile
 from dataclasses import asdict, dataclass
 from collections.abc import Mapping
 from pathlib import Path
@@ -13,14 +15,14 @@ from typing import Iterable
 from urllib.parse import quote, urlsplit
 
 from lore_review_companion.anchor import DiffIndex
-from lore_review_companion.b4_adapter import B4ReviewError, extract_quoted_comments, read_local_review_drafts
+from lore_review_companion.b4_adapter import B4ReviewError, assemble_local_series, extract_quoted_comments, read_local_review_drafts
 from lore_review_companion.forge_api import ForgeAPIError
 from lore_review_companion.forge_comments import ForgeCommentPublisher, StaleAnchorError, quote_untrusted_text
 from lore_review_companion.forge_imports import ForgeImportClient
-from lore_review_companion.ledger import DeliveryStateConflict, Ledger, Publication
+from lore_review_companion.ledger import DeliveryStateConflict, Ledger, Publication, PublicationConflict
 from lore_review_companion.mail_parser import ParsedMessage, extract_quoted_remarks
 from lore_review_companion.outbox import comment_destination
-from lore_review_companion.preflight import PatchCommit
+from lore_review_companion.preflight import PatchCommit, prepare_patch_mailbox
 from lore_review_companion.series import discover_series
 from lore_review_companion.threads import ThreadMatch, match_thread_replies
 
@@ -253,6 +255,60 @@ def queue_imported_reply(
                 },
             })
         return ReplyQueueSummary(conversation, len(comments), len(remarks) - len(comments))
+
+
+def queue_imported_replies(
+    ledger: Ledger, client: ForgeImportClient, pull_index: int, series_key: str, revision: int,
+    repository: Path, messages: Iterable[ParsedMessage], *, max_inline_lines: int = 50,
+) -> ReplyBatchSummary:
+    recorded = ledger.series_revision(series_key, revision)
+    publication = ledger.publication(client.api.base_url + client.repository_path, series_key, revision)
+    if not recorded or not publication or publication.status != "complete" or publication.pull_index != pull_index:
+        raise ValueError("A completed publication and recorded series are required")
+    ledger.assert_publication_sources(client.api.base_url + client.repository_path, pull_index)
+    selected = tuple(messages)
+    if not selected or len(selected) > 1000:
+        raise ValueError("Select between 1 and 1000 retained reply messages")
+    for message in selected:
+        if message.kind != "reply" or not message.message_id:
+            raise ValueError("Imported queue input must contain retained replies with Message-IDs")
+        ledger.record_parsed_message(message)
+    members = tuple(message.message_id for message in recorded.messages if message.message_id)
+    related = ledger._related_thread_messages(members)
+    matches = match_thread_replies((*recorded.messages, *related, *selected), (recorded,))
+    identifiers = {message.message_id for message in selected}
+    matched = tuple(match for match in matches.matched if match.message.message_id in identifiers)
+    unresolved = tuple(message.message_id for message in matches.unmatched if message.message_id in identifiers)
+    with tempfile.TemporaryDirectory(prefix="lore-import-queue-") as temporary:
+        mailbox_path = Path(temporary) / "series.mbox"
+        box = mailbox.mbox(mailbox_path)
+        try:
+            for message in recorded.messages:
+                box.add(message.raw_message)
+            box.flush()
+        finally:
+            box.close()
+        assembly = assemble_local_series(mailbox_path, revision=revision)
+        with prepare_patch_mailbox(repository, publication.base_commit, assembly.patch_mailbox) as prepared:
+            if prepared.result.head_commit != publication.head_commit:
+                raise PublicationConflict("Reassembled series differs from the published immutable head")
+            patches = sorted((message for message in recorded.messages if message.kind == "patch"), key=lambda message: message.patch_index or 0)
+            comparisons = prepared.patch_commits(tuple(message.message_id for message in patches))
+            diffs = {}
+            for comparison in comparisons:
+                if comparison.message_id not in {match.patch_message_id for match in matched}:
+                    continue
+                snapshot = client.comparison(pull_index, after_commit=comparison.after_commit)
+                if snapshot["before_commit"] != comparison.before_commit or snapshot["head_commit"] != publication.head_commit:
+                    raise PublicationConflict("Published patch comparison differs from the assembled source")
+                diffs[comparison.message_id] = snapshot["diff"]
+            results = tuple(queue_imported_reply(
+                ledger, client, pull_index, match, patch_commits=comparisons, patch_diffs=diffs,
+                max_inline_lines=max_inline_lines,
+            ) for match in matched)
+    return ReplyBatchSummary(len(matched), unresolved, 0, sum(result.inline_count for result in results),
+                             sum(result.unresolved_count for result in results),
+                             tuple(result.diagnostic for result in results if result.diagnostic))
 
 
 def _queue_verified_thread_reply(

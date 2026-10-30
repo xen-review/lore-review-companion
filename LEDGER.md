@@ -23,7 +23,8 @@ No automatic pushes. Forgejo changes belong to the separate parent repository.
   exact range resolution (C04) is also verified. Versioned delivery is next.
 - C05 `IN PROGRESS`: native quote-to-range queue, evidence preview, approval,
   delivery and replay are verified, including imported-author per-patch effects.
-  CLI/orchestration and isolated whole-workflow acceptance remain. No runtime
+  Explicit queue/delivery CLI commands are verified; publication orchestration
+  and isolated whole-workflow acceptance remain. No runtime
   b4 parser is needed for native replies.
 - C02 `DONE`: exact local b4/liblore sources are installed and fingerprinted;
   real offline assembly and read-only draft checks passed.
@@ -43,7 +44,7 @@ No automatic pushes. Forgejo changes belong to the separate parent repository.
   stable inline IDs and no draft consumption or notifications. Companion
   per-patch publication/outbox wiring remains under C05, S01 and S03.
 - Historical sample publications remain background evidence only; the current
-  baseline is 328 tests, with only the live-server acceptance test skipped
+  baseline is 330 tests, with only the live-server acceptance test skipped
   when the pinned real-b4 opt-ins are enabled.
 
 ## Discovery
@@ -546,3 +547,22 @@ Bring them into scope only through an explicit decision.
   C05/S01/S03 still need publication/queue CLI wiring and isolated full workflow
   acceptance. No legacy payloads, IDs or approvals were auto-migrated.
 - Commit subject: `feat: queue and deliver exact imported patch reviews`.
+
+### 2026-10-30: C05 Imported Queue And Delivery Commands
+
+- Added explicit `queue-imports` and `deliver-imports` commands, separate from
+  legacy comment commands. Tokens come from owner-only regular files. Queueing
+  selects retained reply Message-IDs, reassembles the recorded series using
+  pinned offline b4 in an isolated clone, verifies the exact immutable head,
+  and forwards its ordered patch map plus server-verified diffs. Reassembly
+  mismatch queues no effects. Worker locks are not nested across helpers.
+- Delivery previews open the ledger read-only; remote writes require paired
+  `--write`/`--approve`. Conversation and review batches have separate approval
+  digests and explicit uncertain-retry flags. Legacy effect migration remains
+  separate and unsupported by these new commands.
+- Focused queue/CLI/reconstruction suite: 37 passed. Full Python: 330 run,
+  329 passed, only live-server skipped in 14.069 seconds (real b4 enabled).
+  Editor diagnostics passed. No live writes, operational ledgers or credentials
+  were used in tests. C05 full isolated workflow acceptance and S01/S03
+  publication/discovery coordination still remain.
+- Commit subject: `feat: expose scoped import queue and delivery commands`.

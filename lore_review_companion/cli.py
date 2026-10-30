@@ -16,6 +16,7 @@ from lore_review_companion.b4_adapter import B4AssemblyError, B4ReviewError, ins
 from lore_review_companion.git_branches import GitHttpCredentials, RevisionBranchError, UpstreamEvidence, inspect_upstream_history, plan_staging_sync
 from lore_review_companion.forge_api import ForgeAPI, ForgeAPIError, authenticated_user, read_private_token
 from lore_review_companion.forge_comments import DeliveryUncertainError, ForgeCommentPublisher
+from lore_review_companion.forge_imports import ForgeImportClient
 from lore_review_companion.forge_pulls import ForgePullPublisher, PullRequestConflict, StagingWorkerBusy, inspect_review_staging, sync_review_staging
 from lore_review_companion.ingest import EpochArchive, backfill_epoch_round, backfill_public_inbox, check_epoch_health, plan_archive_discontinuity_resolution, resolve_archive_discontinuity, sync_epoch_round, sync_public_inbox, watch_epoch_rounds
 from lore_review_companion.ledger import (
@@ -27,13 +28,14 @@ from lore_review_companion.nntp_source import DEFAULT_GROUP, DEFAULT_HOST, DEFAU
 from lore_review_companion.outbox import (
     CommentBatchSummary, CommentDeliveryPlan, deliver_approved_comments, migrate_legacy_deliveries,
     plan_comment_delivery, plan_legacy_migration,
+    deliver_approved_imports, plan_import_delivery,
 )
 from lore_review_companion.preflight import GitPreflightError
 from lore_review_companion.public_inbox import (
     MAX_MANIFEST_COMPRESSED, PublicInboxError, fetch_public_inbox_manifest,
     inspect_public_inbox_deletion, parse_public_inbox_manifest, public_inbox_epochs,
 )
-from lore_review_companion.review_queue import queue_archive_replies, queue_b4_drafts, queue_thread_replies
+from lore_review_companion.review_queue import queue_archive_replies, queue_b4_drafts, queue_imported_replies, queue_thread_replies
 from lore_review_companion.series import change_id_candidates, discover_series, has_invalid_change_id_claims
 from lore_review_companion.series_sync import PublicationUncertain, sync_series_revision
 
@@ -435,10 +437,51 @@ def main(argv: list[str] | None = None) -> int:
     migration.add_argument("--token-env", default="LORE_GITEA_TOKEN")
     migration.add_argument("--write", action="store_true")
     migration.add_argument("--approve", help="Approval digest from the reviewed migration plan")
+    import_queue = commands.add_parser("queue-imports", help="Queue retained replies using exact imported patch comparisons")
+    import_deliver = commands.add_parser("deliver-imports", help="Preview or approve imported conversation/review effects")
+    for command in (import_queue, import_deliver):
+        command.add_argument("--ledger", type=Path, required=True)
+        command.add_argument("--api-url", required=True)
+        command.add_argument("--owner", required=True)
+        command.add_argument("--repo", required=True)
+        command.add_argument("--pull-index", type=int, required=True)
+        command.add_argument("--inbox-url", default="https://lore.kernel.org/xen-devel/")
+        command.add_argument("--token-file", type=Path, required=True)
+    import_queue.add_argument("--message-id", action="append", required=True)
+    import_queue.add_argument("--series-key", required=True)
+    import_queue.add_argument("--revision", type=int, required=True)
+    import_queue.add_argument("--repository", type=Path, required=True)
+    import_queue.add_argument("--max-inline-lines", type=int, default=50)
+    import_deliver.add_argument("--kind", choices=("conversation", "review"), required=True)
+    import_deliver.add_argument("--limit", type=int, default=100)
+    import_deliver.add_argument("--write", action="store_true")
+    import_deliver.add_argument("--approve")
+    import_deliver.add_argument("--retry-uncertain", action="store_true")
     args = parser.parse_args(argv)
 
     try:
-        if args.command == "check-b4-runtime":
+        if args.command in ("queue-imports", "deliver-imports"):
+            write_enabled = args.command == "deliver-imports" and args.write
+            if args.command == "deliver-imports" and bool(args.write) != bool(args.approve):
+                raise ValueError("--write and --approve must be supplied together")
+            token = read_private_token(args.token_file)
+            client = ForgeImportClient(ForgeAPI(args.api_url, token=token), args.owner, args.repo,
+                                       source_url=args.inbox_url, write_enabled=write_enabled)
+            ledger = Ledger(args.ledger, read_only=args.command == "deliver-imports" and not write_enabled)
+            if args.command == "queue-imports":
+                result = queue_imported_replies(ledger, client, args.pull_index, args.series_key, args.revision,
+                                                args.repository, ledger.messages_by_id(tuple(args.message_id)),
+                                                max_inline_lines=args.max_inline_lines)
+            else:
+                event_type = "IMPORT_CONVERSATION" if args.kind == "conversation" else "IMPORT_REVIEW"
+                if write_enabled:
+                    result = deliver_approved_imports(ledger, client, args.pull_index, event_type, approved_digest=args.approve,
+                                                     limit=args.limit, retry_uncertain=args.retry_uncertain)
+                else:
+                    plan = plan_import_delivery(ledger, client, args.pull_index, event_type,
+                                                limit=args.limit, retry_uncertain=args.retry_uncertain)
+                    result = RetentionPreview(plan, plan.approval_digest())
+        elif args.command == "check-b4-runtime":
             print(json.dumps(inspect_b4_runtime(args.python), sort_keys=True))
             return 0
         elif args.command == "discover-epochs":

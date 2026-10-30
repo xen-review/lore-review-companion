@@ -19,7 +19,7 @@ from lore_review_companion.ledger import DeliveryStateConflict, Ledger, MessageC
 from lore_review_companion.mail_parser import parse_message
 from lore_review_companion.outbox import deliver_approved_comments, deliver_approved_imports, migrate_legacy_deliveries, plan_comment_delivery, plan_import_delivery, plan_legacy_migration
 from lore_review_companion.preflight import PatchCommit
-from lore_review_companion.review_queue import queue_archive_replies, queue_b4_drafts, queue_imported_reply, queue_thread_replies, queue_thread_reply
+from lore_review_companion.review_queue import ReplyQueueSummary, queue_archive_replies, queue_b4_drafts, queue_imported_replies, queue_imported_reply, queue_thread_replies, queue_thread_reply
 from lore_review_companion.series import discover_series
 from test_anchor import PATCH
 from test_forge_comments import CommentTransport, FakeResponse
@@ -206,6 +206,53 @@ class ReviewQueueTests(unittest.TestCase):
             self.assertEqual(main(arguments), 0)
         self.assertIsNone(queue.call_args.kwargs["b4_python"])
         self.assertEqual(queue.call_args.args[1].max_inline_lines, 50)
+
+    def test_cli_import_queue_and_delivery_use_protected_scoped_client(self):
+        self.ledger.record_parsed_message(self.match.message)
+        token_path = Path(self.tempdir.name) / "token"
+        token_path.write_text("synthetic-token")
+        token_path.chmod(0o600)
+        arguments = ["--ledger", str(self.ledger.path), "--api-url", self.api.base_url,
+                     "--owner", "xen-project", "--repo", "xen", "--pull-index", "7", "--token-file", str(token_path)]
+        with (
+            patch("lore_review_companion.cli.ForgeAPI", return_value=self.api),
+            patch("lore_review_companion.cli.queue_imported_replies") as queue,
+            patch("lore_review_companion.cli.asdict", return_value={}), redirect_stdout(StringIO()),
+        ):
+            self.assertEqual(main(["queue-imports", *arguments, "--message-id", self.match.message.message_id,
+                                   "--series-key", self.match.series_key, "--revision", "1", "--repository", self.tempdir.name]), 0)
+        self.assertIsInstance(queue.call_args.args[1], ForgeImportClient)
+        self.assertFalse(queue.call_args.args[1].write_enabled)
+        self.assertEqual(queue.call_args.args[6], (self.match.message,))
+        with redirect_stderr(StringIO()):
+            self.assertEqual(main(["deliver-imports", *arguments, "--kind", "review", "--write"]), 1)
+
+    def test_import_queue_reconstruction_checks_head_before_creating_effects(self):
+        client = ForgeImportClient(self.api, "xen-project", "xen", source_url="https://lore.kernel.org/xen-devel/")
+        comparisons = (PatchCommit("patch@example.test", "b" * 40, "a" * 40),)
+        snapshot = {"before_commit": "b" * 40, "head_commit": "a" * 40, "diff": PATCH}
+        with (
+            patch("lore_review_companion.review_queue.assemble_local_series") as assemble,
+            patch("lore_review_companion.review_queue.prepare_patch_mailbox") as prepare,
+            patch("lore_review_companion.review_queue.queue_imported_reply", return_value=ReplyQueueSummary(1, 1, 0)) as queue,
+            patch.object(client, "comparison", return_value=snapshot),
+        ):
+            assemble.return_value.patch_mailbox = b"assembled patch mailbox"
+            prepared = prepare.return_value.__enter__.return_value
+            prepared.result.head_commit = "c" * 40
+            with self.assertRaisesRegex(PublicationConflict, "Reassembled"):
+                queue_imported_replies(self.ledger, client, 7, self.match.series_key, self.match.revision,
+                                       Path(self.tempdir.name), (self.match.message,))
+            queue.assert_not_called()
+            self.assertEqual(self.ledger.pending(), [])
+            prepared.result.head_commit = "a" * 40
+            prepared.patch_commits.return_value = comparisons
+            result = queue_imported_replies(self.ledger, client, 7, self.match.series_key, self.match.revision,
+                                            Path(self.tempdir.name), (self.match.message,))
+            self.assertEqual((result.matched, result.inline_count), (1, 1))
+            self.assertEqual(queue.call_args.kwargs["patch_commits"], comparisons)
+            self.assertEqual(queue.call_args.kwargs["patch_diffs"], {"patch@example.test": PATCH})
+            self.assertEqual(assemble.call_args.kwargs["revision"], self.match.revision)
 
     @patch("lore_review_companion.review_queue.extract_quoted_comments")
     def test_native_parser_will_not_duplicate_existing_legacy_effects(self, extract):

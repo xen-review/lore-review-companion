@@ -10,7 +10,8 @@ and tested in the separate Forgejo worktree. The first atomic conversation
 import and lookup endpoints, non-voting review/range imports and threaded
 replies are also tested. Participant-authored PR creation with pinned refs is
 tested as well. Imported conversation/review queue and approved outbox delivery
-are available as Python APIs; supported CLI/orchestration remains pending.
+are available as Python APIs and explicit CLI commands; publication orchestration
+remains pending.
 Native exact multiline
 quote matching and versioned range delivery are implemented and tested locally;
 whole-workflow acceptance remains pending. Read [PLAN.md](PLAN.md) and [LEDGER.md](LEDGER.md)
@@ -83,6 +84,32 @@ explicitly verified `--max-inline-lines` capability (default 1). The current
 Forgejo checkout supports 50 selected lines. Plans bind this limit; changing it
 requires approval again. Existing legacy inline effects are not automatically
 duplicated or migrated to the new parser.
+
+## Scoped Imports
+
+The extension must be built and enabled in the separate Forgejo instance first.
+Use an explicitly granted repository-selected `write:review-import` token in a
+private token file. These commands do not use the ordinary comment APIs:
+
+```sh
+.venv/bin/lore-review-companion queue-imports \
+  --ledger state.sqlite3 --api-url https://forge.example/api/v1/ \
+  --owner review --repo xen --pull-index 7 --token-file /private/import-token \
+  --series-key 'lore:cover@example.test' --revision 1 \
+  --repository /path/to/xen --message-id reply@example.test
+
+.venv/bin/lore-review-companion deliver-imports \
+  --ledger state.sqlite3 --api-url https://forge.example/api/v1/ \
+  --owner review --repo xen --pull-index 7 --token-file /private/import-token \
+  --kind review
+```
+
+Queueing requires the recorded completed publication and pinned b4 runtime;
+it verifies reassembly and exact historical patch diffs before adding effects.
+The delivery command above is read-only and prints its plan/digest. After
+reviewing it, supply paired `--write --approve DIGEST` for that exact batch.
+Use `--kind conversation` to plan complete-message imports independently.
+Uncertain earlier writes need a newly reviewed `--retry-uncertain` plan.
 
 ## Develop And Test
 
