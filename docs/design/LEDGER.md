@@ -160,19 +160,29 @@ threading phases remain incomplete. Detailed boundaries are in
   workflow verifies a three-level ordinary discussion, API parent IDs and
   idempotent replay. The companion suite passes 371 tests with four skips;
   neither this change nor the Forgejo threading commits are deployed yet.
-- These commits are not deployed. The remaining migration/backfill, tree UI and
-  reply controls, missing-parent rendering, further ambiguity tests, browser
-  verification and a new production PR remain unimplemented. Generated API
-  documentation also needs updating. Do not treat the API field or stored
-  relationship as a completed threading feature.
+- Forgejo `98f1450e35` backfills only verifiable same-source imported inline
+  parents, preserving existing edges and rejecting cycles, ambiguous provenance,
+  invalid chains and ancestry deeper than 100. The migration package passes.
+  `0bf5805d3f`, `b8da582e31` and `cda142fe72` add ordinary and inline trees,
+  per-comment web reply controls, normal API parent IDs, and explicit deleted-
+  parent placeholders. Focused integration tests cover nested replies in both
+  views, deletion, invalid targets, archived repositories and pending-review
+  privacy; the live deletion placeholder also has a JavaScript unit test.
+  Swagger parent fields were generated and validated in `c76f179a6a`.
+- Companion approval now repeats the ordinary-parent uniqueness check and
+  rejects changed operation types. Forty-four queue tests cover ambiguous
+  parents and cover-letter-only ancestry; the isolated Forgejo/Git/b4
+  workflow passes again. None of these threading changes is deployed yet.
+  Remaining work includes broader permission/security review, desktop/mobile
+  browser verification, and a new deployed PR showing the actual discussion.
 
 | Phase | Status | Dependency | Completion evidence |
 | --- | --- | --- | --- |
 | T01: tree contract | DONE | None | Contract specifies parent identity, deletion fallback, ordering, bounds, access controls, compatibility and accessibility in PLAN.md. |
 | T02: Forgejo parent model and user API | IN PROGRESS | T01 | Persist parent edges, safely backfill imported inline parents without confusing cross-references, and test normal-user permissions and invalid/cyclic targets. |
 | T03: scoped import API | IN PROGRESS | T02 | Support non-inline and nested parents with capability negotiation, source provenance, parent-content checks, conflict handling and replay. |
-| T04: tree presentation | TODO | T02 | Show nested reply trees and per-comment controls in timeline and inline views; verify desktop/mobile, accessibility, ordering and permalinks. |
-| T05: remark-level companion | IN PROGRESS | T03, T04 | Ordinary and nested reply matching, capability checks and real-server replay pass; ambiguity and rendered browser behavior still require verification. |
+| T04: tree presentation | IN PROGRESS | T02 | Ordinary and inline trees, controls, deletion fallback and focused integration checks pass; desktop/mobile browser and accessibility verification remain. |
+| T05: remark-level companion | IN PROGRESS | T03, T04 | Ordinary and nested matching, ambiguity checks, cover ancestry and real-server replay pass; rendered deployed behavior still requires verification. |
 
 ## Earlier Rollout Notes
 

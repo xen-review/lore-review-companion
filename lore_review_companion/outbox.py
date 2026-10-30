@@ -498,6 +498,39 @@ def accepted_inline_targets(ledger, client, destination, parent, thread):
     return targets
 
 
+def accepted_conversation_targets(ledger, client, destination, parent, thread):
+    targets = []
+    for effect in ledger.comment_effects(parent.message_id, destination):
+        if effect.event_type != "IMPORT_CONVERSATION":
+            continue
+        if effect.payload.get("thread") != thread:
+            raise PublicationConflict(
+                "Imported parent belongs to a different revision thread"
+            )
+        request = effect.payload.get("request", {})
+        remote = client.lookup_operation(request.get("operation_key"))
+        if remote is None:
+            continue
+        if (
+            remote.get("type") != "conversation"
+            or remote.get("message_id") != parent.message_id
+            or remote.get("message_sha256") != parent.sha256
+            or type(remote.get("comment_id")) is not int
+            or remote["comment_id"] <= 0
+            or not isinstance(request.get("body"), str)
+        ):
+            raise PublicationConflict("Imported conversation parent lookup changed")
+        authored = imported_mail_text(
+            reply_prose(parent.body_text),
+            parent.message_id,
+            client.source_url,
+            effect.payload.get("body_format"),
+            parent.from_name or parent.from_address,
+        )
+        targets.append((authored, remote["comment_id"], request["body"], effect, 0))
+    return targets
+
+
 def plan_import_delivery(
     ledger: Ledger,
     client: ForgeImportClient,
@@ -609,6 +642,38 @@ def plan_import_delivery(
                 ):
                     raise PublicationConflict(
                         "Imported conversation reply now matches an inline parent"
+                    )
+                ordinary_targets = accepted_conversation_targets(
+                    ledger,
+                    client,
+                    destination,
+                    parent_source,
+                    delivery.payload["thread"],
+                )
+                matching = [
+                    target
+                    for target in ordinary_targets
+                    if quoted_parent_matches(
+                        tuple(evidence["remark"]["quote"]),
+                        target[0],
+                        delivery.payload.get("body_format"),
+                        allow_excerpt=True,
+                    )
+                    and quoted_parent_matches(
+                        tuple(evidence["remark"]["quote"]),
+                        target[2],
+                        delivery.payload.get("body_format"),
+                        allow_excerpt=True,
+                    )
+                ]
+                if (
+                    len(matching) != 1
+                    or matching[0][1] != delivery.payload["request"]["parent_id"]
+                    or matching[0][3].effect_key != evidence["parent_effect_key"]
+                    or matching[0][4] != position
+                ):
+                    raise PublicationConflict(
+                        "Imported reply no longer uniquely matches an accepted conversation parent"
                     )
             if evidence["parser"] == "quote-blocks-reply-excerpt-v1":
                 targets = accepted_inline_targets(

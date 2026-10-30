@@ -41,7 +41,11 @@ from lore_review_companion.ledger import (
     PublicationConflict,
 )
 from lore_review_companion.mail_parser import ParsedMessage, extract_quoted_remarks
-from lore_review_companion.outbox import accepted_inline_targets, comment_destination
+from lore_review_companion.outbox import (
+    accepted_conversation_targets,
+    accepted_inline_targets,
+    comment_destination,
+)
 from lore_review_companion.preflight import PatchCommit, prepare_patch_mailbox
 from lore_review_companion.series import discover_series
 from lore_review_companion.threads import ThreadMatch, match_thread_replies
@@ -627,38 +631,6 @@ def _queue_imported_inline_replies(
     targets = accepted_inline_targets(ledger, client, destination, parent, thread)
     ordinary_targets = None
 
-    def find_ordinary_targets():
-        found = []
-        for effect in ledger.comment_effects(parent.message_id, destination):
-            if effect.event_type != "IMPORT_CONVERSATION":
-                continue
-            if effect.payload.get("thread") != thread:
-                raise PublicationConflict(
-                    "Imported parent belongs to a different revision thread"
-                )
-            request = effect.payload["request"]
-            remote = client.lookup_operation(request["operation_key"])
-            if remote is None or remote.get("type") != "conversation":
-                continue
-            if (
-                remote.get("message_id") != parent.message_id
-                or remote.get("message_sha256") != parent.sha256
-                or type(remote.get("comment_id")) is not int
-                or remote["comment_id"] <= 0
-            ):
-                raise PublicationConflict("Imported conversation parent lookup changed")
-            if "conversation-reply" not in client.capabilities()["operations"]:
-                continue
-            authored = imported_mail_text(
-                reply_prose(parent.body_text),
-                parent.message_id,
-                client.source_url,
-                effect.payload.get("body_format"),
-                parent.from_name or parent.from_address,
-            )
-            found.append((authored, remote["comment_id"], request["body"], effect, 0))
-        return found
-
     queued = 0
     for position, remark in enumerate(remarks):
         if remark.quote_depth != 1:
@@ -672,7 +644,14 @@ def _queue_imported_inline_replies(
         ]
         if not candidates:
             if ordinary_targets is None:
-                ordinary_targets = find_ordinary_targets()
+                ordinary_targets = accepted_conversation_targets(
+                    ledger, client, destination, parent, thread
+                )
+                if (
+                    ordinary_targets
+                    and "conversation-reply" not in client.capabilities()["operations"]
+                ):
+                    ordinary_targets = []
             candidates = [
                 target
                 for target in ordinary_targets

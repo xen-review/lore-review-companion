@@ -182,6 +182,102 @@ class ReviewQueueTests(unittest.TestCase):
                 PublicationConflict, "accepted parent operation"
             ):
                 plan_import_delivery(self.ledger, client, 7, "IMPORT_REPLY")
+            accepted["comment_id"] = 20
+            self.ledger.enqueue(
+                parent.message_id,
+                "IMPORT_CONVERSATION",
+                parent_effect.destination,
+                "duplicate-ordinary-candidate",
+                parent_effect.payload,
+            )
+            with self.assertRaisesRegex(PublicationConflict, "uniquely match"):
+                plan_import_delivery(self.ledger, client, 7, "IMPORT_REPLY")
+
+    def test_imported_ordinary_reply_to_cover_discussion(self):
+        self.ledger = Ledger(Path(self.tempdir.name) / "cover-ledger.sqlite3")
+        cover = message("cover@example.test", "[PATCH 0/1] xen: cover")
+        patch_message = message(
+            "cover-patch@example.test",
+            "[PATCH 1/1] xen: cover",
+            headers="In-Reply-To: <cover@example.test>\n",
+        )
+        (revision,) = discover_series((cover, patch_message))
+        for source in revision.messages:
+            self.ledger.record_parsed_message(source)
+        self.ledger.record_series_revision(revision)
+        destination = self.api.base_url + self.publisher.repository_path
+        key = destination, revision.series_key, revision.revision
+        self.ledger.begin_publication(*key, "digest", "b" * 40, "lore/cover", "a" * 40)
+        self.ledger.transition_publication(
+            *key, expected=("prepared",), status="complete", pull_index=7
+        )
+        parent = parse_message(
+            b"From: Reviewer <reviewer@example.test>\nMessage-ID: <cover-parent@example.test>\n"
+            b"Subject: Re: cover\nIn-Reply-To: <cover@example.test>\n\n"
+            b"> Patch body.\n\nAn authored concern.\n"
+        )
+        child = parse_message(
+            b"From: Second <second@example.test>\nMessage-ID: <cover-child@example.test>\n"
+            b"Subject: Re: cover\nIn-Reply-To: <cover-parent@example.test>\n\n"
+            b"> An authored concern.\nI agree with the concern.\n"
+        )
+        quoted_cover = parse_message(
+            b"From: Second <second@example.test>\nMessage-ID: <cover-quote@example.test>\n"
+            b"Subject: Re: cover\nIn-Reply-To: <cover-parent@example.test>\n\n"
+            b"> Patch body.\nThis is not the reviewer's remark.\n"
+        )
+        matches = {
+            item.message.message_id: item
+            for item in match_thread_replies(
+                (*revision.messages, parent, child, quoted_cover), (revision,)
+            ).matched
+        }
+        self.assertIsNone(matches[child.message_id].patch_message_id)
+        client = ForgeImportClient(
+            self.api,
+            "xen-project",
+            "xen",
+            source_url="https://lore.kernel.org/xen-devel/",
+        )
+        arguments = {
+            "patch_commits": (
+                PatchCommit(patch_message.message_id, "b" * 40, "a" * 40),
+            ),
+            "patch_diffs": {},
+        }
+        queue_imported_reply(
+            self.ledger, client, 7, matches[parent.message_id], **arguments
+        )
+        (parent_effect,) = self.ledger.pending()
+        accepted = {
+            "type": "conversation",
+            "comment_id": 20,
+            "message_id": parent.message_id,
+            "message_sha256": parent.sha256,
+        }
+        capabilities = {
+            "repository_id": 1,
+            "importer_id": 5,
+            "importer_login": "mirror-bot",
+            "operations": ["conversation", "review-reply", "conversation-reply"],
+            "max_inline_lines": 50,
+        }
+        with (
+            patch.object(client, "lookup_operation", return_value=accepted),
+            patch.object(client, "capabilities", return_value=capabilities),
+        ):
+            result = queue_imported_reply(
+                self.ledger, client, 7, matches[child.message_id], **arguments
+            )
+            self.assertEqual((result.inline_count, result.unresolved_count), (1, 0))
+            plan = plan_import_delivery(self.ledger, client, 7, "IMPORT_REPLY")
+            self.assertEqual(plan.deliveries[0].payload["request"]["parent_id"], 20)
+            unresolved = queue_imported_reply(
+                self.ledger, client, 7, matches[quoted_cover.message_id], **arguments
+            )
+            self.assertEqual(
+                (unresolved.inline_count, unresolved.unresolved_count), (0, 1)
+            )
 
     def test_direct_submission_conversation_formats_quotes_and_revalidates(self):
         self.ledger = Ledger(Path(self.tempdir.name) / "presentation-ledger.sqlite3")
@@ -671,7 +767,18 @@ class ReviewQueueTests(unittest.TestCase):
             "message_sha256": parent.sha256,
             "code_comment_ids": [30, 31],
         }
-        with patch.object(client, "lookup_operation", return_value=remote):
+        destination = self.api.base_url + client.repository_path + "#7"
+        review_effect = next(
+            effect
+            for effect in self.ledger.comment_effects(parent.message_id, destination)
+            if effect.event_type == "IMPORT_REVIEW"
+        )
+        review_key = review_effect.payload["request"]["operation_key"]
+        with patch.object(
+            client,
+            "lookup_operation",
+            side_effect=lambda key: remote if key == review_key else None,
+        ):
             result = queue_imported_reply(
                 self.ledger,
                 client,
@@ -1203,6 +1310,7 @@ class ReviewQueueTests(unittest.TestCase):
         recorded = self.ledger.series_revision(
             self.match.series_key, self.match.revision
         )
+        assert recorded
         cases = (
             (
                 "received",
@@ -1585,6 +1693,7 @@ class ReviewQueueTests(unittest.TestCase):
         recorded = self.ledger.series_revision(
             self.match.series_key, self.match.revision
         )
+        assert recorded
         match = match_thread_replies((*recorded.messages, reply), (recorded,)).matched[
             0
         ]
@@ -1619,6 +1728,7 @@ class ReviewQueueTests(unittest.TestCase):
         recorded = self.ledger.series_revision(
             self.match.series_key, self.match.revision
         )
+        assert recorded
         match = match_thread_replies((*recorded.messages, reply), (recorded,)).matched[
             0
         ]
