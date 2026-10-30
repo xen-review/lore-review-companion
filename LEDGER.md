@@ -59,8 +59,11 @@ No automatic pushes. Forgejo changes belong to the separate parent repository.
 - S03 `DONE`: bounded `plan-sync` composes optional source refresh/recovery,
   pinned publication/preflight and independent reply delivery previews in a
   private SQLite snapshot. Original-ledger bytes and remote objects are unchanged.
+- S04 `DONE`: private expiring policy plus server-admin unattended grant gates
+  bounded worker rounds. Review-only settings and identity are rechecked; only
+  worker-enrolled effects deliver, scheduling is durable and failures latch.
 - Historical sample publications remain background evidence only; the current
-  baseline is 343 tests, with only the live-server acceptance test skipped
+  baseline is 346 tests, with only the live-server acceptance test skipped
   when the pinned real-b4 opt-ins are enabled.
 
 ## Discovery
@@ -116,7 +119,7 @@ revision state here; do not stage them into a companion commit.
 | S01 | DONE | B04, C02, F04 | `sync-imported-series` uses one PR and paired immutable base/head refs per revision, pinned source/patch maps and prior-revision links. V2 leaves V1 unchanged; source-thread checks retain late replies on their recorded revision. Repeated writes reconcile the same operation/refs. Tests cover upstream movement, two revisions and approved uncertain retry; full live workflow remains V01. |
 | S02 | DONE | B04, C01 | `discover-nntp --lookback-hours` exposes a bounded 1-8760-hour initial window (148 default), fixed per durable source checkpoint. 42 NNTP tests cover restart/deduplication, older-parent recursion/repair, selected retries, unavailable items retained pending, bounded thread discovery and byte/disk/group-history guards. No verified receipt-time or full thread coverage is claimed. |
 | S03 | DONE | C05, S01, S02, F04 | Bounded `plan-sync` previews discovery/recovery, exact publication/preflight and all three imported delivery kinds using a private SQLite backup. Original ledger and remote refs/content stay unchanged; no write flags or blanket approval. Tests cover fixed resource bounds, snapshot isolation, retained-mail/no-NNTP state, missing/incomplete/ambiguous/unknown-base/preflight/pending-publication blockers and independent child plans. |
-| S04 | TODO | S03, F05, F06 | Explicit revocable repository policy and supervised unattended worker. Recheck scope/permissions/capabilities per write; bound Git credentials separately; incidents stop and restarts reconcile uncertain writes. No mail sending or blanket self-approval. |
+| S04 | DONE | S03, F05, F06 | Explicit private expiring local policy and admin-owned server unattended grant bind repo/importer/source identities, trusted base, rules and budgets. Review-only Actions/hooks/secrets/merge/update/head-edit settings are checked at grant and on unattended writes. Bounded worker rounds rotate durable work, preserve separate Git/API credentials, enroll only newly queued effects with fingerprints and latch failures. Tests cover revocation/identity drift/strict policy schema/manual-effect exclusion/replay/state isolation; sanitized user-level templates are not installed. Whole-workflow acceptance remains V01. |
 
 ## Acceptance And Handoff
 
@@ -745,3 +748,39 @@ Bring them into scope only through an explicit decision.
 - F06 is complete. Remaining work is C05/V01 whole-workflow acceptance, S04's
   explicit unattended policy/supervisor and V02/R01 security/operations handoff.
 - Commit subject: `docs: record verified imported provenance views`.
+
+### 2026-10-30: S04 Policy-Bound Unattended Rounds
+
+- Added a mode-0600 owner-only, symlink-refusing, expiring local policy with
+  exact numeric repo/importer and API/Git/lore/NNTP bindings, full trusted base,
+  budgets, disabled notifications and isolated/unverified identity rule.
+  Duplicate/unknown fields, expired/naive times, invalid budgets, moving bases
+  and unsafe rules are refused. Every capability check rereads the policy and
+  verifies identities/capabilities; worker clients explicitly flag requests.
+- Forgejo admin grants can separately authorize unattended mode. Enabling it
+  requires a review-only repository, and every flagged request rechecks it.
+  Actions, active repo/inherited/system hooks, repo/owner secrets, merge/manual/
+  rebase methods and default maintainer head edits block authorization. Grant
+  changes require explicit revoke/regrant. Existing manual imports are unchanged.
+- `run-import-worker` performs one bounded discovery/publication/reply round.
+  Private scheduling SQLite plus an independent process lock avoid nested mail
+  ledger locks. Durable revision rotation prevents new-series starvation. Only
+  newly queued worker effects enroll; IDs are bound to payload fingerprints and
+  the original ledger path. Existing manual/legacy work stays manual. Original
+  publication/outbox records remain authoritative, with same-key uncertainty
+  reconciliation permitted only by explicit policy or manual approval.
+- Failures leave a private incident marker. Later timer invocations stop until
+  operator inspection/recovery explicitly clears it. The disabled example and
+  user-level service/timer templates are not installed or enabled. Docs cover
+  enrollment-gap recovery, policy changes, backups and proven-orphan Git/SQL ref
+  collisions. No automatic merge, mail sending, destructive recovery or upstream
+  ref mutation is introduced; Git credential authority stays separate.
+- Focused lifecycle/worker 31, queue/outbox 38 and API/client 22 tests pass.
+  Full Python: 346 run, 345 passed, only live-server acceptance skipped in
+  15.268 seconds; real b4 ran. All seven isolated import API cases passed in
+  10.682 seconds, including the complete review-only safety matrix. Affected
+  repo/service/migration packages, formatting, diagnostics, generated schemas
+  and both worktree whitespace checks pass. No live policy/service was enabled.
+- S04 is complete at its tested component boundary. C05/V01 require real
+  companion-to-disposable-Forgejo workflow acceptance; V02/R01 remain open.
+- Commit subject: `feat: add revocable policy-bound import worker rounds`.

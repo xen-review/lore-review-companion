@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import hashlib
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote, unquote, urlsplit
@@ -26,7 +26,8 @@ def _positive_id(value: Any) -> bool:
 class ForgeImportClient:
     def __init__(
         self, api: ForgeAPI, owner: str, repo: str, *, source_url: str,
-        write_enabled: bool = False,
+        write_enabled: bool = False, unattended: bool = False,
+        capability_guard: Callable[[Mapping[str, Any]], None] | None = None,
     ):
         source = urlsplit(source_url)
         if (
@@ -42,9 +43,16 @@ class ForgeImportClient:
         self.path = f"{self.repository_path}/review-imports"
         self.source_url = source_url
         self.write_enabled = write_enabled
+        self.unattended = unattended
+        self.capability_guard = capability_guard
+
+    def _request_json(self, path: str, **options) -> Any:
+        if self.unattended:
+            options["params"] = {"unattended": "true"}
+        return self.api.request_json(path, **options)
 
     def capabilities(self) -> dict[str, Any]:
-        result = self.api.request_json(f"{self.path}/capabilities")
+        result = self._request_json(f"{self.path}/capabilities")
         if (
             not isinstance(result, dict) or type(result.get("version")) is not int
             or result["version"] != 1 or result.get("source_url") != self.source_url
@@ -56,6 +64,10 @@ class ForgeImportClient:
             or any(not isinstance(operation, str) for operation in result["operations"])
         ):
             raise ValueError("Unsupported or mismatched review-import capability response")
+        if self.unattended and result.get("unattended_allowed") is not True:
+            raise ValueError("Unattended review imports are disabled or the repository is not review-only")
+        if self.capability_guard is not None:
+            self.capability_guard(result)
         return result
 
     @staticmethod
@@ -68,7 +80,7 @@ class ForgeImportClient:
         operation_key = self._operation_key(operation_key)
         capabilities = self.capabilities()
         try:
-            result = self.api.request_json(f"{self.path}/operations/{quote(operation_key, safe='')}")
+            result = self._request_json(f"{self.path}/operations/{quote(operation_key, safe='')}")
         except ForgeAPIError as error:
             if error.status == 404:
                 return None
@@ -87,7 +99,7 @@ class ForgeImportClient:
             raise ValueError("A positive PR index and full patch commit are required")
         self.capabilities()
         suffix = "comparison" if after_commit is None else f"patches/{after_commit}"
-        result = self.api.request_json(f"{self.path}/pulls/{pull_index}/{suffix}")
+        result = self._request_json(f"{self.path}/pulls/{pull_index}/{suffix}")
         if not isinstance(result, dict) or any(
             not isinstance(result.get(field), str) or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", result[field]) is None
             for field in ("head_commit", "base_commit", "merge_base")
@@ -132,7 +144,7 @@ class ForgeImportClient:
             if not self.write_enabled:
                 return ImportDeliveryResult({"path": path, **payload}, planned=True)
             try:
-                result = self.api.request_json(path, method="POST", payload=payload)
+                result = self._request_json(path, method="POST", payload=payload)
             except ForgeAPIError as error:
                 if attempt:
                     raise DeliveryUncertainError("Import acceptance could not be confirmed by idempotent replay") from error

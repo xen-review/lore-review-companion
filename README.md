@@ -11,7 +11,7 @@ import and lookup endpoints, non-voting review/range imports and threaded
 replies are also tested. Participant-authored PR creation with pinned refs is
 tested as well. Imported conversation/review/reply queue and approved outbox delivery
 and publication are available as Python APIs and explicit CLI commands;
-bounded read-only coordination is available; unattended policy/setup remains pending.
+bounded read-only coordination and explicitly authorized unattended rounds are available.
 Native exact multiline
 quote matching and versioned range delivery are implemented and tested locally;
 whole-workflow acceptance remains pending. Read [PLAN.md](PLAN.md) and [LEDGER.md](LEDGER.md)
@@ -64,8 +64,8 @@ an operational database as a test fixture. Remote PR/comment publication is
 separately gated by write flags and reviewed plan digests. Do not enable the
 old live-test opt-ins against a real instance.
 
-This repository is not ready for unattended deployment. It does not yet provide
-the proposed scoped participant-import endpoints in stock Forgejo. Existing
+Whole-workflow acceptance and release handoff are still pending. Stock Forgejo
+does not provide the scoped participant-import endpoints. Existing legacy
 publication paths still use an integration account; no administrator/Sudo
 credential is required or recommended for the companion.
 
@@ -213,6 +213,68 @@ pending/uncertain publication, blocked preflight and ready publication/delivery.
 Published revisions use their recorded base, not a moving configured base.
 Reply plans require a confirmed publication and retained immutable refs; a new
 PR preview does not invent an index to plan replies against.
+
+## Unattended Policy
+
+Unattended mode requires two independent opt-ins: a repository administrator's
+review import grant with `allow_unattended: true`, and a private, expiring local
+policy. Changing an existing grant requires explicit revocation and regrant.
+The server accepts unattended grants only for review-only repositories: Actions,
+active repository/inherited/system hooks, repository/owner secrets, merge/manual
+merge/rebase methods and default maintainer head editing must be disabled.
+Capabilities report `unattended_allowed`; worker requests identify themselves
+and the server rechecks settings, grant, scope and permissions for each request.
+The worker never changes these repository settings itself.
+
+[contrib/import-policy.example.json](contrib/import-policy.example.json) is a
+disabled, non-operational example. The actual mode-0600 policy must be owned by
+the running user, bind numeric repository/importer IDs, exact API/Git/lore/NNTP
+destinations, a full trusted base commit, identity/notification rules and bounded
+budgets. No tokens belong in it. New revisions use the pinned policy base; old
+ones keep their recorded base. A changed base or identity needs a newly reviewed
+policy, not a silent switch. Expiry, deletion, disabling, identity/capability
+drift or grant revocation prevents further writes. Checks run before Git ref
+publication as well as API writes. Direct administrative changes during an
+in-flight Git push are not an atomic transaction with HTTP authorization;
+keep review-only settings fixed while scheduling work.
+
+```sh
+.venv/bin/lore-review-companion run-import-worker \
+  --policy-file /private/import-policy.json --ledger state.sqlite3 \
+  --repository /path/to/xen --state worker.sqlite3 \
+  --token-file /private/import-token --git-token-file /private/git-token
+```
+
+This runs one bounded discovery/publication/delivery round. The private worker
+SQLite database stores only scheduling cursors, rotating revision work and
+enrolled effect IDs; the mail ledger remains authoritative for effects and
+publication intent. API and Git credentials stay separate. Only effects newly
+queued by this worker are enrolled: pre-existing/manual/legacy effects are not
+automatically approved. A crash between queueing and enrollment can leave new
+effects needing explicit manual approval; it cannot silently adopt old work.
+Later rounds revisit unresolved thread matches after parents become accepted.
+
+Failures create a private `worker.sqlite3.incident` latch and return nonzero.
+Subsequent timer rounds stop before doing work. Inspect the ledger and original
+exception first; resolve uncertainty with explicit same-operation replay, or
+authorize bounded same-key retry in policy. Never create a new operation key to
+bypass uncertainty. Then explicitly remove only the incident marker. A policy
+digest change also requires reviewing/resetting the scheduling database; do not
+delete the mail ledger or its publication/outbox history. Restore the worker
+database along with the ledger to retain enrollment across restarts.
+
+Git refs and SQL cannot commit atomically. A crash after a pull ref is created
+but before SQL commit may leave a collision. Stop and inspect the exact ref,
+expected commit and SQL provenance. Do not force-push, blindly delete refs or
+reuse another revision's key; reconcile or remove only a proven orphan through
+an operator-reviewed recovery. Ordinary imported replay never overwrites it.
+
+[contrib/lore-review-companion.service](contrib/lore-review-companion.service)
+and [contrib/lore-review-companion.timer](contrib/lore-review-companion.timer)
+are user-level templates, not installed services. Review paths, precreate private
+state/config directories and provision read-only local source access before
+installation. They request no privilege escalation or SSH-key changes. A failed
+round is not automatically restarted; periodic invocations still honor the latch.
 
 ## Develop And Test
 

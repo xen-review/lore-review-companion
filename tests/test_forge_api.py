@@ -14,6 +14,7 @@ from unittest.mock import patch
 from lore_review_companion.forge_api import MAX_JSON_BYTES, ForgeAPI, ForgeAPIError, read_private_token
 from lore_review_companion.forge_imports import ForgeImportClient
 from lore_review_companion.forge_comments import DeliveryUncertainError
+from lore_review_companion.import_policy import read_import_policy
 
 
 class FakeResponse:
@@ -76,6 +77,66 @@ class GiteaAPITests(unittest.TestCase):
         for key in ("../escape", "bad/key", "", "x" * 129):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 client.lookup_operation(key)
+
+    def test_unattended_policy_is_private_identity_bound_and_rechecked_before_writes(self):
+        policy_value = {"version": 1, "enabled": True, "expires_at": "2099-01-01T00:00:00+00:00",
+                        "api_url": "https://forge.test/api/v1/", "owner": "owner", "repository": "repo", "repository_id": 1,
+                        "importer_id": 2, "importer_login": "review-companion", "source_url": "https://lore.kernel.org/xen-devel/",
+                        "nntp_host": "nntp.lore.kernel.org", "nntp_group": "org.xenproject.lists.xen-devel",
+                        "git_remote": "https://forge.test/owner/repo.git", "git_username": "git-bot", "base_commit": "a" * 40,
+                        "target_branch": "staging", "message_limit": 100, "revision_limit": 8, "max_inline_lines": 50,
+                        "lookback_hours": 148, "notifications": "disabled", "identity_rule": "isolated-unverified", "retry_uncertain": False}
+        capabilities = {"version": 1, "repository_id": 1, "importer_id": 2, "importer_login": "review-companion",
+                        "source_url": policy_value["source_url"], "operations": ["pull", "conversation", "review", "review-reply"],
+                        "unattended_allowed": True, "max_inline_lines": 50}
+        requests = []
+
+        def transport(request, _timeout):
+            requests.append(request)
+            self.assertIn("unattended=true", request.full_url)
+            return FakeResponse(200, json.dumps(capabilities).encode())
+
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "policy.json"
+            path.write_text(json.dumps(policy_value))
+            path.chmod(0o600)
+            policy = read_import_policy(path)
+            client = ForgeImportClient(ForgeAPI(policy.api_url, transport=transport), policy.owner, policy.repository,
+                                       source_url=policy.source_url, unattended=True,
+                                       capability_guard=lambda result: policy.assert_current(path, result))
+            self.assertTrue(client.import_conversation(2, {"operation_key": "preview"}).planned)
+            path.write_text(json.dumps({**policy_value, "enabled": False}))
+            client.write_enabled = True
+            with self.assertRaisesRegex(ValueError, "disabled"):
+                client.import_conversation(2, {"operation_key": "preview"})
+            path.write_text(json.dumps(policy_value))
+            capabilities["repository_id"] = 99
+            with self.assertRaisesRegex(ValueError, "no longer matches"):
+                client.import_conversation(2, {"operation_key": "preview"})
+            capabilities["repository_id"] = 1
+            for changed in ({"expires_at": "2000-01-01T00:00:00+00:00"}, {"expires_at": "2099-01-01T00:00:00"},
+                            {"message_limit": True}, {"revision_limit": 33}, {"base_commit": "staging"},
+                            {"notifications": "enabled"}, {"identity_rule": "adopt-existing-users"}):
+                with self.subTest(changed=changed):
+                    path.write_text(json.dumps({**policy_value, **changed}))
+                    with self.assertRaises(ValueError):
+                        read_import_policy(path)
+            path.write_text(json.dumps(policy_value).replace('"enabled": true', '"enabled": false, "enabled": true'))
+            with self.assertRaisesRegex(ValueError, "schema"):
+                read_import_policy(path)
+            path.write_text(json.dumps(policy_value))
+            link = path.with_name("policy-link")
+            link.symlink_to(path)
+            with self.assertRaisesRegex(ValueError, "revoked"):
+                read_import_policy(link)
+            path.chmod(0o644)
+            with self.assertRaisesRegex(ValueError, "private"):
+                read_import_policy(path)
+            path.chmod(0o600)
+            path.unlink()
+            with self.assertRaisesRegex(ValueError, "revoked"):
+                client.import_conversation(2, {"operation_key": "preview"})
+        self.assertTrue(all(request.get_method() == "GET" for request in requests))
 
     def test_import_only_client_reconciles_response_loss_with_same_idempotent_post(self):
         requests, accepted = [], {}

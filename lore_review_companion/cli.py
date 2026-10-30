@@ -25,6 +25,8 @@ from lore_review_companion.ledger import (
 )
 from lore_review_companion.mail_parser import parse_mbox
 from lore_review_companion.coordinator import plan_imported_sync
+from lore_review_companion.import_policy import read_import_policy
+from lore_review_companion.import_worker import run_import_worker_round
 from lore_review_companion.nntp_source import DEFAULT_GROUP, DEFAULT_HOST, DEFAULT_INBOX, DEFAULT_LOOKBACK_HOURS, MAX_ARTICLE_BYTES, MAX_BATCH_BYTES, MAX_DISCOVERY_BYTES, MIN_FREE_BYTES, NNTPSourceError, discover_nntp, discover_nntp_numbers, discover_nntp_thread, fetch_nntp, inspect_nntp_window, nntp_source
 from lore_review_companion.outbox import (
     CommentBatchSummary, CommentDeliveryPlan, deliver_approved_comments, migrate_legacy_deliveries,
@@ -502,10 +504,25 @@ def main(argv: list[str] | None = None) -> int:
     sync_plan.add_argument("--message-limit", type=int, default=100)
     sync_plan.add_argument("--revision-limit", type=int, default=8)
     sync_plan.add_argument("--max-inline-lines", type=int, default=50)
+    import_worker = commands.add_parser("run-import-worker", help="Run one bounded round under an explicit private import policy")
+    import_worker.add_argument("--policy-file", type=Path, required=True)
+    import_worker.add_argument("--ledger", type=Path, required=True)
+    import_worker.add_argument("--repository", type=Path, required=True)
+    import_worker.add_argument("--state", type=Path, required=True)
+    import_worker.add_argument("--token-file", type=Path, required=True)
+    import_worker.add_argument("--git-token-file", type=Path, required=True)
+    import_worker.add_argument("--no-refresh-source", action="store_true")
     args = parser.parse_args(argv)
 
     try:
-        if args.command in ("queue-imports", "deliver-imports"):
+        if args.command == "run-import-worker":
+            policy = read_import_policy(args.policy_file)
+            ledger = Ledger(args.ledger)
+            api = ForgeAPI(policy.api_url, token=read_private_token(args.token_file))
+            credentials = GitHttpCredentials(policy.git_username, read_private_token(args.git_token_file))
+            result = run_import_worker_round(ledger, args.repository, args.policy_file, args.state, api, credentials,
+                                             refresh_source=not args.no_refresh_source)
+        elif args.command in ("queue-imports", "deliver-imports"):
             write_enabled = args.command == "deliver-imports" and args.write
             if args.command == "deliver-imports" and bool(args.write) != bool(args.approve):
                 raise ValueError("--write and --approve must be supplied together")

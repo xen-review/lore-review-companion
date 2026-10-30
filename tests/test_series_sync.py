@@ -3,7 +3,7 @@ import json
 import tempfile
 import unittest
 import sqlite3
-from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from contextlib import closing, contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import replace
 from datetime import datetime, timezone
 from io import StringIO
@@ -14,6 +14,7 @@ from unittest.mock import patch
 from lore_review_companion.b4_adapter import AssemblyResult
 from lore_review_companion.cli import main
 from lore_review_companion.coordinator import plan_imported_sync
+from lore_review_companion.import_worker import run_import_worker_round
 from lore_review_companion.git_branches import GitHttpCredentials, RevisionBranchResult, RevisionRefsResult, revision_branch_name
 from lore_review_companion.forge_api import ForgeAPI
 from lore_review_companion.forge_pulls import ForgePullPublisher, PullRequestConflict, _series_marker
@@ -200,6 +201,112 @@ class SeriesSyncTests(unittest.TestCase):
             Ledger, "discover_related_series", return_value=(self.revision, replace(self.revision, revision=2))
         ):
             plan_imported_sync(self.ledger, client, self.repository, self.remote, revision_limit=1, **options)
+
+    def test_policy_worker_refuses_changed_authorization_before_any_publication(self):
+        policy = {"version": 1, "enabled": True, "expires_at": "2099-01-01T00:00:00+00:00",
+                  "api_url": self.api.base_url, "owner": "o", "repository": "r", "repository_id": 1,
+                  "importer_id": 5, "importer_login": "mirror-bot", "source_url": "https://lore.kernel.org/xen-devel/",
+                  "nntp_host": "nntp.lore.kernel.org", "nntp_group": "org.xenproject.lists.xen-devel",
+                  "git_remote": self.remote, "git_username": "git-bot", "base_commit": "b" * 40, "target_branch": "main",
+                  "message_limit": 2, "revision_limit": 1, "max_inline_lines": 50, "lookback_hours": 148,
+                  "notifications": "disabled", "identity_rule": "isolated-unverified", "retry_uncertain": False}
+        path = self.repository / "worker-policy.json"
+        path.write_text(json.dumps(policy))
+        path.chmod(0o600)
+        state = self.repository / "worker.sqlite3"
+        capabilities = {"version": 1, "repository_id": 1, "importer_id": 5, "importer_login": "mirror-bot",
+                        "source_url": policy["source_url"], "operations": ["pull", "conversation", "review", "review-reply"],
+                        "max_inline_lines": 50, "unattended_allowed": True}
+
+        def transport(request, _timeout):
+            self.assertEqual(request.get_method(), "GET")
+            return FakeResponse(200, capabilities)
+
+        self.api.transport = transport
+        credentials = GitHttpCredentials("git-bot", "synthetic-git-token")
+        empty = run_import_worker_round(self.ledger, self.repository, path, state, self.api, credentials, refresh_source=False)
+        self.assertEqual((empty.considered, empty.published, empty.delivered), (0, 0, 0))
+        self.assertEqual(state.stat().st_mode & 0o777, 0o600)
+        self.ledger.record_parsed_message(self.revision.messages[0])
+        reply = parse_message(b"From: Reviewer <reviewer@example.test>\nMessage-ID: <worker-reply@example.test>\n"
+                      b"Subject: Re: patch\nIn-Reply-To: <patch@example.test>\n\nWorker reply\n")
+        self.ledger.record_parsed_message(reply)
+        destination = self.api.base_url + "repos/o/r#7"
+        manual = self.ledger.enqueue(reply.message_id, "IMPORT_CONVERSATION", destination, "manual-effect", {"manual": True})
+
+        def publication(current, _repository, _base, _remote, client, **options):
+            if not client.write_enabled:
+                return SimpleNamespace(approval_digest="reviewed plan", refs=SimpleNamespace(head=SimpleNamespace(planned=False), base=SimpleNamespace(planned=False)))
+            self.assertEqual(options["approved_digest"], "reviewed plan")
+            self.ledger.record_series_revision(current)
+            key = self.api.base_url + "repos/o/r", current.series_key, current.revision
+            if self.ledger.publication(*key) is None:
+                self.ledger.begin_publication(*key, "digest", "b" * 40, "lore/revision", "a" * 40)
+                self.ledger.transition_publication(*key, expected=("prepared",), status="complete", pull_index=7)
+            return SimpleNamespace(pull_request=SimpleNamespace(remote_object={"pull_index": 7}))
+
+        def queue(*arguments, **options):
+            self.ledger.enqueue(reply.message_id, "IMPORT_REVIEW", destination, "worker-effect", {"worker": True})
+            return SimpleNamespace(diagnostics=())
+
+        def plan(*arguments, **options):
+            self.assertNotIn(manual, options["delivery_ids"])
+            return SimpleNamespace(deliveries=options["delivery_ids"], approval_digest=lambda: "batch-plan")
+
+        def deliver(*arguments, **options):
+            self.assertNotIn(manual, options["delivery_ids"])
+            for identifier in options["delivery_ids"]:
+                self.ledger.mark_delivered(identifier)
+            return SimpleNamespace(delivered=len(options["delivery_ids"]), failed=0)
+
+        with (
+            patch("lore_review_companion.import_worker.sync_imported_series_revision", side_effect=publication),
+            patch("lore_review_companion.import_worker.queue_imported_replies", side_effect=queue),
+            patch("lore_review_companion.import_worker.plan_import_delivery", side_effect=plan),
+            patch("lore_review_companion.import_worker.deliver_approved_imports", side_effect=deliver),
+        ):
+            first = run_import_worker_round(self.ledger, self.repository, path, state, self.api, credentials, refresh_source=False)
+            second = run_import_worker_round(self.ledger, self.repository, path, state, self.api, credentials, refresh_source=False)
+        self.assertEqual((first.considered, first.published), (1, 1))
+        self.assertEqual((second.considered, second.published), (1, 0))
+        self.assertEqual((first.delivered, second.delivered), (1, 0))
+        self.assertEqual([effect.id for effect in self.ledger.pending()], [manual])
+        self.assertIn("Pre-existing", first.diagnostics[0])
+        with closing(sqlite3.connect(state)) as schedule:
+            self.assertEqual(schedule.execute("SELECT COUNT(*) FROM revisions").fetchone()[0], 1)
+        different = Ledger(self.repository / "different-ledger.sqlite3")
+        with self.assertRaisesRegex(ValueError, "different mail ledger"):
+            run_import_worker_round(different, self.repository, path, state, self.api, credentials, refresh_source=False)
+        state.with_name(state.name + ".incident").unlink()
+        capabilities["unattended_allowed"] = False
+        with self.assertRaisesRegex(ValueError, "disabled"):
+            run_import_worker_round(self.ledger, self.repository, path, state, self.api, credentials, refresh_source=False)
+        incident = state.with_name(state.name + ".incident")
+        self.assertTrue(incident.is_file())
+        self.assertEqual(incident.stat().st_mode & 0o777, 0o600)
+        capabilities["unattended_allowed"] = True
+        with self.assertRaisesRegex(ValueError, "latched"):
+            run_import_worker_round(self.ledger, self.repository, path, state, self.api, credentials, refresh_source=False)
+        incident.unlink()
+        path.write_text(json.dumps({**policy, "message_limit": 3}))
+        with self.assertRaisesRegex(ValueError, "policy changed"):
+            run_import_worker_round(self.ledger, self.repository, path, state, self.api, credentials, refresh_source=False)
+
+    def test_worker_cli_binds_destinations_and_credentials_only_from_private_policy(self):
+        options = SimpleNamespace(api_url=self.api.base_url, git_username="git-bot")
+        arguments = ["run-import-worker", "--policy-file", str(self.repository / "policy.json"), "--ledger", str(self.ledger.path),
+                     "--state", str(self.repository / "worker.sqlite3"), "--repository", str(self.repository),
+                     "--token-file", "api-token", "--git-token-file", "git-token", "--no-refresh-source"]
+        with (
+            patch("lore_review_companion.cli.read_import_policy", return_value=options),
+            patch("lore_review_companion.cli.read_private_token", side_effect=("synthetic-api-token", "synthetic-git-token")),
+            patch("lore_review_companion.cli.run_import_worker_round") as run,
+            patch("lore_review_companion.cli.asdict", return_value={}), redirect_stdout(StringIO()),
+        ):
+            self.assertEqual(main(arguments), 0)
+        self.assertFalse(run.call_args.kwargs["refresh_source"])
+        self.assertEqual(run.call_args.args[4].base_url, self.api.base_url)
+        self.assertEqual(run.call_args.args[5].username, "git-bot")
 
     def test_imported_publication_preview_approval_replay_and_uncertain_retry(self):
         requests, accepted = [], {}

@@ -148,6 +148,7 @@ def _assert_import_payload(ledger: Ledger, delivery: Delivery, *, depth: int = 0
 def plan_import_delivery(
     ledger: Ledger, client: ForgeImportClient, pull_index: int, event_type: str, *,
     limit: int = 100, retry_uncertain: bool = False,
+    delivery_ids: tuple[int, ...] | None = None,
 ) -> ImportDeliveryPlan:
     if event_type not in ("IMPORT_CONVERSATION", "IMPORT_REVIEW", "IMPORT_REPLY"):
         raise ValueError("Unsupported imported event type")
@@ -160,7 +161,7 @@ def plan_import_delivery(
         raise ValueError("Repository review range capability is invalid")
     destination = comment_destination(client, pull_index)
     ledger.assert_publication_sources(client.api.base_url + client.repository_path, pull_index)
-    deliveries = tuple(ledger.pending(limit, destination=destination, event_type=event_type))
+    deliveries = tuple(ledger.pending(limit, destination=destination, event_type=event_type, delivery_ids=delivery_ids))
     ledger.assert_unconflicted(tuple(delivery.message_id for delivery in deliveries))
     _assert_thread_sources(ledger, client, pull_index, deliveries)
     for delivery in deliveries:
@@ -203,12 +204,13 @@ def plan_import_delivery(
 def deliver_approved_imports(
     ledger: Ledger, client: ForgeImportClient, pull_index: int, event_type: str, *,
     approved_digest: str, limit: int = 100, retry_uncertain: bool = False,
+    delivery_ids: tuple[int, ...] | None = None,
 ) -> CommentBatchSummary:
     if not client.write_enabled or re.fullmatch(r"[0-9a-f]{64}", approved_digest or "") is None:
         raise ValueError("Imported delivery requires write opt-in and a reviewed approval digest")
     delivered = failed = 0
     with ledger.worker_lock():
-        plan = plan_import_delivery(ledger, client, pull_index, event_type, limit=limit, retry_uncertain=retry_uncertain)
+        plan = plan_import_delivery(ledger, client, pull_index, event_type, limit=limit, retry_uncertain=retry_uncertain, delivery_ids=delivery_ids)
         if not hmac.compare_digest(plan.approval_digest(), approved_digest):
             raise ValueError("Approval digest does not match the current import plan")
         for delivery in plan.deliveries:

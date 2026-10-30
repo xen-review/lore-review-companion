@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodic bounded lore review import
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=10min
+RandomizedDelaySec=1min
+Persistent=true
+Unit=lore-review-companion.service
+
+[Install]
+WantedBy=timers.target
