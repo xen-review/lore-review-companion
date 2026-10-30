@@ -7,7 +7,8 @@ directory in the Forgejo development workspace. The earlier implementation
 was developed for Gitea; this repository continues that work for Forgejo.
 
 The snapshot includes only Python implementation/test files and
-[requirements.txt](requirements.txt). It does not include downloaded email,
+[requirements.txt](requirements.txt). Runtime files now live under
+`lore_review_companion/` and tests under `tests/`. It does not include downloaded email,
 operational databases, credentials, caches, private incident/setup documents,
 installed service definitions, or either parent project's Git metadata.
 

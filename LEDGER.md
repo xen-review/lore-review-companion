@@ -15,8 +15,10 @@ No automatic pushes. Forgejo changes belong to the separate parent repository.
   below. B02 imported the unchanged source; installed b4 is still unavailable.
 - B03 `DONE`: unsafe inline delivery no longer becomes a conversation write.
   Focused publisher and neighboring queue tests passed.
-- B04 `IN PROGRESS`: neutral adapter names are verified; package layout and
-  install/CLI checks follow as a separate topic.
+- B04 `DONE`: neutral adapters, package layout, console/module entry points,
+  install documentation and offline CI configuration are verified locally.
+- Next implementation slice: C01's versioned payload/migration contracts;
+  C02 must configure and pin b4 before real assembly/extraction acceptance.
 - Historical sample publications remain background evidence only; the current
   baseline is 295 synthetic tests, with 3 explicitly reported skips.
 
@@ -40,7 +42,7 @@ installed versions, historical commits and current tests are B01, not assumed.
 | B01 | DONE | DOC-01 | Current worktrees/history/tools inspected and narrow/full offline baseline passed; source is an untracked snapshot, b4 runtime absent. See execution record. |
 | B02 | DONE | B01 | Unchanged Python/requirements snapshot imported with checksums, legal context, provenance and ignores. Original files untouched; imported offline suite passed. Final distribution-license review remains R01. |
 | B03 | DONE | B02 | Removed inline fallback; tests prove stale/disabled/pending-review paths make zero POSTs and preserve unresolved effects. Separate conversation approval still works; 25 publisher and 31 queue tests passed. |
-| B04 | IN PROGRESS | B03 | Neutral adapter names verified. Package/CLI/CI and independent install checks remain; legacy wire markers, destination/effect keys and preflight identity must stay stable. |
+| B04 | DONE | B03 | Neutral adapters and installable package/CLI added with README and offline CI. Wheel installed and entry points tested outside checkout; 296 tests run, 3 skips. Legacy wire identities and token options retained; hosted CI matrix not yet run. |
 
 ## Deterministic Multiline Reviews
 
@@ -87,12 +89,13 @@ revision state here; do not stage them into a companion commit.
 
 - After each substantive edit, run the cheapest check that can falsify the
   change before reading or editing another slice. Repair the same slice first.
-- Initial flat-source check: `python3 -m unittest test_gitea_comments`.
+- Current focused check: `.venv/bin/python -m unittest discover -s tests -p test_forge_comments.py`.
 - Related slices reuse `test_anchor`, `test_b4_adapter`, `test_review_queue`,
   `test_threads`, `test_series_sync`, `test_preflight`, `test_nntp_source` and
   `test_ledger`. Adapt paths after packaging, not before.
-- Full offline baseline: `python3 -m unittest discover -s . -p 'test_*.py'` with
-  live acceptance variables unset. Distinguish skipped opt-in tests explicitly.
+- Current full offline check: `.venv/bin/python -m unittest discover -s tests -p 'test_*.py'`
+  with live acceptance variables unset. Historical flat-source checks below
+  refer to the earlier layout. Distinguish skipped opt-in tests explicitly.
 - Forgejo examples: `make 'test-sqlite#TestAPIPullReview'`,
   `make 'test-sqlite#TestPullRequestCommentPlacement'`, and targeted new import
   tests. Follow actual build prerequisites and isolated-root configuration.
@@ -194,3 +197,31 @@ Bring them into scope only through an explicit decision.
 - Legacy wire markers, source-body wording, environment variables, serialized
   ledger data and the Git committer identity were not renamed in this slice.
 - Commit subject: `refactor: use neutral forge adapter names`.
+
+### 2026-10-29: B04 Standalone Package
+
+- Neutral naming commit: `bfde1c2`. Runtime modules moved into
+  `lore_review_companion/`, synthetic/opt-in tests into `tests/`. Imports and
+  mock targets are package-qualified; cross-test helper imports remain local
+  to the test suite. Fixed the omitted `threads` imports found by the first
+  layout check and restored accidentally rewritten temporary filenames.
+- Added setuptools metadata, console/module entry points, a setup/status
+  README and read-only-permission offline CI for Python 3.11/3.12/3.13. The
+  hosted matrix is configured, not executed in this session.
+- Built and installed `lore-review-companion==0.1.0.dev0` as a wheel into an
+  ignored `.venv`, including `standard-nntplib==3.13.0` for local Python 3.13.
+  No packages were installed globally and b4 was not implicitly installed.
+- Outside-checkout checks from `/tmp`, with PYTHONPATH unset: the installed
+  console command returned the expected operator-specified epoch JSON, and
+  `python -m lore_review_companion --help` returned the supported commands.
+  These checks did not fetch mail, open an operational ledger or post content.
+- Installed-package suite: 296 run, 293 passed, 3 opt-in skips in 19.115 seconds,
+  with live opt-ins and PYTHONPATH unset and bytecode writes disabled. Earlier
+  source-layout reruns also passed after local import/filename repairs.
+- Optional live worker invocation now uses the package module, not a path to
+  the removed flat CLI script. Its real-server acceptance remains skipped.
+- Legacy environment variables remain supported through existing token options;
+  wire markers, serialized bodies and preflight committer data are unchanged.
+  Fresh scoped Forgejo imports and a final distribution license remain future
+  tasks, explicitly noted in the README rather than claimed implemented.
+- Commit subject: `build: package standalone lore review companion`.

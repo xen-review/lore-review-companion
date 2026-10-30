@@ -1,0 +1,1 @@
+"""Deterministic mailing-list patch and review synchronization for Forgejo."""
