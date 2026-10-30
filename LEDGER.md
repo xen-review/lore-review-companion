@@ -37,8 +37,11 @@ No automatic pushes. Forgejo changes belong to the separate parent repository.
   operation lookup are tested on existing PRs. The companion has an opt-in
   import-only client with same-key replay, capability checks and no fallback;
   CLI/outbox wiring follows with F04 and S03.
+- F04 `IN PROGRESS`: imported COMMENT reviews and threaded replies are tested
+  with exact historical patch-parent ranges, stable inline IDs and no draft
+  consumption. Participant-authored PR creation and publication wiring remain.
 - Historical sample publications remain background evidence only; the current
-  baseline is 324 tests, with only the live-server acceptance test skipped
+  baseline is 325 tests, with only the live-server acceptance test skipped
   when the pinned real-b4 opt-ins are enabled.
 
 ## Discovery
@@ -83,7 +86,7 @@ revision state here; do not stage them into a companion commit.
 | F01 | DONE | B01 | Opt-in import scopes (not implied by legacy all), source-bound repository grants, current token-reduced code/PR write checks and owner-bound/transfer revocation implemented. Scope/model tests and authorization/real-transfer API tests pass. Object/author checks follow with F03/F04 operations. |
 | F02 | DONE | F01 | Atomic repository/source participant registry, deterministic collision-safe names, inactive/restricted/passwordless private-email profiles. Replay revalidates safety flags; shared authentication, sessions, OAuth/linking, reset, tokens/SSH/GPG, password/email changes, Sudo, activation/admin edits and inactive cleanup are guarded. Rollback, collision, affected-package and isolated API tests pass. |
 | F03 | DONE | F01, F02 | Existing-PR conversation import and scoped operation lookup preserve mapped author, importer, source time/hash and atomic operation keys. Replay keeps IDs; changed payload/target/local content or reused Message-ID with different bytes/author conflicts. No notifications, mentions or cross-reference actions. Opt-in companion client rechecks capabilities, safely replays uncertain POSTs and never uses ordinary mutation APIs. |
-| F04 | TODO | F03 | Add submitter-authored PRs, explicit non-voting COMMENT reviews/ranges and reviewer replies. Reuse services; verify exact patch parent context and no draft theft. Extend before-commit API only when a test proves necessary. |
+| F04 | IN PROGRESS | F03 | Fresh non-voting COMMENT reviews and same-source replies are implemented and tested, with actual pinned comparisons, exact historical patch parents, old/new multiline ranges and no draft theft. Scoped client methods preserve uncertain-write behavior and validate root IDs. Participant-authored immutable PRs and companion publication wiring remain; no ordinary before-commit API extension was necessary. |
 | F05 | TODO | F03, F04 | Restricted original timestamp initialization/correction with audited actual import/edit time and source quality. Validate UTC/unknown/invalid times; no duplicate notifications or silent reauthoring of legacy content. |
 | F06 | TODO | F03, F04, F05 | API and web render both participant and importer, lore link and source chronology/quality. Reuse existing UI; no forged identity verification or layout regressions. |
 
@@ -436,3 +439,37 @@ Bring them into scope only through an explicit decision.
   assertions confirm both endpoints and all five models. Existing unrelated
   generator warnings remain. Formatting and editor diagnostics passed.
 - Commit subject: `feat: add scoped replay-safe conversation import client`.
+
+### 2026-10-30: F04 Review And Reply Substep
+
+- Shared the F03 atomic evidence/participant/operation boundary without changing
+  conversation payload serialization. Added import-only review and reply routes,
+  request schemas and advertised capabilities. No voting or pending-review
+  selection occurs: each imported review is new `COMMENT`, `Official=false`.
+- Import validates the actual PR head/base/merge base before and after writes,
+  and each range's full patch commit plus exact sole parent within that PR.
+  Existing Git/diff parsers validate contiguous same-hunk lines; truncated,
+  binary, renamed, ambiguous, invalid, oversized and stale cases fail closed.
+  Canonical code comments retain their selected old/new side, exact commit and
+  nonempty context rather than silently remapping through blame.
+- Provenance retains stable inline IDs. Replies may target only existing
+  same-source imported code comments/replies in this PR, never private drafts
+  or normal comments; they inherit the original range and keep their own
+  participant identity. Review replay verifies the retained root IDs rather
+  than rejecting legitimate later replies. Local edits cause a conflict.
+- Real-Git API fixture covers a range on the first patch after a second patch
+  becomes PR head, both three-line sides, a second reviewer, two private drafts,
+  identical replay, bad parent, disjoint hunks, invalid positions, stale head,
+  private/non-code reply targets and locally edited roots. An initial test
+  selected an older fixture draft; corrected to assert exact test draft IDs.
+- Added explicit review/reply client methods using the same capability-aware
+  idempotent retry; wrong/duplicate/boolean inline IDs stay uncertain. No
+  ordinary API fallback, implicit approvals, outbox migration or live writes.
+- Verification: 325 Python tests run, 324 passed, only live-server skipped
+  (13.924 seconds; real pinned b4 ran); focused client 20 passed. Full affected
+  Go packages passed. Five import API cases passed in 6.356 seconds, and all
+  seven ordinary `TestAPIPullReview*` cases passed in 12.040 seconds. Formatting,
+  editor diagnostics and generated Swagger body/model assertions passed.
+- This is not all of F04: participant-authored PRs and companion per-patch
+  integration remain next. Parent Forgejo changes are still uncommitted.
+- Commit subject: `feat: add scoped imported review and reply clients`.

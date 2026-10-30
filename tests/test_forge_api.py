@@ -172,6 +172,47 @@ class GiteaAPITests(unittest.TestCase):
             client.import_conversation(2, {"operation_key": "reply:1"})
         self.assertEqual(requests, ["GET", "POST", "GET"])
 
+    def test_import_only_client_keeps_review_and_reply_operations_explicit(self):
+        capabilities = {
+            "version": 1, "repository_id": 1, "importer_id": 2, "importer_login": "review-companion",
+            "source_url": "https://lore.kernel.org/xen-devel/", "operations": ["review", "review-reply"],
+        }
+        requests = []
+        inline_ids = [30, 31]
+
+        def transport(request, _timeout):
+            requests.append(request)
+            if request.get_method() == "GET":
+                return FakeResponse(200, json.dumps(capabilities).encode())
+            sent = json.loads(request.data)
+            is_reply = request.full_url.endswith("/replies")
+            return FakeResponse(200, json.dumps({
+                "id": 10, "repository_id": 1, "importer_id": 2, "participant_id": 3,
+                "comment_id": 20, "review_id": 21, "code_comment_ids": [] if is_reply else inline_ids,
+                "type": "review-reply" if is_reply else "review", "operation_key": sent["operation_key"],
+                "message_id": sent["message_id"], "message_sha256": sent["message_sha256"],
+                "source_url": capabilities["source_url"] + sent["message_id"] + "/",
+            }).encode())
+
+        client = ForgeImportClient(ForgeAPI("https://forge.test/api/v1/", transport=transport), "owner", "repo",
+                                   source_url=capabilities["source_url"], write_enabled=True)
+        payload = {
+            "operation_key": "review:1", "message_id": "review@example.test", "message_sha256": "a" * 64,
+            "comments": [{"body": "first range"}, {"body": "second range"}],
+        }
+        result = client.import_review(2, payload)
+        self.assertEqual(result.remote_object["code_comment_ids"], [30, 31])
+        reply = {"operation_key": "reply:1", "message_id": "reply@example.test", "message_sha256": "b" * 64, "parent_id": 30}
+        self.assertEqual(client.import_reply(2, reply).remote_object["review_id"], 21)
+        self.assertTrue(requests[1].full_url.endswith("/pulls/2/reviews"))
+        self.assertTrue(requests[3].full_url.endswith("/pulls/2/replies"))
+        for invalid in ([True, 31], [30, 30], [30]):
+            inline_ids = invalid
+            with self.subTest(identifiers=invalid), self.assertRaises(DeliveryUncertainError):
+                client.import_review(2, payload)
+        with self.assertRaisesRegex(ValueError, "not supported"):
+            client.import_conversation(2, {"operation_key": "conversation:1"})
+
     @patch("lore_review_companion.forge_api.build_opener")
     def test_default_transport_passes_timeout_by_keyword(self, build_opener):
         response = FakeResponse(200, b"{}")

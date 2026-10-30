@@ -7,8 +7,9 @@ is deterministic Python software; it does not require a runtime LLM.
 **Status:** an independently packaged prototype, based on the previous bridge.
 Scoped import authorization and non-login participant profiles are implemented
 and tested in the separate Forgejo worktree. The first atomic conversation
-import and lookup endpoints are also tested; imported PR/review endpoints and
-CLI/outbox integration are pending. Native exact multiline
+import and lookup endpoints, non-voting review/range imports and threaded
+replies are also tested. Participant-authored PR creation and CLI/outbox
+integration remain pending. Native exact multiline
 quote matching and versioned range delivery are implemented and tested locally;
 per-patch imported-author server acceptance remains pending. Read [PLAN.md](PLAN.md) and [LEDGER.md](LEDGER.md)
 for scope, current results, and next steps.

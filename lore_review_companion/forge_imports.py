@@ -80,16 +80,25 @@ class ForgeImportClient:
         return result
 
     def import_conversation(self, pull_index: int, payload: Mapping[str, Any]) -> ImportDeliveryResult:
+        return self._import(pull_index, payload, "conversation", "comments")
+
+    def import_review(self, pull_index: int, payload: Mapping[str, Any]) -> ImportDeliveryResult:
+        return self._import(pull_index, payload, "review", "reviews")
+
+    def import_reply(self, pull_index: int, payload: Mapping[str, Any]) -> ImportDeliveryResult:
+        return self._import(pull_index, payload, "review-reply", "replies")
+
+    def _import(self, pull_index: int, payload: Mapping[str, Any], operation: str, route: str) -> ImportDeliveryResult:
         if not _positive_id(pull_index):
             raise ValueError("A positive pull request index is required")
         operation_key = self._operation_key(payload.get("operation_key"))
         payload = dict(payload)
-        path = f"{self.path}/pulls/{pull_index}/comments"
+        path = f"{self.path}/pulls/{pull_index}/{route}"
         for attempt in range(2):
             try:
                 capabilities = self.capabilities()
-                if "conversation" not in capabilities["operations"]:
-                    raise ValueError("Conversation imports are not supported by this repository")
+                if operation not in capabilities["operations"]:
+                    raise ValueError(f"{operation} imports are not supported by this repository")
             except (ForgeAPIError, ValueError) as error:
                 if attempt:
                     raise DeliveryUncertainError("Import acceptance could not be confirmed after capability recheck") from error
@@ -110,12 +119,22 @@ class ForgeImportClient:
                 or not _positive_id(result.get("repository_id")) or not _positive_id(result.get("importer_id"))
                 or result.get("repository_id") != capabilities["repository_id"]
                 or result.get("importer_id") != capabilities["importer_id"]
-                or result.get("type") != "conversation" or result.get("operation_key") != operation_key
+                or result.get("type") != operation or result.get("operation_key") != operation_key
                 or result.get("message_id") != payload.get("message_id")
                 or result.get("message_sha256") != payload.get("message_sha256")
                 or not isinstance(result.get("source_url"), str)
                 or unquote(result["source_url"]) != self.source_url + str(payload.get("message_id")) + "/"
             ):
-                raise DeliveryUncertainError("Forgejo returned an unconfirmed imported conversation")
+                raise DeliveryUncertainError("Forgejo returned an unconfirmed imported operation")
+            if operation in ("review", "review-reply") and not _positive_id(result.get("review_id")):
+                raise DeliveryUncertainError("Forgejo returned an unconfirmed imported review")
+            if operation == "review":
+                comments, identifiers = payload.get("comments"), result.get("code_comment_ids")
+                if (
+                    not isinstance(comments, list) or not comments or not isinstance(identifiers, list)
+                    or len(identifiers) != len(comments) or any(not _positive_id(value) for value in identifiers)
+                    or len(set(identifiers)) != len(identifiers)
+                ):
+                    raise DeliveryUncertainError("Forgejo returned unconfirmed inline comment identifiers")
             return ImportDeliveryResult(result)
         raise AssertionError("Unreachable import retry state")
