@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
+from typing import NotRequired, TypedDict
 from unittest.mock import patch
 
 from lore_review_companion.b4_adapter import AssemblyResult
@@ -56,6 +57,13 @@ from lore_review_companion.series_sync import (
 from test_forge_comments import FakeResponse
 from test_forge_pulls import PullTransport
 from test_series import message
+
+
+class ImportedSyncOptions(TypedDict):
+    series_seed: str
+    target_branch: str
+    credentials: GitHttpCredentials
+    base_ref: NotRequired[str]
 
 
 class SeriesSyncTests(unittest.TestCase):
@@ -168,7 +176,7 @@ class SeriesSyncTests(unittest.TestCase):
         client = ForgeImportClient(
             self.api, "o", "r", source_url="https://lore.kernel.org/xen-devel/"
         )
-        arguments = {
+        arguments: ImportedSyncOptions = {
             "series_seed": self.revision.messages[0].message_id,
             "target_branch": "main",
             "credentials": GitHttpCredentials("mirror-bot", "synthetic-git-token"),
@@ -294,7 +302,7 @@ class SeriesSyncTests(unittest.TestCase):
         client = ForgeImportClient(
             self.api, "o", "r", source_url="https://lore.kernel.org/xen-devel/"
         )
-        options = {
+        options: ImportedSyncOptions = {
             "series_seed": self.revision.messages[0].message_id,
             "target_branch": "main",
             "credentials": GitHttpCredentials("mirror-bot", "synthetic-git-token"),
@@ -334,7 +342,7 @@ class SeriesSyncTests(unittest.TestCase):
         client = ForgeImportClient(
             self.api, "o", "r", source_url="https://lore.kernel.org/xen-devel/"
         )
-        options = {
+        options: ImportedSyncOptions = {
             "series_seed": self.revision.messages[0].message_id,
             "target_branch": "main",
             "base_ref": "HEAD",
@@ -726,6 +734,7 @@ class SeriesSyncTests(unittest.TestCase):
         publication = self.ledger.publication(
             self.api.base_url + "repos/o/r", self.revision.series_key, 1
         )
+        assert publication
         self.assertEqual(publication.status, "uncertain")
         count = len(requests)
         with self.assertRaises(PublicationUncertain):
@@ -753,6 +762,7 @@ class SeriesSyncTests(unittest.TestCase):
         publication = self.ledger.publication(
             self.api.base_url + "repos/o/r", self.revision.series_key, 1
         )
+        assert publication
         self.assertEqual((publication.status, publication.pull_index), ("complete", 7))
 
     def test_imported_publication_retains_both_previous_presentations(self):
@@ -1008,6 +1018,7 @@ class SeriesSyncTests(unittest.TestCase):
         publication = self.ledger.publication(
             "https://gitea.test/api/v1/repos/o/r", self.revision.series_key, 1
         )
+        assert publication
         self.assertEqual((publication.status, publication.pull_index), ("complete", 1))
 
     def test_list_publications_is_read_only_filtered_and_paginated(self):
@@ -1176,6 +1187,7 @@ class SeriesSyncTests(unittest.TestCase):
         recorded = self.ledger.publication(
             "https://gitea.test/api/v1/repos/o/r", self.revision.series_key, 1
         )
+        assert recorded
         self.assertEqual(recorded.approval_digest, legacy_digest)
 
     def test_completed_pr_without_old_attribution_replays_without_rewriting(self):
