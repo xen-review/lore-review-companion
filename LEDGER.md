@@ -43,8 +43,12 @@ No automatic pushes. Forgejo changes belong to the separate parent repository.
   replies are tested with pinned refs, exact historical patch-parent ranges,
   stable inline IDs and no draft consumption or notifications. Companion
   per-patch publication/outbox wiring remains under C05, S01 and S03.
+- S01 `DONE`: new imported publication uses paired immutable base/head refs and
+  one participant-authored PR per revision by default. V2 links to V1 without
+  rewriting V1. Protected Git/API credentials and uncertainty approvals are
+  separate; the legacy lifecycle is unchanged.
 - Historical sample publications remain background evidence only; the current
-  baseline is 330 tests, with only the live-server acceptance test skipped
+  baseline is 334 tests, with only the live-server acceptance test skipped
   when the pinned real-b4 opt-ins are enabled.
 
 ## Discovery
@@ -97,7 +101,7 @@ revision state here; do not stage them into a companion commit.
 
 | ID | Status | Depends On | Step And Acceptance Gate |
 | --- | --- | --- | --- |
-| S01 | TODO | B04, C02, F04 | Make separate immutable revision PRs the supported policy with pinned comparisons and cross-links. V2 leaves V1 unchanged; late replies stay with original revision; repeated publication creates no duplicate refs/PRs. |
+| S01 | DONE | B04, C02, F04 | `sync-imported-series` uses one PR and paired immutable base/head refs per revision, pinned source/patch maps and prior-revision links. V2 leaves V1 unchanged; source-thread checks retain late replies on their recorded revision. Repeated writes reconcile the same operation/refs. Tests cover upstream movement, two revisions and approved uncertain retry; full live workflow remains V01. |
 | S02 | TODO | B04, C01 | Expose configurable recent lookback and durable resumable NNTP discovery/dependency recovery. Older ancestors work on demand; unavailable articles are not deletions; coverage and resource guards remain explicit. |
 | S03 | TODO | C05, S01, S02, F04 | Dry-run coordinator for ingest, recovery, preflight, publication/reply plans. No remote writes by default; no nested-lock deadlocks; incomplete/ambiguous/unknown-base states are visible. |
 | S04 | TODO | S03, F05, F06 | Explicit revocable repository policy and supervised unattended worker. Recheck scope/permissions/capabilities per write; bound Git credentials separately; incidents stop and restarts reconcile uncertain writes. No mail sending or blanket self-approval. |
@@ -566,3 +570,32 @@ Bring them into scope only through an explicit decision.
   were used in tests. C05 full isolated workflow acceptance and S01/S03
   publication/discovery coordination still remain.
 - Commit subject: `feat: expose scoped import queue and delivery commands`.
+
+### 2026-10-30: S01 Immutable Imported Revision Publication
+
+- Added paired base/head ref publication with atomic create-only Git leases.
+  Both refs are pinned per revision; moving upstream cannot change an older
+  comparison. Existing refs must match exactly and are never overwritten.
+  Partial/uncertain writes are reconciled before any retry.
+- New imported publication planner reassembles retained sources with pinned
+  offline b4, binds source hashes, ordered patch commits, actor/repository,
+  destination, immutable refs, request and Git username into a new approval
+  digest. It creates one participant-authored PR per revision by default and
+  adds links to completed earlier revisions only in the new PR body.
+- `sync-imported-series` requires separate private API/Git token files and an
+  explicit Git username. Preview opens an existing ledger read-only and makes
+  no writes. Application rechecks source/approval/capabilities before refs,
+  then uses the scoped idempotent import API and durable publication states.
+  Retry approval binds `retry_uncertain` without rewriting the original intent
+  digest. Existing complete publications verify their original PR index.
+- Tests cover real Git paired refs, upstream advancement, independent revisions,
+  differing existing refs, no-write preview/changed approvals, response loss,
+  explicit uncertainty retry, and V2 linking while V1 payload/refs stay unchanged.
+  CLI routing tests verify read-only previews and separate credentials. Legacy
+  series commands, digests and publication records are unchanged.
+- Full Python: 334 run, 333 passed, only live-server skipped in 14.651 seconds
+  (real b4 enabled). Focused preflight 24 and series lifecycle 23 pass; CLI help
+  smoke test passed. No live refs/content or operational state were modified.
+- C05 still needs automatic email-to-existing-inline-thread reply queueing and
+  isolated full workflow acceptance; S02/S03 add bounded discovery/coordinator.
+- Commit subject: `feat: publish immutable participant-authored revision PRs`.

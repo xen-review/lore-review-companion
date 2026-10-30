@@ -12,15 +12,17 @@ from unittest.mock import patch
 
 from lore_review_companion.b4_adapter import AssemblyResult
 from lore_review_companion.cli import main
-from lore_review_companion.git_branches import RevisionBranchResult, revision_branch_name
+from lore_review_companion.git_branches import GitHttpCredentials, RevisionBranchResult, RevisionRefsResult, revision_branch_name
 from lore_review_companion.forge_api import ForgeAPI
 from lore_review_companion.forge_pulls import ForgePullPublisher, PullRequestConflict, _series_marker
 from lore_review_companion.forge_comments import DeliveryUncertainError
+from lore_review_companion.forge_imports import ForgeImportClient
 from lore_review_companion.ledger import ArchiveSafetyBlocked, Ledger, MessageConflictError, PublicationConflict
 from lore_review_companion.mail_parser import parse_message
-from lore_review_companion.preflight import PreflightResult
+from lore_review_companion.preflight import PatchCommit, PreflightResult
 from lore_review_companion.series import discover_series
-from lore_review_companion.series_sync import PublicationUncertain, sync_series_revision
+from lore_review_companion.series_sync import PublicationUncertain, sync_imported_series_revision, sync_series_revision
+from test_forge_comments import FakeResponse
 from test_forge_pulls import PullTransport
 from test_series import message
 
@@ -36,11 +38,153 @@ class SeriesSyncTests(unittest.TestCase):
         self.remote = "https://gitea.test/o/r.git"
         self.branch_writes = []
         self.branch_exists = False
+        self.imported_branch_exists = set()
         self.ledger = Ledger(self.repository / "ledger.sqlite3")
 
     @contextmanager
     def prepare(self, _repository, _base_ref, _mailbox):
-        yield SimpleNamespace(result=PreflightResult("b" * 40, "a" * 40, 1))
+        yield SimpleNamespace(result=PreflightResult("b" * 40, "a" * 40, 1),
+                              patch_commits=lambda identifiers: (PatchCommit(identifiers[0], "b" * 40, "a" * 40),))
+
+    def imported_sync(self, *, write_enabled=False, **kwargs):
+        for source in self.revision.messages:
+            self.ledger.record_parsed_message(source)
+        client = ForgeImportClient(self.api, "o", "r", source_url="https://lore.kernel.org/xen-devel/", write_enabled=write_enabled)
+
+        def refs(prepared, remote, **arguments):
+            name = revision_branch_name(arguments["series_key"], arguments["revision"])
+            writing = arguments.get("write_enabled", False)
+            self.branch_writes.append(writing)
+            created = writing and name not in self.imported_branch_exists
+            if writing:
+                self.imported_branch_exists.add(name)
+            head = RevisionBranchResult(name, prepared.result.head_commit, created, name not in self.imported_branch_exists)
+            return RevisionRefsResult(RevisionBranchResult(head.branch + "-base", prepared.result.base_commit, head.created, head.planned), head)
+
+        with (
+            patch("lore_review_companion.series_sync.assemble_local_series", return_value=AssemblyResult(b"patch", "", "")),
+            patch("lore_review_companion.series_sync.prepare_patch_mailbox", new=self.prepare),
+            patch("lore_review_companion.series_sync.ensure_revision_refs", new=refs),
+        ):
+            return sync_imported_series_revision(self.revision, self.repository, "HEAD", self.remote, client,
+                                                 target_branch="main", ledger=self.ledger,
+                                                 credentials=GitHttpCredentials("mirror-bot", "synthetic-git-token"), **kwargs)
+
+    def test_imported_publication_preview_approval_replay_and_uncertain_retry(self):
+        requests, accepted = [], {}
+        fail_after_acceptance = False
+
+        def transport(request, _timeout):
+            requests.append(request)
+            if request.full_url.endswith("/review-imports/capabilities"):
+                return FakeResponse(200, {"version": 1, "repository_id": 1, "importer_id": 5,
+                                          "importer_login": "mirror-bot", "source_url": "https://lore.kernel.org/xen-devel/",
+                                          "operations": ["pull"]})
+            self.assertEqual(request.get_method(), "POST")
+            self.assertTrue(request.full_url.endswith("/review-imports/pulls"))
+            payload = json.loads(request.data)
+            if not accepted:
+                accepted.update({"id": 1, "repository_id": 1, "importer_id": 5, "participant_id": 6,
+                                 "type": "pull", "pull_index": 7, "issue_id": 10,
+                                 "source_url": "https://lore.kernel.org/xen-devel/" + payload["message_id"] + "/", **payload})
+            if fail_after_acceptance:
+                return FakeResponse(503, {"message": "uncertain acceptance"})
+            return FakeResponse(200, accepted)
+
+        self.api.transport = transport
+        preview = self.imported_sync()
+        self.assertFalse(preview.applied)
+        self.assertEqual(accepted, {})
+        self.assertFalse(any(self.branch_writes))
+        self.assertEqual(preview.plan.patch_commits[0].message_id, "patch@example.test")
+        self.assertNotIn("synthetic-git-token", json.dumps(replace(preview.plan, request={}).__dict__, default=str))
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            self.imported_sync(write_enabled=True, approved_digest="f" * 64)
+        self.assertFalse(any(self.branch_writes))
+        fail_after_acceptance = True
+        with self.assertRaises(DeliveryUncertainError):
+            self.imported_sync(write_enabled=True, approved_digest=preview.approval_digest)
+        publication = self.ledger.publication(self.api.base_url + "repos/o/r", self.revision.series_key, 1)
+        self.assertEqual(publication.status, "uncertain")
+        count = len(requests)
+        with self.assertRaises(PublicationUncertain):
+            self.imported_sync(write_enabled=True, approved_digest=preview.approval_digest)
+        self.assertFalse(any(request.get_method() == "POST" for request in requests[count:]))
+        retry = self.imported_sync(retry_uncertain=True)
+        self.assertNotEqual(retry.approval_digest, preview.approval_digest)
+        fail_after_acceptance = False
+        result = self.imported_sync(write_enabled=True, approved_digest=retry.approval_digest, retry_uncertain=True)
+        self.assertTrue(result.applied)
+        self.assertEqual(result.pull_request.remote_object["pull_index"], 7)
+        replay = self.imported_sync(write_enabled=True, approved_digest=preview.approval_digest)
+        self.assertTrue(replay.applied)
+        self.assertEqual(len(accepted), len(result.pull_request.remote_object))
+        publication = self.ledger.publication(self.api.base_url + "repos/o/r", self.revision.series_key, 1)
+        self.assertEqual((publication.status, publication.pull_index), ("complete", 7))
+
+    def test_imported_series_cli_uses_read_only_preview_and_separate_git_credentials(self):
+        for source in self.revision.messages:
+            self.ledger.record_parsed_message(source)
+        token_path = self.repository / "api-token"
+        token_path.write_text("synthetic-api-token")
+        token_path.chmod(0o600)
+        git_path = self.repository / "git-token"
+        git_path.write_text("synthetic-git-token")
+        git_path.chmod(0o600)
+        arguments = ["sync-imported-series", "--ledger", str(self.ledger.path), "--api-url", self.api.base_url,
+                     "--owner", "o", "--repo", "r", "--series-seed", self.revision.messages[0].message_id,
+                     "--revision", "1", "--repository", str(self.repository), "--base", "HEAD", "--target-branch", "main",
+                     "--remote", self.remote, "--token-file", str(token_path), "--git-token-file", str(git_path), "--git-username", "git-bot"]
+        before = self.ledger.path.read_bytes()
+        with patch("lore_review_companion.cli.sync_imported_series_revision") as sync, patch("lore_review_companion.cli.asdict", return_value={}), redirect_stdout(StringIO()):
+            self.assertEqual(main(arguments), 0)
+        self.assertFalse(sync.call_args.args[4].write_enabled)
+        self.assertEqual(sync.call_args.kwargs["credentials"].username, "git-bot")
+        self.assertEqual(self.ledger.path.read_bytes(), before)
+        with redirect_stderr(StringIO()):
+            self.assertEqual(main([*arguments, "--write"]), 1)
+
+    def test_imported_v2_links_v1_without_rewriting_original_pr(self):
+        accepted = {}
+
+        def transport(request, _timeout):
+            if request.full_url.endswith("/capabilities"):
+                return FakeResponse(200, {"version": 1, "repository_id": 1, "importer_id": 5,
+                                          "importer_login": "mirror-bot", "source_url": "https://lore.kernel.org/xen-devel/", "operations": ["pull"]})
+            payload = json.loads(request.data)
+            key = payload["operation_key"]
+            if key not in accepted:
+                accepted[key] = {"id": len(accepted)+1, "repository_id": 1, "importer_id": 5, "participant_id": 6,
+                                 "type": "pull", "pull_index": len(accepted)+7, "issue_id": len(accepted)+10,
+                                 "source_url": "https://lore.kernel.org/xen-devel/" + payload["message_id"] + "/", **payload}
+            self.assertEqual(accepted[key]["body"], payload["body"])
+            return FakeResponse(200, accepted[key])
+
+        self.api.transport = transport
+        first = self.imported_sync()
+        self.imported_sync(write_enabled=True, approved_digest=first.approval_digest)
+        original = json.loads(json.dumps(accepted))
+        old_refs = self.imported_branch_exists.copy()
+        second = parse_message(b"From: Author <author@example.test>\nMessage-ID: <v2@example.test>\nSubject: [PATCH v2 1/1] xen: change\n\nSecond revision\n")
+        self.ledger.record_parsed_message(second)
+        arguments = ["link-revision", "--ledger", str(self.ledger.path), "--series-key", self.revision.series_key,
+                     "--canonical-revision", "1", "--candidate-seed", second.message_id, "--candidate-revision", "2",
+                     "--actor", "operator", "--reason", "Reviewed revision relationship", "--allow-unmatched-change-id"]
+        with redirect_stdout(StringIO()) as output:
+            self.assertEqual(main(arguments), 0)
+        digest = json.loads(output.getvalue())["approval_digest"]
+        with redirect_stdout(StringIO()):
+            self.assertEqual(main([*arguments, "--write", "--approve", digest]), 0)
+        self.revision = self.ledger.discover_related_series(second.message_id)[0]
+        preview = self.imported_sync()
+        self.assertIn("Earlier revision: [v1](https://gitea.test/o/r/pulls/7)", preview.plan.request["body"])
+        result = self.imported_sync(write_enabled=True, approved_digest=preview.approval_digest)
+        self.assertEqual(result.pull_request.remote_object["pull_index"], 8)
+        self.assertNotEqual(first.plan.head_branch, preview.plan.head_branch)
+        self.assertTrue(old_refs < self.imported_branch_exists)
+        self.assertEqual(len(accepted), 2)
+        for key, payload in original.items():
+            self.assertEqual(accepted[key], payload)
 
     def ensure_branch(self, prepared, remote, **kwargs):
         self.branch_writes.append(kwargs.get("write_enabled", False))

@@ -37,7 +37,7 @@ from lore_review_companion.public_inbox import (
 )
 from lore_review_companion.review_queue import queue_archive_replies, queue_b4_drafts, queue_imported_replies, queue_thread_replies
 from lore_review_companion.series import change_id_candidates, discover_series, has_invalid_change_id_claims
-from lore_review_companion.series_sync import PublicationUncertain, sync_series_revision
+from lore_review_companion.series_sync import PublicationUncertain, sync_imported_series_revision, sync_series_revision
 
 
 @dataclass(frozen=True)
@@ -457,6 +457,25 @@ def main(argv: list[str] | None = None) -> int:
     import_deliver.add_argument("--write", action="store_true")
     import_deliver.add_argument("--approve")
     import_deliver.add_argument("--retry-uncertain", action="store_true")
+    imported_series = commands.add_parser("sync-imported-series", help="Preview or publish one immutable participant-authored revision PR")
+    imported_series.add_argument("--ledger", type=Path, required=True)
+    imported_series.add_argument("--api-url", required=True)
+    imported_series.add_argument("--owner", required=True)
+    imported_series.add_argument("--repo", required=True)
+    imported_series.add_argument("--inbox-url", default="https://lore.kernel.org/xen-devel/")
+    imported_series.add_argument("--series-seed", required=True)
+    imported_series.add_argument("--series-key")
+    imported_series.add_argument("--revision", type=int, required=True)
+    imported_series.add_argument("--repository", type=Path, required=True)
+    imported_series.add_argument("--base", required=True)
+    imported_series.add_argument("--target-branch", required=True)
+    imported_series.add_argument("--remote", required=True)
+    imported_series.add_argument("--token-file", type=Path, required=True)
+    imported_series.add_argument("--git-token-file", type=Path, required=True)
+    imported_series.add_argument("--git-username", required=True)
+    imported_series.add_argument("--write", action="store_true")
+    imported_series.add_argument("--approve")
+    imported_series.add_argument("--retry-uncertain", action="store_true")
     args = parser.parse_args(argv)
 
     try:
@@ -481,6 +500,20 @@ def main(argv: list[str] | None = None) -> int:
                     plan = plan_import_delivery(ledger, client, args.pull_index, event_type,
                                                 limit=args.limit, retry_uncertain=args.retry_uncertain)
                     result = RetentionPreview(plan, plan.approval_digest())
+        elif args.command == "sync-imported-series":
+            if bool(args.write) != bool(args.approve):
+                raise ValueError("--write and --approve must be supplied together")
+            ledger = Ledger(args.ledger, read_only=not args.write)
+            revisions = tuple(revision for revision in ledger.discover_related_series(args.series_seed)
+                              if revision.revision == args.revision and (args.series_key is None or revision.series_key == args.series_key))
+            if len(revisions) != 1:
+                raise ValueError("Select exactly one complete retained series revision")
+            client = ForgeImportClient(ForgeAPI(args.api_url, token=read_private_token(args.token_file)), args.owner, args.repo,
+                                       source_url=args.inbox_url, write_enabled=args.write)
+            credentials = GitHttpCredentials(args.git_username, read_private_token(args.git_token_file))
+            result = sync_imported_series_revision(revisions[0], args.repository, args.base, args.remote, client,
+                                                   target_branch=args.target_branch, ledger=ledger, credentials=credentials,
+                                                   approved_digest=args.approve, retry_uncertain=args.retry_uncertain)
         elif args.command == "check-b4-runtime":
             print(json.dumps(inspect_b4_runtime(args.python), sort_keys=True))
             return 0

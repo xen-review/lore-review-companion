@@ -10,8 +10,8 @@ and tested in the separate Forgejo worktree. The first atomic conversation
 import and lookup endpoints, non-voting review/range imports and threaded
 replies are also tested. Participant-authored PR creation with pinned refs is
 tested as well. Imported conversation/review queue and approved outbox delivery
-are available as Python APIs and explicit CLI commands; publication orchestration
-remains pending.
+and publication are available as Python APIs and explicit CLI commands;
+unattended discovery/coordinator setup remains pending.
 Native exact multiline
 quote matching and versioned range delivery are implemented and tested locally;
 whole-workflow acceptance remains pending. Read [PLAN.md](PLAN.md) and [LEDGER.md](LEDGER.md)
@@ -92,6 +92,14 @@ Use an explicitly granted repository-selected `write:review-import` token in a
 private token file. These commands do not use the ordinary comment APIs:
 
 ```sh
+.venv/bin/lore-review-companion sync-imported-series \
+  --ledger state.sqlite3 --api-url https://forge.example/api/v1/ \
+  --owner review --repo xen --series-seed cover@example.test --revision 1 \
+  --repository /path/to/xen --base BASE_COMMIT --target-branch staging \
+  --remote https://forge.example/review/xen.git \
+  --token-file /private/import-token --git-token-file /private/git-token \
+  --git-username review-companion
+
 .venv/bin/lore-review-companion queue-imports \
   --ledger state.sqlite3 --api-url https://forge.example/api/v1/ \
   --owner review --repo xen --pull-index 7 --token-file /private/import-token \
@@ -103,6 +111,12 @@ private token file. These commands do not use the ordinary comment APIs:
   --owner review --repo xen --pull-index 7 --token-file /private/import-token \
   --kind review
 ```
+
+Publication previews a separate PR per revision, with immutable revision base
+and head branches. The Git token is separate from the import-only API token
+and needs narrowly scoped code-push authority for this review repository.
+Applying publication also requires paired `--write --approve DIGEST`; it never
+rewrites an existing revision ref or PR. Newer PRs link to older revisions.
 
 Queueing requires the recorded completed publication and pinned b4 runtime;
 it verifies reassembly and exact historical patch diffs before adding effects.

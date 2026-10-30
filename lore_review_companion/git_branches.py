@@ -38,6 +38,59 @@ class RevisionBranchResult:
 
 
 @dataclass(frozen=True)
+class RevisionRefsResult:
+    base: RevisionBranchResult
+    head: RevisionBranchResult
+
+
+def ensure_revision_refs(
+    prepared: PreparedMailbox, remote: str, *, target_branch: str, series_key: str, revision: int,
+    expected_patch_count: int, write_enabled: bool = False, credentials: GitHttpCredentials | None = None,
+) -> RevisionRefsResult:
+    if type(expected_patch_count) is not int or expected_patch_count < 1 or prepared.result.patch_count != expected_patch_count:
+        raise ValueError("assembled patch count does not match the complete revision")
+    branch = revision_branch_name(series_key, revision)
+    branches = (branch + "-base", branch)
+    commits = (prepared.result.base_commit, prepared.result.head_commit)
+    remote_address = _remote_address(remote)
+    environment = credentials.environment(remote_address) if credentials else {}
+    refs = tuple(f"refs/heads/{name}" for name in branches)
+    observed = tuple(_remote_ref(prepared, remote_address, ref, environment) for ref in refs)
+    for ref, expected, current in zip(refs, commits, observed, strict=True):
+        if current is not None and current != expected:
+            raise RevisionBranchConflict(f"Immutable revision ref already differs: {ref}")
+    if observed[0] is None:
+        target_ref = f"refs/heads/{target_branch}"
+        prepared.run_git("Validate target branch", "check-ref-format", target_ref)
+        if _remote_ref(prepared, remote_address, target_ref, environment) != prepared.result.base_commit:
+            raise RevisionBranchConflict("Selected upstream target does not match the pinned series base")
+    missing = tuple(position for position, current in enumerate(observed) if current is None)
+    if not write_enabled or not missing:
+        results = tuple(RevisionBranchResult(name, commit, False, planned=position in missing)
+                        for position, (name, commit) in enumerate(zip(branches, commits, strict=True)))
+        return RevisionRefsResult(*results)
+    try:
+        prepared.run_git(
+            "Create immutable revision refs", "push", "--atomic", "--porcelain",
+            *(f"--force-with-lease={refs[position]}:" for position in missing), "--", remote_address,
+            *(f"{commits[position]}:{refs[position]}" for position in missing), environment_overrides=environment,
+        )
+    except (GitPreflightError, subprocess.TimeoutExpired) as error:
+        try:
+            confirmed = tuple(_remote_ref(prepared, remote_address, ref, environment) for ref in refs)
+        except (GitPreflightError, subprocess.TimeoutExpired, RevisionBranchError) as read_error:
+            raise RevisionBranchUncertain("Immutable revision ref write could not be reconciled") from read_error
+        if confirmed != commits:
+            raise RevisionBranchUncertain("Immutable revision ref creation was not confirmed") from error
+        return RevisionRefsResult(*(RevisionBranchResult(name, commit, False) for name, commit in zip(branches, commits, strict=True)))
+    confirmed = tuple(_remote_ref(prepared, remote_address, ref, environment) for ref in refs)
+    if confirmed != commits:
+        raise RevisionBranchUncertain("Immutable revision refs differ after creation")
+    return RevisionRefsResult(*(RevisionBranchResult(name, commit, position in missing)
+                                for position, (name, commit) in enumerate(zip(branches, commits, strict=True))))
+
+
+@dataclass(frozen=True)
 class StagingSyncPlan:
     source_repository: str
     target_remote: str

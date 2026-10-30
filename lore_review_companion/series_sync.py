@@ -13,12 +13,13 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 from lore_review_companion.b4_adapter import assemble_local_series
-from lore_review_companion.git_branches import GitHttpCredentials, RevisionBranchResult, ensure_revision_branch
+from lore_review_companion.git_branches import GitHttpCredentials, RevisionBranchResult, RevisionRefsResult, ensure_revision_branch, ensure_revision_refs
 from lore_review_companion.forge_api import authenticated_user
 from lore_review_companion.forge_comments import DeliveryResult, quote_untrusted_text, with_tool_attribution
 from lore_review_companion.forge_pulls import ForgePullPublisher
+from lore_review_companion.forge_imports import ForgeImportClient, ImportDeliveryResult
 from lore_review_companion.ledger import Ledger, PublicationConflict
-from lore_review_companion.preflight import prepare_patch_mailbox
+from lore_review_companion.preflight import PatchCommit, prepare_patch_mailbox
 from lore_review_companion.series import SeriesRevision, discover_series
 
 
@@ -67,6 +68,144 @@ class SeriesSyncResult:
 
 class PublicationUncertain(RuntimeError):
     """An earlier PR write must be reconciled or explicitly retried."""
+
+
+@dataclass(frozen=True)
+class ImportedSeriesPlan:
+    series_key: str
+    revision: int
+    source_message_id: str
+    source_sha256: tuple[str, ...]
+    api_url: str
+    owner: str
+    repository: str
+    git_remote: str
+    target_branch: str
+    base_branch: str
+    head_branch: str
+    base_commit: str
+    head_commit: str
+    patch_commits: tuple[PatchCommit, ...]
+    repository_id: int
+    actor: str
+    actor_id: int
+    git_username: str
+    source_url: str
+    request: dict
+    retry_uncertain: bool
+
+    def approval_digest(self) -> str:
+        value = json.dumps(asdict(self), sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(value).hexdigest()
+
+
+@dataclass(frozen=True)
+class ImportedSeriesResult:
+    plan: ImportedSeriesPlan
+    approval_digest: str
+    refs: RevisionRefsResult
+    pull_request: ImportDeliveryResult
+    applied: bool
+
+
+def sync_imported_series_revision(
+    revision: SeriesRevision, repository: Path, base_ref: str, remote: str, client: ForgeImportClient, *,
+    target_branch: str, ledger: Ledger, credentials: GitHttpCredentials,
+    approved_digest: str | None = None, retry_uncertain: bool = False,
+) -> ImportedSeriesResult:
+    if not revision.complete or revision.conflicts or revision.expected_patch_count is None:
+        raise ValueError("A complete unambiguous series revision is required")
+    if revision not in ledger.discover_related_series(revision.cover_message_id or revision.messages[0].message_id):
+        raise ValueError("Series membership must be verified from the retained mail ledger")
+    if bool(client.write_enabled) != bool(approved_digest):
+        raise ValueError("Imported publication requires paired write opt-in and approval digest")
+    _validate_destination(client, remote)
+    capabilities = client.capabilities()
+    if "pull" not in capabilities["operations"]:
+        raise ValueError("This repository does not support participant-authored PR imports")
+    source_id = revision.cover_message_id or revision.messages[0].message_id
+    source = next(message for message in revision.messages if message.message_id == source_id)
+    if not source_id or not source.from_address:
+        raise ValueError("The series source must retain its Message-ID and author email")
+    ledger.assert_unconflicted(tuple(message.message_id for message in revision.messages if message.message_id))
+    ledger.assert_message_ancestry_available(revision.messages)
+    destination = client.api.base_url + client.repository_path
+    lock = ledger.worker_lock() if client.write_enabled else nullcontext()
+    with lock, tempfile.TemporaryDirectory(prefix="lore-import-series-") as temporary:
+        mailbox_path = Path(temporary) / "series.mbox"
+        box = mailbox.mbox(mailbox_path)
+        try:
+            for message in revision.messages:
+                box.add(message.raw_message)
+            box.flush()
+        finally:
+            box.close()
+        assembly = assemble_local_series(mailbox_path, revision=revision.revision)
+        with prepare_patch_mailbox(repository, base_ref, assembly.patch_mailbox) as prepared:
+            patches = sorted((message for message in revision.messages if message.kind == "patch"), key=lambda message: message.patch_index or 0)
+            patch_commits = prepared.patch_commits(tuple(message.message_id for message in patches))
+            refs_arguments = {"target_branch": target_branch, "series_key": revision.series_key,
+                              "revision": revision.revision, "expected_patch_count": revision.expected_patch_count,
+                              "credentials": credentials}
+            refs = ensure_revision_refs(prepared, remote, **refs_arguments)
+            operation_key = hashlib.sha256(f"{revision.series_key}\0{revision.revision}\0{source_id}\0imported-series-v1".encode()).hexdigest()
+            estimate = source.time_estimate
+            body = f"Revision: v{revision.revision}\n\n" + quote_untrusted_text(source.body_text)
+            previous = ledger.list_publications(destination=destination, series_key=revision.series_key, status="complete", limit=1000)
+            if previous.next_cursor is not None:
+                raise PublicationConflict("Earlier revision links exceed the reviewed publication limit")
+            for entry in previous.publications:
+                prior = entry.publication
+                if prior.revision >= revision.revision:
+                    continue
+                site = client.api.base_url.removesuffix("/").removesuffix("/api/v1")
+                body += f"\n\nEarlier revision: [v{prior.revision}]({site}/{quote(client.owner, safe='')}/{quote(client.repo, safe='')}/pulls/{prior.pull_index})"
+            request = {
+                "operation_key": operation_key, "message_id": source_id, "message_sha256": source.sha256,
+                "address": source.from_address, "name": source.from_name or "", "body": body,
+                "source_time": estimate.timestamp if estimate else None,
+                "source_time_basis": "unverified" if estimate else "unknown",
+                "title": f"[v{revision.revision}] {revision.title}",
+                "head_branch": refs.head.branch, "base_branch": refs.base.branch,
+                "head_commit": refs.head.head_commit, "base_commit": refs.base.head_commit,
+            }
+            plan = ImportedSeriesPlan(
+                revision.series_key, revision.revision, source_id, tuple(message.sha256 for message in revision.messages),
+                client.api.base_url, client.owner, client.repo, remote, target_branch, refs.base.branch, refs.head.branch,
+                prepared.result.base_commit, prepared.result.head_commit, patch_commits, capabilities["repository_id"],
+                capabilities["importer_login"], capabilities["importer_id"], credentials.username, client.source_url, request, retry_uncertain,
+            )
+            digest = plan.approval_digest()
+            if not client.write_enabled:
+                return ImportedSeriesResult(plan, digest, refs, ImportDeliveryResult({"path": f"{client.path}/pulls", **request}, planned=True), False)
+            if not hmac.compare_digest(digest, approved_digest or ""):
+                raise ValueError("Approval digest does not match the current imported series plan")
+            ledger.assert_unconflicted(tuple(message.message_id for message in revision.messages if message.message_id))
+            ledger.record_series_revision(revision)
+            key = destination, revision.series_key, revision.revision
+            intent_digest = replace(plan, retry_uncertain=False).approval_digest()
+            publication = ledger.begin_publication(*key, intent_digest, plan.base_commit, plan.head_branch, plan.head_commit)
+            if publication.status in ("pr_pending", "uncertain") and not retry_uncertain:
+                raise PublicationUncertain("Earlier PR acceptance is unconfirmed; review same-operation retry before proceeding")
+            current_capabilities = client.capabilities()
+            if any(current_capabilities[field] != capabilities[field] for field in ("repository_id", "importer_id", "importer_login", "source_url")):
+                raise PublicationConflict("Import authorization identity changed before ref publication")
+            if "pull" not in current_capabilities["operations"]:
+                raise PublicationConflict("PR import capability was revoked before ref publication")
+            refs = ensure_revision_refs(prepared, remote, write_enabled=True, **refs_arguments)
+            if publication.status == "complete":
+                result = client.import_pull(request)
+                if result.remote_object["pull_index"] != publication.pull_index:
+                    raise PublicationConflict("Imported PR index differs from the durable publication mapping")
+                return ImportedSeriesResult(plan, digest, refs, result, True)
+            ledger.transition_publication(*key, expected=(publication.status,), status="pr_pending")
+            try:
+                result = client.import_pull(request)
+            except Exception as error:
+                ledger.transition_publication(*key, expected=("pr_pending",), status="uncertain", last_error=f"{type(error).__name__}: {error}")
+                raise
+            ledger.transition_publication(*key, expected=("pr_pending",), status="complete", pull_index=result.remote_object["pull_index"])
+            return ImportedSeriesResult(plan, digest, refs, result, True)
 
 
 def _attribution_status(pull: DeliveryResult, body: str) -> str:

@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from lore_review_companion.cli import main
-from lore_review_companion.git_branches import GitHttpCredentials, RevisionBranchConflict, RevisionBranchError, RevisionBranchUncertain, ensure_revision_branch, inspect_upstream_history, plan_staging_sync, revision_branch_name, sync_staging
+from lore_review_companion.git_branches import GitHttpCredentials, RevisionBranchConflict, RevisionBranchError, RevisionBranchUncertain, ensure_revision_branch, ensure_revision_refs, inspect_upstream_history, plan_staging_sync, revision_branch_name, sync_staging
 from lore_review_companion.ledger import Ledger
 from lore_review_companion.preflight import GitPreflightError, preflight_patch_mailbox, prepare_patch_mailbox
 from lore_review_companion.series import discover_series
@@ -135,6 +135,31 @@ class PreflightTests(unittest.TestCase):
         self.assertFalse(replay.planned)
         self.assertEqual(created.head_commit, replay.head_commit)
         self.assertIn(created.head_commit.encode(), self.git("ls-remote", str(remote), f"refs/heads/{created.branch}"))
+
+    def test_paired_revision_refs_keep_old_comparison_when_upstream_moves(self):
+        remote = self.create_remote()
+        arguments = {"target_branch": "main", "series_key": "lore:thread@example.test", "revision": 1, "expected_patch_count": 2}
+        with prepare_patch_mailbox(self.repository, self.base, self.mailbox) as prepared:
+            preview = ensure_revision_refs(prepared, remote, **arguments)
+            self.assertTrue(preview.head.planned)
+            self.assertTrue(preview.base.planned)
+            created = ensure_revision_refs(prepared, remote, write_enabled=True, **arguments)
+            self.assertTrue(created.head.created)
+            self.assertTrue(created.base.created)
+            self.assertEqual(created.base.head_commit, self.base)
+            prepared.run_git("Advance upstream", "push", "--", str(remote), f"{prepared.result.head_commit}:refs/heads/main")
+            replayed = ensure_revision_refs(prepared, remote, write_enabled=True, **arguments)
+            self.assertFalse(replayed.head.created)
+            self.assertFalse(replayed.base.created)
+            self.assertEqual(replayed.base.head_commit, self.base)
+            refs = prepared.run_git("Inspect refs", "ls-remote", "--refs", str(remote))
+            other = ensure_revision_refs(prepared, remote, write_enabled=True, **{**arguments, "revision": 2, "target_branch": created.base.branch})
+            self.assertNotEqual(created.head.branch, other.head.branch)
+            self.assertIn(f"{self.base}\trefs/heads/{created.base.branch}", refs)
+            self.assertIn(f"{created.head.head_commit}\trefs/heads/{created.head.branch}", refs)
+            prepared.run_git("Corrupt test base", "push", "--", str(remote), f"{prepared.result.head_commit}:refs/heads/{created.base.branch}")
+            with self.assertRaises(RevisionBranchConflict):
+                ensure_revision_refs(prepared, remote, write_enabled=True, **arguments)
 
     def test_staging_sync_plan_requires_a_known_fast_forward_and_does_not_write(self):
         remote = self.create_remote()
