@@ -11,11 +11,13 @@ No automatic pushes. Forgejo changes belong to the separate parent repository.
 
 - DOC-01 `DONE`: the implementation plan and this living ledger form the first
   commit, before implementation import. The user supplied an empty repository.
+- B01 `DONE`: current source/history/tool inventory and offline baseline recorded
+  below. B02 is next; installed b4 is unavailable, not assumed compatible.
 - First behavioral hypothesis: an unsafe inline delivery must not silently
   become a conversation write. The existing publisher does this; B03 removes
   it and immediately runs the focused comment tests.
-- Historical tests and sample publications are background evidence only. No
-  current code/test baseline has been executed yet.
+- Historical sample publications remain background evidence only; the current
+  baseline is 295 synthetic tests, with 3 explicitly reported skips.
 
 ## Discovery
 
@@ -34,7 +36,7 @@ installed versions, historical commits and current tests are B01, not assumed.
 | ID | Status | Depends On | Step And Acceptance Gate |
 | --- | --- | --- | --- |
 | DOC-01 | DONE | - | PLAN and LEDGER are the first content; staged whitespace and both local document links checked. |
-| B01 | TODO | DOC-01 | Inspect relevant Git status/log/diff, protect existing changes, verify tools/runtime, and record fresh narrow/full offline tests with live opt-ins disabled. Distinguish installed b4 from its checkout. |
+| B01 | DONE | DOC-01 | Current worktrees/history/tools inspected and narrow/full offline baseline passed; source is an untracked snapshot, b4 runtime absent. See execution record. |
 | B02 | TODO | B01 | Import reviewed sources/synthetic tests and sanitized history into this repository. Exclude mail, databases, tokens, caches, virtualenvs and nested Git data; record license/origin and leave originals intact. |
 | B03 | TODO | B02 | Remove inline-to-conversation fallback. Stale/disabled/unsafe inline effects make zero conversation POSTs, remain inspectable, and require a separately reviewed fallback. Run existing comment tests immediately after the edit. |
 | B04 | TODO | B03 | Rename to neutral project/modules and installable lore_review_companion package with CLI/CI. Preserve legacy replay markers, destination/effect keys and versioned preflight identity. Independent install and old-state replay must not create duplicate writes. |
@@ -120,3 +122,31 @@ Bring them into scope only through an explicit decision.
 - Added the refined plan and task ledger as the first repository content.
 - Validation: staged `git diff --check` passed; both linked documents exist.
 - Commit subject: `docs: record implementation plan and task ledger`.
+
+### 2026-10-29: B01 Baseline
+
+- Documentation bootstrap commit: `ba35ee0`.
+- Forgejo base: `cff8e8831a0695913dd0f383426a487baf899cd3`. Its pre-existing
+  companion/b4 directories are untracked; no tracked changes were present.
+- Earlier Gitea base: `178d33ed4dce734384caa61a04290b30ab955b21`, clean worktree.
+  That checkout has no companion directory or tracked history for it. Import
+  the operator-provided snapshot without claiming earlier commit preservation.
+- Python `3.13.5`, Git `2.47.3`. `b4` is not on PATH and pipx reports no installed
+  applications for this account. Real-b4 checks remain pending under C02.
+- b4 source: `ce4c1158edb292caca0ce4a6087e5edecc1b0371`; liblore source:
+  `6e8d825a12ae32b98e4da5348d3ade6fce12a895`. An existing untracked b4 prompt
+  was left untouched. Checkout metadata is not an installed-runtime pin.
+- Source aggregate SHA-256: `c9489494e4d239d01a38253345da030eb0f5bcefc3942db49fa97795378f6bea`,
+  calculated with sorted shell globs for the legacy Python files and requirements
+  including their legacy relative paths. B02 records individual file checksums.
+- Narrow check: `python3 -m unittest discover -s contrib/lore-gitea-mirror -p test_gitea_comments.py`:
+  24 tests passed.
+- Full check: `python3 -m unittest discover -s contrib/lore-gitea-mirror -p 'test_*.py'`:
+  295 run, 292 passed, 3 skipped in 18.798 seconds. Skips: one disposable-server
+  test and two optional installed-b4 tests. All live opt-ins were unset and
+  bytecode writes disabled for both checks. No operational state was opened.
+- The source scan found no old instance paths, real example recipient, or
+  GitHub token prefixes in Python files; only synthetic/configurable endpoints
+  and environment-based credentials were observed. No private docs/state enter
+  the source import.
+- Commit subject: `docs: record verified companion baseline`.
