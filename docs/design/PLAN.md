@@ -174,6 +174,14 @@ exact parent remarks match, otherwise a concise conversation and parent link.
 Raw mail remains complete in the ledger; old approved effect bytes are unchanged.
 Rendering is explicitly tagged; retained old effects keep their original bytes
 and operation identities rather than being silently rewritten on replay.
+New `mail-text-v4` effects render a direct reply's source-verified non-code
+submission quotes in Rust fenced blocks, preserving quote markers and using a
+fence long enough for embedded backticks. Quotes in actual patch code, ambiguous
+or unmatched material, and replies to other review messages are not converted.
+The last standalone sender-name sign-off is omitted from new imported comment
+bodies without removing the only remaining content. Approval reconstructs the
+presentation from the retained source and recorded immediate parent; new inline
+replies match the displayed parent rather than an omitted sign-off.
 For newly resolved inline replies, match nonempty contiguous quoted lines from
 the immediately preceding depth-one block to exactly one accepted inline remark
 from the explicit parent mail, ignoring blank lines and surrounding whitespace.

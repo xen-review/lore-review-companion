@@ -15,8 +15,27 @@ files, source snapshots and nested repositories are not part of these commits.
 
 ## Current Iteration
 
+- Submission quote presentation: companion `bb97957` and real-Forgejo fixture
+  `362c7b6` are pushed. The installed wheel is stamped
+  `362c7b66ff34/test-verify-submission-quote-formatting-against-forgejo`.
+  New `mail-text-v4` replies to recorded patch/cover parents fence verified
+  non-code quotes as Rust and remove final standalone sender-name sign-offs;
+  actual patch code and ambiguous or unmatched quotes remain untouched. Other
+  new imported comment bodies also omit final sender-name sign-offs. Approval
+  reconstructs the body from retained source; old effects keep their original
+  format and operation identities, and previously posted comments are not edited.
+- Read-only reconstruction of PR 1 source mail
+  `25716378-3592-471f-a972-8446c32e29bd@citrix.com` produces the requested
+  fenced quoted message and omits `~Andrew`; the operator-edited live comment
+  remains untouched. Clean committed suite: 370 tests, 368 pass and two optional
+  server skips. Isolated Forgejo/Git/b4 acceptance passed. The ledger remains
+  at 27 complete effects and server import/notification/hook counts at 32/1/0.
+  Private checkpoint `backups/20261030-presentation-362c7b6/` retains both
+  preceding ledgers and the existing NNTP incident; the timer is active and
+  that incident remains latched.
+
 - Inline reply excerpt follow-up: companion matching/revalidation `3e2920b` and
-  disposable Forgejo acceptance `f8a018d` are pushed. The installed wheel is
+  disposable Forgejo acceptance `f8a018d` are pushed. The then-installed wheel is
   stamped `f8a018d1d279/test-exercise-inline-reply-excerpts-against-forgejo`.
   Nonempty contiguous lines from the immediate depth-one quote match exactly one
   accepted parent remark after ignoring blank lines and surrounding whitespace;

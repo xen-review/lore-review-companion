@@ -211,6 +211,13 @@ the final contiguous quoted segment. Ambiguous, mixed-side or mismatched
 segments remain unresolved. Newly recovered remarks use distinct, stable
 operations, so replay never rewrites or duplicates an earlier imported review.
 
+For new imported replies directly to a recorded patch or cover message,
+quoted submission prose and metadata verified against that parent are rendered
+in Rust-highlighted fenced blocks. Quoted patch code and ambiguous or unmatched
+quotes are left unchanged. A final standalone sender-name sign-off is omitted
+from new imported comment bodies; complete raw mail remains in the ledger.
+Older approved effects and already posted comments are not rewritten.
+
 For a reply to an accepted inline remark, match the immediately preceding
 depth-one quote as a nonempty contiguous excerpt of exactly one inline parent
 from the explicitly replied-to mail. Blank lines and surrounding whitespace are
