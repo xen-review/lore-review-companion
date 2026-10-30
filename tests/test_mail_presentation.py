@@ -128,6 +128,9 @@ class MailPresentationTests(unittest.TestCase):
         diffstat = " xen/kexec.c | 3 +++\n 1 file changed, 3 insertions(+)\n create mode 100644 xen/kexec.c"
         cover = f"{prose}\n\n{shortlog}\n\n{diffstat}\n\n-- \n2.52.0\n"
         self.assertEqual(submission_text(cover), prose)
+        b4_cover = f"{prose}\n\n---\n{shortlog}\n\n{diffstat}\n---\nbase-commit: {'a' * 40}\nchange-id: stable-series\n\nBest regards,\n--  \nSender"
+        self.assertEqual(submission_text(b4_cover), prose)
+        self.assertIn("base-commit:", submission_text(b4_cover, strip_shortlog=False))
         self.assertEqual(
             submission_text(cover, strip_shortlog=False), f"{prose}\n\n{shortlog}"
         )

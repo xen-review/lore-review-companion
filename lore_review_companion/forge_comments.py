@@ -61,6 +61,34 @@ def submission_text(text: str, *, strip_shortlog: bool = True) -> str:
     text = text.replace("\r\n", "\n").rstrip()
     text = re.sub(r"\n-- ?\n[0-9][^\n]*\Z", "", text).rstrip()
     lines = text.splitlines()
+    if strip_shortlog:
+        for index in range(len(lines)):
+            position = index
+            while position < len(lines):
+                heading = re.fullmatch(r"\S[^\n]* \(([1-9][0-9]*)\):", lines[position])
+                if heading is None:
+                    break
+                count = int(heading.group(1))
+                subjects = lines[position + 1 : position + 1 + count]
+                if len(subjects) != count or any(
+                    not line.startswith("  ") or not line.strip() for line in subjects
+                ):
+                    break
+                position += count + 1
+                while position < len(lines) and not lines[position].strip():
+                    position += 1
+            diffstat = position
+            while position < len(lines) and re.fullmatch(
+                r" .+\s+\|\s+(?:\d+\s*[-+]*|Bin .+)", lines[position]
+            ):
+                position += 1
+            if index < diffstat < position < len(lines) and re.fullmatch(
+                r"\s*\d+ files? changed(?:, \d+ (?:insertions?\(\+\)|deletions?\(-\)))*\s*",
+                lines[position],
+            ):
+                return (
+                    "\n".join(lines[:index]).rstrip().removesuffix("\n\n---").rstrip()
+                )
     summary = next(
         (
             index
