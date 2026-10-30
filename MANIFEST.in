@@ -1,0 +1,3 @@
+include ORIGIN.md PLAN.md LEDGER.md SOURCE.sha256
+include requirements.txt requirements-b4.txt
+recursive-include contrib *.json *.service *.timer

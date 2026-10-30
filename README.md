@@ -4,6 +4,10 @@ Mirror mailing-list patch series and review discussions into a dedicated
 Forgejo repository, starting with `xen-devel` on lore.kernel.org. The companion
 is deterministic Python software; it does not require a runtime LLM.
 
+**Distribution blocked:** the inherited Python snapshot's license grant is
+unresolved. Local development builds and installation checks are not license
+clearance. Do not publish package releases; see [ORIGIN.md](ORIGIN.md).
+
 **Status:** an independently packaged prototype, based on the previous bridge.
 Scoped import authorization and non-login participant profiles are implemented
 and tested in the separate Forgejo worktree. The first atomic conversation
