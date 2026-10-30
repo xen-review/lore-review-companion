@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lore-review-companion"
+version = "0.1.0.dev0"
+description = "Mirror mailing-list patch series and reviews into dedicated Forgejo pull requests"
+readme = "README.md"
+license = "GPL-2.0-or-later"
+license-files = ["COPYING"]
+requires-python = ">=3.11"
+dependencies = [
+    "standard-nntplib==3.13.0; python_version >= '3.13'",
+]
+
+[project.scripts]
+lore-review-companion = "lore_review_companion.cli:main"
+
+[tool.setuptools]
+packages = ["lore_review_companion"]

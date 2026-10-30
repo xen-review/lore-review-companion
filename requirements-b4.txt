@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+b4 @ git+https://git.kernel.org/pub/scm/utils/b4/b4.git@ce4c1158edb292caca0ce4a6087e5edecc1b0371
+liblore @ git+https://git.kernel.org/pub/scm/utils/liblore/liblore.git@6e8d825a12ae32b98e4da5348d3ade6fce12a895
+requests==2.34.2
+pygit2==1.20.1
+dkimpy==1.1.8
+dnspython==2.9.1
+patatt==0.8.0
+pynacl==1.6.2
+cffi==2.1.1
+charset-normalizer==3.5.2
+idna==3.20
+urllib3==2.8.0
+certifi==2026.10.23
+pycparser==3.12

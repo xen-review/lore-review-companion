@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+[Unit]
+Description=Forgejo review instance
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+WorkingDirectory=%h/forgejo
+ExecStart=%h/forgejo/gitea web --config %h/forgejo/custom/conf/app.ini --work-path %h/forgejo
+UMask=0077
+NoNewPrivileges=true
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=120
+
+[Install]
+WantedBy=default.target

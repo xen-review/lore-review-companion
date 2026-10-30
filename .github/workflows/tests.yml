@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+name: Offline Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    env:
+      LORE_FORGE_ACCEPTANCE: "0"
+      LORE_FORGE_ACCEPTANCE_DELETIONS: "0"
+      LORE_FORGE_ACCEPTANCE_B4_PYTHON: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install .
+      - run: python -m unittest discover -s tests -p 'test_*.py'
+      - name: Installed CLI outside the checkout
+        working-directory: ${{ runner.temp }}
+        run: |
+          lore-review-companion --help
+          python -m lore_review_companion --help

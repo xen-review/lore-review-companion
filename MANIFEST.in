@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+include COPYING CONTRIBUTING.md docs/design/PLAN.md docs/design/LEDGER.md
+include requirements.txt requirements-b4.txt
+recursive-include contrib *.json *.service *.timer

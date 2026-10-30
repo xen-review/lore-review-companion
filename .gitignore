@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.env
+.env.*
+*.sqlite
+*.sqlite3
+*.db
+*.mbox
+*.mbx
+*.eml
+*.token
