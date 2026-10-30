@@ -1,0 +1,121 @@
+"""Explicitly scoped, idempotent Forgejo review-import operations."""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Any
+from urllib.parse import quote, unquote, urlsplit
+
+from lore_review_companion.forge_api import ForgeAPI, ForgeAPIError
+from lore_review_companion.forge_comments import DeliveryUncertainError
+
+
+@dataclass(frozen=True)
+class ImportDeliveryResult:
+    remote_object: dict[str, Any]
+    planned: bool = False
+
+
+def _positive_id(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+class ForgeImportClient:
+    def __init__(
+        self, api: ForgeAPI, owner: str, repo: str, *, source_url: str,
+        write_enabled: bool = False,
+    ):
+        source = urlsplit(source_url)
+        if (
+            not owner or not repo or source.scheme != "https" or not source.hostname
+            or source.username is not None or source.password is not None
+            or source.query or source.fragment or not source.path.endswith("/")
+            or "%" in source.path
+        ):
+            raise ValueError("A repository and credential-free HTTPS source inbox are required")
+        self.api = api
+        self.path = f"repos/{quote(owner, safe='')}/{quote(repo, safe='')}/review-imports"
+        self.source_url = source_url
+        self.write_enabled = write_enabled
+
+    def capabilities(self) -> dict[str, Any]:
+        result = self.api.request_json(f"{self.path}/capabilities")
+        if (
+            not isinstance(result, dict) or type(result.get("version")) is not int
+            or result["version"] != 1 or result.get("source_url") != self.source_url
+            or not _positive_id(result.get("repository_id"))
+            or not _positive_id(result.get("importer_id"))
+            or not isinstance(result.get("importer_login"), str)
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,254}", result["importer_login"]) is None
+            or not isinstance(result.get("operations"), list)
+            or any(not isinstance(operation, str) for operation in result["operations"])
+        ):
+            raise ValueError("Unsupported or mismatched review-import capability response")
+        return result
+
+    @staticmethod
+    def _operation_key(value: Any) -> str:
+        if not isinstance(value, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", value) is None:
+            raise ValueError("A bounded path-safe operation key is required")
+        return value
+
+    def lookup_operation(self, operation_key: str) -> dict[str, Any] | None:
+        operation_key = self._operation_key(operation_key)
+        capabilities = self.capabilities()
+        try:
+            result = self.api.request_json(f"{self.path}/operations/{quote(operation_key, safe='')}")
+        except ForgeAPIError as error:
+            if error.status == 404:
+                return None
+            raise
+        if (
+            not isinstance(result, dict) or not _positive_id(result.get("id"))
+            or not _positive_id(result.get("repository_id"))
+            or result.get("repository_id") != capabilities["repository_id"]
+            or result.get("operation_key") != operation_key
+        ):
+            raise ValueError("Mismatched imported-operation lookup response")
+        return result
+
+    def import_conversation(self, pull_index: int, payload: Mapping[str, Any]) -> ImportDeliveryResult:
+        if not _positive_id(pull_index):
+            raise ValueError("A positive pull request index is required")
+        operation_key = self._operation_key(payload.get("operation_key"))
+        payload = dict(payload)
+        path = f"{self.path}/pulls/{pull_index}/comments"
+        for attempt in range(2):
+            try:
+                capabilities = self.capabilities()
+                if "conversation" not in capabilities["operations"]:
+                    raise ValueError("Conversation imports are not supported by this repository")
+            except (ForgeAPIError, ValueError) as error:
+                if attempt:
+                    raise DeliveryUncertainError("Import acceptance could not be confirmed after capability recheck") from error
+                raise
+            if not self.write_enabled:
+                return ImportDeliveryResult({"path": path, **payload}, planned=True)
+            try:
+                result = self.api.request_json(path, method="POST", payload=payload)
+            except ForgeAPIError as error:
+                if attempt:
+                    raise DeliveryUncertainError("Import acceptance could not be confirmed by idempotent replay") from error
+                if error.status is None or error.status >= 500 or 200 <= error.status < 300:
+                    continue
+                raise
+            if (
+                not isinstance(result, dict) or not _positive_id(result.get("id"))
+                or not _positive_id(result.get("comment_id")) or not _positive_id(result.get("participant_id"))
+                or not _positive_id(result.get("repository_id")) or not _positive_id(result.get("importer_id"))
+                or result.get("repository_id") != capabilities["repository_id"]
+                or result.get("importer_id") != capabilities["importer_id"]
+                or result.get("type") != "conversation" or result.get("operation_key") != operation_key
+                or result.get("message_id") != payload.get("message_id")
+                or result.get("message_sha256") != payload.get("message_sha256")
+                or not isinstance(result.get("source_url"), str)
+                or unquote(result["source_url"]) != self.source_url + str(payload.get("message_id")) + "/"
+            ):
+                raise DeliveryUncertainError("Forgejo returned an unconfirmed imported conversation")
+            return ImportDeliveryResult(result)
+        raise AssertionError("Unreachable import retry state")

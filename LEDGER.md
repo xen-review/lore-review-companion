@@ -33,8 +33,13 @@ No automatic pushes. Forgejo changes belong to the separate parent repository.
   transactionally without account adoption. Shared login/session, reset,
   OAuth/linking, credentials, email changes, Sudo and admin edits are blocked
   and covered by affected-package tests and an isolated API case.
+- F03 `DONE`: atomic participant-authored conversation imports and scoped
+  operation lookup are tested on existing PRs. The companion has an opt-in
+  import-only client with same-key replay, capability checks and no fallback;
+  CLI/outbox wiring follows with F04 and S03.
 - Historical sample publications remain background evidence only; the current
-  baseline is 317 tests, with 3 explicitly reported integration skips.
+  baseline is 324 tests, with only the live-server acceptance test skipped
+  when the pinned real-b4 opt-ins are enabled.
 
 ## Discovery
 
@@ -77,7 +82,7 @@ revision state here; do not stage them into a companion commit.
 | --- | --- | --- | --- |
 | F01 | DONE | B01 | Opt-in import scopes (not implied by legacy all), source-bound repository grants, current token-reduced code/PR write checks and owner-bound/transfer revocation implemented. Scope/model tests and authorization/real-transfer API tests pass. Object/author checks follow with F03/F04 operations. |
 | F02 | DONE | F01 | Atomic repository/source participant registry, deterministic collision-safe names, inactive/restricted/passwordless private-email profiles. Replay revalidates safety flags; shared authentication, sessions, OAuth/linking, reset, tokens/SSH/GPG, password/email changes, Sudo, activation/admin edits and inactive cleanup are guarded. Rollback, collision, affected-package and isolated API tests pass. |
-| F03 | TODO | F01, F02 | First vertical slice: conversation import onto existing PR with mapped author, importer provenance, source time/hash and unique operation key. Atomic rollback; replay returns same IDs; differing payload conflicts. |
+| F03 | DONE | F01, F02 | Existing-PR conversation import and scoped operation lookup preserve mapped author, importer, source time/hash and atomic operation keys. Replay keeps IDs; changed payload/target/local content or reused Message-ID with different bytes/author conflicts. No notifications, mentions or cross-reference actions. Opt-in companion client rechecks capabilities, safely replays uncertain POSTs and never uses ordinary mutation APIs. |
 | F04 | TODO | F03 | Add submitter-authored PRs, explicit non-voting COMMENT reviews/ranges and reviewer replies. Reuse services; verify exact patch parent context and no draft theft. Extend before-commit API only when a test proves necessary. |
 | F05 | TODO | F03, F04 | Restricted original timestamp initialization/correction with audited actual import/edit time and source quality. Validate UTC/unknown/invalid times; no duplicate notifications or silent reauthoring of legacy content. |
 | F06 | TODO | F03, F04, F05 | API and web render both participant and importer, lore link and source chronology/quality. Reuse existing UI; no forged identity verification or layout regressions. |
@@ -398,3 +403,36 @@ Bring them into scope only through an explicit decision.
   profile flags/email. `make fmt` and editor diagnostics passed. No live
   database/content writes or binary restart occurred.
 - Commit subject: `docs: record tested managed participant isolation`.
+
+### 2026-10-30: F03 Atomic Conversation Imports
+
+- Parent Forgejo worktree adds `ReviewImport` and `ReviewImportMessage` tables
+  with unique repository/source operation keys and Message-ID bindings. One
+  transaction creates the managed participant, canonical comment and retained
+  provenance. Raw-mail SHA-256 and author cannot change under a source ID.
+- New import-only routes: POST `review-imports/pulls/{index}/comments` and GET
+  `review-imports/operations/{operation}`. Both enforce F01 gates; normal repo
+  scopes cannot import and read-only import scopes cannot write. PR target,
+  evidence bounds/hash/email and source-time quality are validated. A changed
+  payload or deleted/modified canonical comment is never silently overwritten.
+- Import uses the canonical comment model without notification/mention
+  delivery; a default-off skip-cross-reference option prevents imported text
+  from creating reference actions. Tests cover no hooks/actions, original
+  author vs importer, rollback of profile/comment/provenance, replay IDs,
+  source conflicts, bad targets/evidence, lookup and grant revocation.
+- Capability response now supplies importer login, avoiding a broad `read:user`
+  scope for repository-selected import tokens. Added `ForgeImportClient` with
+  source/capability validation, dry run by default, bounded identical-POST
+  reconciliation and explicit uncertainty if revocation prevents confirmation.
+  Lookup alone never declares a payload successfully delivered. Legacy
+  publisher paths remain unchanged and are not switched without F04/S03.
+- All affected Go model/service/auth packages passed. Four isolated SQLite API
+  cases passed in 4.113 seconds including startup. Full Python suite: 324 run,
+  323 passed, one live-server skip in 13.848 seconds; real pinned-b4 tests ran.
+  Client-focused suite: 19 passed. No live content or database was changed.
+- Swagger assertion initially found missing model definitions despite valid
+  paths: fixed via existing response/parameter wrappers, not warning suppression.
+  Grant now returns an explicit API DTO. Forced generation plus structured JSON
+  assertions confirm both endpoints and all five models. Existing unrelated
+  generator warnings remain. Formatting and editor diagnostics passed.
+- Commit subject: `feat: add scoped replay-safe conversation import client`.

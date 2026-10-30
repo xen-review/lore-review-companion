@@ -11,6 +11,8 @@ from urllib.error import HTTPError, URLError
 from unittest.mock import patch
 
 from lore_review_companion.forge_api import MAX_JSON_BYTES, ForgeAPI, ForgeAPIError, read_private_token
+from lore_review_companion.forge_imports import ForgeImportClient
+from lore_review_companion.forge_comments import DeliveryUncertainError
 
 
 class FakeResponse:
@@ -49,6 +51,126 @@ class GiteaAPITests(unittest.TestCase):
                         read_private_token(path)
                     self.assertNotIn(value if value else "synthetic-token", str(caught.exception))
             self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+
+    def test_import_only_client_previews_without_user_or_comment_writes(self):
+        requests = []
+        capabilities = {
+            "version": 1, "repository_id": 1, "importer_id": 2, "importer_login": "review-companion",
+            "source_url": "https://lore.kernel.org/xen-devel/", "operations": ["conversation"],
+        }
+
+        def transport(request, _timeout):
+            requests.append(request)
+            return FakeResponse(200, json.dumps(capabilities).encode())
+
+        client = ForgeImportClient(ForgeAPI("https://forge.test/api/v1/", transport=transport),
+                                   "owner", "repo", source_url=capabilities["source_url"])
+        result = client.import_conversation(2, {"operation_key": "reply:1", "body": "Review"})
+        self.assertTrue(result.planned)
+        self.assertEqual(len(requests), 1)
+        self.assertTrue(requests[0].full_url.endswith("/review-imports/capabilities"))
+        capabilities["source_url"] = "https://other.test/list/"
+        with self.assertRaisesRegex(ValueError, "capability"):
+            client.import_conversation(2, {"operation_key": "reply:1"})
+        for key in ("../escape", "bad/key", "", "x" * 129):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                client.lookup_operation(key)
+
+    def test_import_only_client_reconciles_response_loss_with_same_idempotent_post(self):
+        requests, accepted = [], {}
+        capabilities = {
+            "version": 1, "repository_id": 1, "importer_id": 2, "importer_login": "review-companion",
+            "source_url": "https://lore.kernel.org/xen-devel/", "operations": ["conversation"],
+        }
+        payload = {
+            "operation_key": "reply:1", "message_id": "review@example.test", "message_sha256": "a" * 64,
+            "address": "reviewer@example.test", "name": "Reviewer", "body": "Review",
+        }
+
+        def transport(request, _timeout):
+            requests.append(request)
+            if request.full_url.endswith("/capabilities"):
+                return FakeResponse(200, json.dumps(capabilities).encode())
+            if request.get_method() == "POST":
+                sent = json.loads(request.data)
+                self.assertEqual(sent, payload)
+                if not accepted:
+                    accepted.update({
+                        "id": 10, "repository_id": 1, "importer_id": 2, "participant_id": 3,
+                        "comment_id": 20, "type": "conversation", "operation_key": sent["operation_key"],
+                        "message_id": sent["message_id"], "message_sha256": sent["message_sha256"],
+                        "source_url": capabilities["source_url"] + sent["message_id"] + "/",
+                    })
+                    raise URLError("lost response")
+                return FakeResponse(200, json.dumps(accepted).encode())
+            return FakeResponse(200, json.dumps(accepted).encode())
+
+        client = ForgeImportClient(ForgeAPI("https://forge.test/api/v1/", transport=transport), "owner", "repo",
+                                   source_url=capabilities["source_url"], write_enabled=True)
+        result = client.import_conversation(2, payload)
+        self.assertEqual(result.remote_object["comment_id"], 20)
+        self.assertEqual([request.get_method() for request in requests], ["GET", "POST", "GET", "POST"])
+        self.assertEqual(client.lookup_operation("reply:1"), accepted)
+        accepted["comment_id"] = False
+        with self.assertRaises(DeliveryUncertainError):
+            client.import_conversation(2, payload)
+        capabilities["operations"] = []
+        with self.assertRaisesRegex(ValueError, "not supported"):
+            client.import_conversation(2, payload)
+
+    def test_import_only_client_preserves_rejection_and_uncertain_writes(self):
+        capabilities = {
+            "version": 1, "repository_id": 1, "importer_id": 2, "importer_login": "review-companion",
+            "source_url": "https://lore.kernel.org/xen-devel/", "operations": ["conversation"],
+        }
+        writes = []
+        status = 409
+
+        def transport(request, _timeout):
+            if request.full_url.endswith("/capabilities"):
+                return FakeResponse(200, json.dumps(capabilities).encode())
+            if request.get_method() == "GET":
+                return FakeResponse(404, b"missing")
+            writes.append(request)
+            return FakeResponse(status, b"failure")
+
+        client = ForgeImportClient(ForgeAPI("https://forge.test/api/v1/", transport=transport), "owner", "repo",
+                                   source_url=capabilities["source_url"], write_enabled=True)
+        payload = {"operation_key": "reply:1"}
+        self.assertIsNone(client.lookup_operation("reply:1"))
+        with self.assertRaises(ForgeAPIError) as caught:
+            client.import_conversation(2, payload)
+        self.assertEqual(caught.exception.status, 409)
+        self.assertEqual(len(writes), 1)
+        status = 503
+        with self.assertRaises(DeliveryUncertainError):
+            client.import_conversation(2, payload)
+        self.assertEqual(len(writes), 3)
+        self.assertTrue(all("/review-imports/" in request.full_url for request in writes))
+
+    def test_import_only_client_stops_on_revocation_after_uncertain_acceptance(self):
+        capabilities = {
+            "version": 1, "repository_id": 1, "importer_id": 2, "importer_login": "review-companion",
+            "source_url": "https://lore.kernel.org/xen-devel/", "operations": ["conversation"],
+        }
+        requests = []
+        revoked = False
+
+        def transport(request, _timeout):
+            nonlocal revoked
+            requests.append(request.get_method())
+            if revoked:
+                return FakeResponse(403, b"revoked")
+            if request.get_method() == "GET":
+                return FakeResponse(200, json.dumps(capabilities).encode())
+            revoked = True
+            raise URLError("lost response after acceptance")
+
+        client = ForgeImportClient(ForgeAPI("https://forge.test/api/v1/", transport=transport), "owner", "repo",
+                                   source_url=capabilities["source_url"], write_enabled=True)
+        with self.assertRaisesRegex(DeliveryUncertainError, "capability recheck"):
+            client.import_conversation(2, {"operation_key": "reply:1"})
+        self.assertEqual(requests, ["GET", "POST", "GET"])
 
     @patch("lore_review_companion.forge_api.build_opener")
     def test_default_transport_passes_timeout_by_keyword(self, build_opener):
