@@ -5,7 +5,10 @@ Updated: 2026-10-30. Design and boundaries: [PLAN.md](PLAN.md).
 Statuses: `TODO`, `IN PROGRESS`, `DONE`, `BLOCKED`, `DEFERRED`. `DONE` requires
 recorded verification, not just code. Each completed companion topic gets a
 commit; record its subject here and use Git history for the resulting hash.
-No automatic pushes. Forgejo changes belong to the separate parent repository.
+The operator authorized commits and pushes in both repositories on 2026-10-30.
+Forgejo topics use incremental stacked branches; the last contains every topic.
+Forgejo changes belong to the separate parent repository. Existing operator
+files, source snapshots and nested repositories are not part of these commits.
 
 ## Current Iteration
 
@@ -127,7 +130,24 @@ revision state here; do not stage them into a companion commit.
 | --- | --- | --- | --- |
 | V01 | TODO | C05, F06, S04 | Isolated Forgejo fixture covers multi-patch V1/V2, reviewers, late replies, old/new ranges, chronology, identity collisions, duplicate-ID conflicts and crash-after-accept retries. Correct objects exactly once, no mail/draft leakage/shared SSH changes. |
 | V02 | TODO | V01 | Focused authorization/account-security regression and desktop/mobile browser checks. Run touched Python/Go suites, formatting/lint and Swagger generation. Record actual results and residual limitations. |
-| R01 | TODO | V02 | Finish independent installation, API/auth/operations, migration/backup/recovery, sanitized service templates, licensing/provenance and CI. Complete tested topic commits and final status; operator handles pushes. |
+| R01 | IN PROGRESS | V02 | Finish independent installation, API/auth/operations, migration/backup/recovery, sanitized service templates and CI. Commit and push tested topics in both repositories under the current authorization. Package distribution is separately blocked by L01. |
+| L01 | BLOCKED | B02 | The snapshot's rights holder must establish authorship, third-party provenance and an applicable license grant. No evidence is currently available. See the explicit distribution status in ORIGIN; do not invent a license or publish a package release. |
+
+## Production Rollout
+
+The operator requested production planning and execution on 2026-10-30. These
+are separate gates, not implied by component or isolated acceptance results.
+No production build/restart, migration, token provisioning, policy enablement
+or deployment had occurred when these gates were added. Never log credentials,
+post historical pending effects implicitly, or use a production DB for tests.
+
+| ID | Status | Depends On | Step And Acceptance Gate |
+| --- | --- | --- | --- |
+| P01 | TODO | V02 | Inspect the exact running process/service, configuration, database/storage and repository paths without exposing secrets. Verify free space and a restorable private backup of configuration, DB, repositories and any companion ledger/state. Record rollback and stop conditions before writes. |
+| P02 | TODO | P01 | Build the tested Forgejo tip with sqlite/sqlite_unlock_notify and the temporary Go cache. Stop only the identified instance, preserve the old binary, apply migrations through normal startup, restart and verify health/version/logs. Restore backup rather than downgrade a migrated DB if rollback is necessary. |
+| P03 | TODO | P02 | Provision separate least-privilege Git and repository-selected review-import tokens into private files, without displaying them. Verify integration account access and source-bound grant; configure review-only settings only after checking existing work. Never put tokens in Git, policy, command arguments or logs. |
+| P04 | TODO | P03, R01 | Install the independently tested companion environment and protected config/state. Review exact source/base/destinations/budgets; run read-only planning, enable an expiring local policy plus explicit server unattended grant, then execute one bounded round. Verify actual authorship, ranges, refs and absence of notifications. |
+| P05 | TODO | P04 | Install/enable the user timer only after the bounded round succeeds. Verify restart/replay, revocation, incident latch, monitoring and backup/restore instructions; record deployed versions and residual blockers without claiming full historical coverage. |
 
 ## Verification Rules
 

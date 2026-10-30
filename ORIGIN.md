@@ -41,6 +41,26 @@ No Forgejo or b4 implementation is vendored here. b4 remains an external
 dependency behind a versioned subprocess adapter; private runtime imports are
 not copied source. Its own license and runtime installation must be respected.
 
+### Distribution Status: Blocked
+
+As of 2026-10-30, no license grant for the operator-provided Python snapshot
+has been established. Neither the earlier Gitea checkout's MIT license nor
+Forgejo's license establishes permission for these independent files. The
+retained license is attribution context, not a license declaration for this
+package. No package-wide license identifier or release license has been added.
+
+The operator has authorized pushing the development source repositories;
+that authorization does not resolve the snapshot's authorship or licensing.
+Do not publish a package release or claim redistribution rights until the
+snapshot's rights holder supplies its origin and an applicable license grant,
+including any third-party material. Record that evidence here, preserve
+required notices, review compatibility with later changes and dependencies,
+and only then update package metadata and release artifacts. Local build and
+install checks do not constitute a distribution-license clearance.
+
+This is tracked separately as L01 in [LEDGER.md](LEDGER.md). The absence of
+evidence cannot be resolved by choosing a license on the rights holder's behalf.
+
 ## Compatibility
 
 The snapshot used legacy Gitea-named modules, environment variables, markers,
