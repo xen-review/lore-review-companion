@@ -26,6 +26,9 @@ No automatic pushes. Forgejo changes belong to the separate parent repository.
   still depends on F04; no runtime b4 parser is needed for native replies.
 - C02 `DONE`: exact local b4/liblore sources are installed and fingerprinted;
   real offline assembly and read-only draft checks passed.
+- F01 `DONE`: explicit import scopes, repository/source grants, authorization
+  gates and transfer revocation are implemented in the Forgejo worktree and
+  verified with model/scope tests and two isolated API integration tests.
 - Historical sample publications remain background evidence only; the current
   baseline is 317 tests, with 3 explicitly reported integration skips.
 
@@ -68,7 +71,7 @@ revision state here; do not stage them into a companion commit.
 
 | ID | Status | Depends On | Step And Acceptance Gate |
 | --- | --- | --- | --- |
-| F01 | TODO | B01 | Explicit repository/importer grant and import-only scope/resource checks. Deny wrong/public repositories, revoked access/grants, transfers, cross-repo objects, Sudo and arbitrary privileged author IDs. |
+| F01 | DONE | B01 | Opt-in import scopes (not implied by legacy all), source-bound repository grants, current token-reduced code/PR write checks and owner-bound/transfer revocation implemented. Scope/model tests and authorization/real-transfer API tests pass. Object/author checks follow with F03/F04 operations. |
 | F02 | TODO | F01 | Atomic managed participant registry/profile creation and shared non-login invariants. Race-safe collisions cannot adopt existing users; no login/reset/OAuth/key/token/promotion/admin-edit bypass or participant mail. |
 | F03 | TODO | F01, F02 | First vertical slice: conversation import onto existing PR with mapped author, importer provenance, source time/hash and unique operation key. Atomic rollback; replay returns same IDs; differing payload conflicts. |
 | F04 | TODO | F03 | Add submitter-authored PRs, explicit non-voting COMMENT reviews/ranges and reviewer replies. Reuse services; verify exact patch parent context and no draft theft. Extend before-commit API only when a test proves necessary. |
@@ -339,3 +342,26 @@ Bring them into scope only through an explicit decision.
   and the actual runtime-preflight command succeeds. The real subprocess test
   explicitly imports current source rather than an older installed wheel.
 - Commit subject: `feat: pin and validate offline b4 assembly runtime`.
+
+### 2026-10-30: F01 Scoped Forgejo Import Authorization
+
+- Forgejo changes remain in the separate parent worktree, not companion Git.
+  Added `read:review-import`/`write:review-import`; legacy all/admin/repository
+  tokens do not automatically acquire import capability. Repository-selected
+  tokens may explicitly request it without general mutation scopes.
+- Added source-inbox/repository/importer grants, idempotent same-setting grant
+  creation, explicit conflict/revoke handling and an owner binding. Actual
+  repository transfer deletes grants inside the transfer transaction.
+- Added administration routes under `review-import-grants/{importer}` and
+  capability inspection under `review-imports/capabilities`. Import routes
+  authenticate as the companion, forbid Sudo, require a matching grant and
+  current reduced write access to both code and PR units, and reject mirrors
+  or archived repositories. No participant/content mutation exists yet.
+- Tests pass for scope normalization, repository-token validation, grant
+  persistence/replay/conflict/revoke, selected-vs-other public repository
+  tokens, non-writers, changed ownership, Sudo, and actual transfer deletion.
+  The two SQLite API cases passed in 2.524 seconds including fixture startup.
+- `make generate-swagger`, `make fmt` and focused auth/authz/repo Go tests
+  passed. Generated schema adds only the three new operations/types; generator
+  warnings concern existing unrelated definitions. Live binary not restarted.
+- Commit subject: `docs: record tested Forgejo import authorization contract`.
