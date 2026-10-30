@@ -123,6 +123,8 @@ def imported_mail_text(
 ) -> str:
     if body_format is None:
         return quote_untrusted_text(text)
+    if body_format == "mail-text-v3":
+        return text.rstrip()
     if body_format == "mail-text-v2":
         url = html.escape(
             f"{source_url.rstrip('/')}/{quote(message_id, safe='@')}/", quote=True
@@ -152,7 +154,7 @@ def reply_prose(text: str) -> str:
 def quoted_parent_matches(
     quoted: tuple[str, ...], parent: str, body_format: str | None
 ) -> bool:
-    if body_format == "mail-text-v2":
+    if body_format in ("mail-text-v2", "mail-text-v3"):
         return tuple(line for line in quoted if line.strip()) == tuple(
             line for line in parent.splitlines() if line.strip()
         )

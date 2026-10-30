@@ -233,19 +233,15 @@ class ReviewQueueTests(unittest.TestCase):
             ["IMPORT_CONVERSATION", "IMPORT_REVIEW"],
         )
         request = before[1].payload["request"]
-        self.assertEqual(before[0].payload["body_format"], "mail-text-v2")
-        self.assertTrue(
-            before[0]
-            .payload["request"]["body"]
-            .startswith(reply.body_text.rstrip() + "\n\n---\n\n<small>")
-        )
+        self.assertEqual(before[0].payload["body_format"], "mail-text-v3")
+        self.assertEqual(before[0].payload["request"]["body"], reply.body_text.rstrip())
         self.assertEqual(
             request["comments"][0]["body"],
             imported_mail_text(
                 "Please change both lines.",
                 reply.message_id,
                 client.source_url,
-                "mail-text-v2",
+                "mail-text-v3",
                 "Reviewer",
             ),
         )
@@ -555,7 +551,7 @@ class ReviewQueueTests(unittest.TestCase):
                 )
                 self.assertTrue(
                     conversation.payload["request"]["body"].startswith(
-                        "Which occurrence?\n\n---"
+                        "Which occurrence?\n\n"
                     )
                 )
                 self.assertNotIn(

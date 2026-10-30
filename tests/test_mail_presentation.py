@@ -1,6 +1,12 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 import unittest
+from unittest.mock import patch
+from pathlib import Path
+from types import SimpleNamespace
+
+from lore_review_companion.build_identity import checkout_revision
+from lore_review_companion.forge_api import ForgeAPI
 
 from lore_review_companion.forge_comments import (
     imported_mail_text,
@@ -11,6 +17,55 @@ from lore_review_companion.forge_comments import (
 
 
 class MailPresentationTests(unittest.TestCase):
+    def test_source_free_body_and_build_header_do_not_change_payload(self):
+        body = imported_mail_text(
+            "Original prose.\n",
+            "id",
+            "https://lore.kernel.org/xen-devel/",
+            "mail-text-v3",
+        )
+        self.assertEqual(body, "Original prose.")
+        requests = []
+
+        def transport(request, timeout):
+            requests.append(request)
+            return SimpleNamespace(
+                status=204, headers={}, read=lambda size: b"", close=lambda: None
+            )
+
+        api = ForgeAPI("https://forge.example/api/v1", transport=transport)
+        api.request_json(
+            "repos/o/r/review-imports/pulls",
+            method="POST",
+            payload={"body": body},
+            companion_revision="abcdef123456/remove-footer-link",
+        )
+        self.assertEqual(
+            requests[0].get_header("X-lore-companion-revision"),
+            "abcdef123456/remove-footer-link",
+        )
+        self.assertNotIn(b"companion", requests[0].data)
+        with self.assertRaises(ValueError):
+            api.request_json("repos/o/r", companion_revision="bad\r\nheader")
+
+    def test_build_identity_has_real_commit_subject_and_dirty_indicator(self):
+        with (
+            patch.object(Path, "exists", return_value=True),
+            patch(
+                "lore_review_companion.build_identity.subprocess.run",
+                side_effect=[
+                    SimpleNamespace(stdout="a" * 40 + "\nRemove footer link!\n"),
+                    SimpleNamespace(stdout=" M source.py\n"),
+                ],
+            ),
+        ):
+            self.assertEqual(
+                checkout_revision(Path("/source")),
+                "aaaaaaaaaaaa-dirty/remove-footer-link",
+            )
+        with patch.object(Path, "exists", return_value=False):
+            self.assertEqual(checkout_revision(Path("/not-a-checkout")), "")
+
     def test_nested_quote_projection_and_exact_parent_words(self):
         source = "On 10/28/26, Jan wrote:\n\n> On earlier mail:\n> > Old point\n>\n> New point\n\nMy answer.\n\n-- \nAuthor"
         self.assertEqual(reply_prose(source), "My answer.\n\n-- \nAuthor")

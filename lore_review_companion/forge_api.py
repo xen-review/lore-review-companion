@@ -7,6 +7,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
+import re
 import stat
 import time
 from collections.abc import Callable, Iterator, Mapping
@@ -128,12 +129,14 @@ class ForgeAPI:
         method: str = "GET",
         params: Mapping[str, Any] | None = None,
         payload: Mapping[str, Any] | None = None,
+        companion_revision: str = "",
     ) -> Any:
         status, response_body = self._request(
             path,
             method=method,
             params=params,
             payload=payload,
+            companion_revision=companion_revision,
             max_bytes=MAX_JSON_BYTES,
         )
         if response_body is None:
@@ -166,6 +169,7 @@ class ForgeAPI:
         payload: Mapping[str, Any] | None = None,
         accept: str = "application/json",
         max_bytes: int | None = None,
+        companion_revision: str = "",
     ) -> tuple[int, bytes | None]:
         parts = urlsplit(path)
         if (
@@ -192,6 +196,16 @@ class ForgeAPI:
             url += ("&" if "?" in url else "?") + urlencode(params, doseq=True)
         body = json.dumps(payload).encode() if payload is not None else None
         headers = {"Accept": accept}
+        if companion_revision:
+            if (
+                re.fullmatch(
+                    r"[0-9a-f]{7,64}(?:-dirty)?/[a-z0-9][a-z0-9-]{0,79}",
+                    companion_revision,
+                )
+                is None
+            ):
+                raise ValueError("Invalid companion build revision")
+            headers["X-Lore-Companion-Revision"] = companion_revision
         if body is not None:
             headers["Content-Type"] = "application/json"
         if self.token:

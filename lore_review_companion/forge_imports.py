@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import quote, unquote, urlsplit
 
 from lore_review_companion.forge_api import ForgeAPI, ForgeAPIError
+from lore_review_companion.build_identity import companion_revision
 from lore_review_companion.forge_comments import DeliveryUncertainError
 
 
@@ -61,6 +62,7 @@ class ForgeImportClient:
         self.write_enabled = write_enabled
         self.unattended = unattended
         self.capability_guard = capability_guard
+        self.companion_revision = companion_revision()
 
     def _request_json(self, path: str, **options) -> Any:
         if self.unattended:
@@ -204,7 +206,12 @@ class ForgeImportClient:
             if not self.write_enabled:
                 return ImportDeliveryResult({"path": path, **payload}, planned=True)
             try:
-                result = self._request_json(path, method="POST", payload=payload)
+                result = self._request_json(
+                    path,
+                    method="POST",
+                    payload=payload,
+                    companion_revision=self.companion_revision,
+                )
             except ForgeAPIError as error:
                 if attempt:
                     raise DeliveryUncertainError(

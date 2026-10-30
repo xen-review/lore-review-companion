@@ -71,7 +71,7 @@ def _assert_import_payload(
         )
     payload = delivery.payload
     body_format = payload.get("body_format")
-    if body_format not in (None, "mail-text-v1", "mail-text-v2"):
+    if body_format not in (None, "mail-text-v1", "mail-text-v2", "mail-text-v3"):
         raise PublicationConflict("Unsupported imported message body format")
     request = payload.get("request")
     source = ledger.messages_by_id((delivery.message_id,))[0]
@@ -113,7 +113,7 @@ def _assert_import_payload(
         if presentation is not None:
             parents = source.in_reply_to or source.references[-1:]
             if (
-                body_format != "mail-text-v2"
+                body_format not in ("mail-text-v2", "mail-text-v3")
                 or len(parents) != 1
                 or not isinstance(presentation, dict)
                 or presentation.get("message_id") != parents[0]

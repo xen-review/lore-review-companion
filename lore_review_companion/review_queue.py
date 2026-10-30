@@ -295,7 +295,7 @@ def queue_imported_reply(
         }
         existing = ledger.comment_effects(message.message_id, destination)
         body_format = (
-            existing[0].payload.get("body_format") if existing else "mail-text-v2"
+            existing[0].payload.get("body_format") if existing else "mail-text-v3"
         )
         format_fields = {"body_format": body_format} if body_format is not None else {}
         parents = message.in_reply_to or message.references[-1:]
@@ -318,7 +318,11 @@ def queue_imported_reply(
                 ]
             }
             conversation_text = reply_prose(message.body_text)
-        if not existing and body_format == "mail-text-v2" and len(parents) == 1:
+        if (
+            not existing
+            and body_format in ("mail-text-v2", "mail-text-v3")
+            and len(parents) == 1
+        ):
             parent_source = ledger.messages_by_id(parents)[0]
             parent_effects = [
                 effect
