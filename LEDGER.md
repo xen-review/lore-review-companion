@@ -20,7 +20,7 @@ No automatic pushes. Forgejo changes belong to the separate parent repository.
 - C01 `IN PROGRESS`: schema setup is transactional; legacy schema 18/21/22
   payloads survive reopening unchanged. Versioned range payloads follow.
 - C03 `DONE`: decoded mail now preserves quoted blocks and following remarks;
-  exact range resolution (C04) is next.
+  exact range resolution (C04) is also verified. Versioned delivery is next.
 - Historical sample publications remain background evidence only; the current
   baseline is 295 synthetic tests, with 3 explicitly reported skips.
 
@@ -53,7 +53,7 @@ installed versions, historical commits and current tests are B01, not assumed.
 | C01 | IN PROGRESS | B04 | Atomic schema setup and schema 18/21/22 payload preservation tested (43 ledger tests pass). Versioned range/parser/import payload contracts remain. |
 | C02 | TODO | B04 | Pin one b4 runtime/entrypoint; explicit offline revision assembly without added trailers or partial rerolls. Verify membership/counts; no network, user-checkout mutation, or private draft publication. |
 | C03 | DONE | B04 | Added deterministic quoted-block extraction with depth/headers/source offsets, remarks and conservative signature/trailer boundaries. 13 mail-parser tests pass, including nested/trimmed and MIME/CRLF cases. Full message remains canonical. |
-| C04 | TODO | C03 | Resolve exact contiguous file/side ranges using pinned patch comparisons. Full context disambiguates repeated last lines; ambiguous/mixed/disjoint cases fail closed and configured range limits apply. |
+| C04 | DONE | C03 | Exact contiguous same-file/side range matching added separately from legacy Anchor. All 13 anchor tests pass; full context disambiguates repeated lines, while mixed/disjoint/headerless/renamed/ambiguous cases fail closed. |
 | C05 | TODO | C01, C02, C04; F04 for live integration | Propagate ranges/evidence through queues, previews, approvals and API. Synthetic parse-to-fake-API tests cover replay, stale snapshots, multiple followups and uncertain writes with stable source-effect keys. |
 
 ## Forgejo Extension
@@ -259,3 +259,19 @@ Bring them into scope only through an explicit decision.
 - Immediate check: all 13 mail-parser tests passed, including nested/trimmed
   markers, changed quote depth, multiple remarks and quoted-printable CRLF.
 - Commit subject: `feat: preserve quoted review blocks and source evidence`.
+
+### 2026-10-30: C04 Exact Range Matching
+
+- Added `RangeAnchor` and `DiffIndex.resolve_quote` without changing the
+  serialized legacy `Anchor` contract or the old single-line resolver.
+- The full quoted sequence must match a unique contiguous range on one file,
+  side and hunk. Default maximum is 50 lines; mixed sides, disjoint hunks,
+  headerless context, renamed paths and repeated ambiguous sequences decline
+  inline placement. Context-only quotes select the proposed side.
+- Immediate check: all 13 anchor tests passed, including exact old/new ranges,
+  complete-context disambiguation and explicit range-size limits.
+- Operator confirmed the integration username is `review-companion` and
+  authorized rebuilding/restarting the development Forgejo. Credentials are
+  never recorded in source/docs/commands. Before a restart, identify the exact
+  checkout/configuration because multiple gitea processes exist.
+- Commit subject: `feat: resolve exact multiline review quote ranges`.
