@@ -8,10 +8,58 @@ from unittest.mock import patch
 
 from lore_review_companion.forge_api import ForgeAPI
 from lore_review_companion.xen_setup import main, provision_xen
+from lore_review_companion.xen_import import main as import_main
 from test_forge_comments import FakeResponse
 
 
 class XenSetupTests(unittest.TestCase):
+    def test_on_demand_import_rejects_unapproved_remote_writes(self):
+        for command in ("publish", "deliver"):
+            with self.subTest(command=command), self.assertRaises(SystemExit) as error:
+                import_main(
+                    ["--seed", "cover@example.test", "--revision", "1", command]
+                )
+            self.assertEqual(error.exception.code, 2)
+
+    def test_on_demand_plan_has_no_write_client_and_exposes_digest(self):
+        deployment = {
+            "api_url": "https://forge.test/api/v1/",
+            "owner": "xen-review",
+            "repository": "xen",
+            "repository_id": 20,
+            "importer_id": 5,
+            "importer_login": "review-companion",
+            "source_url": "https://lore.kernel.org/xen-devel/",
+            "git_username": "review-companion",
+            "git_remote": "https://forge.test/xen-review/xen.git",
+            "target_branch": "master",
+            "base_commit": "a" * 40,
+        }
+        with (
+            patch(
+                "lore_review_companion.xen_import.read_deployment",
+                return_value=deployment,
+            ),
+            patch(
+                "lore_review_companion.xen_import.read_private_token",
+                return_value="synthetic-token",
+            ),
+            patch("lore_review_companion.xen_import.Ledger") as ledger,
+            patch("lore_review_companion.xen_import.ForgeImportClient") as client,
+            patch("lore_review_companion.xen_import.plan_imported_sync") as plan,
+            patch("lore_review_companion.xen_import.asdict", return_value={}),
+        ):
+            client.return_value.capabilities.return_value = deployment
+            self.assertEqual(
+                import_main(
+                    ["--seed", "cover@example.test", "--revision", "1", "plan"]
+                ),
+                0,
+            )
+            self.assertFalse(client.call_args.kwargs["write_enabled"])
+            self.assertTrue(ledger.call_args.kwargs["read_only"])
+            self.assertEqual(plan.call_args.kwargs["revision"], 1)
+
     def test_new_environment_uses_defaults_and_private_selected_tokens(self):
         requests = []
         mirror = {
@@ -45,6 +93,7 @@ class XenSetupTests(unittest.TestCase):
             ):
                 return FakeResponse(404, {})
             if path == "admin/users":
+                assert body is not None
                 return FakeResponse(
                     201, {"id": 5, "login": "review-companion", "email": body["email"]}
                 )

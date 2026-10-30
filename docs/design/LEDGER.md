@@ -13,6 +13,33 @@ files, source snapshots and nested repositories are not part of these commits.
 
 ## Current Iteration
 
+- 2026-10-30 follow-up: the Xen installation/provisioning guide and explicit
+  on-demand import script are in [INSTALL-XEN.md](../INSTALL-XEN.md).
+  `81825d6` checkpoints new presentation/API setup; `81b8d53` is the separately
+  requested **formatting-only** commit, pushed without history rewrites.
+  All Python sources now use `uv format`; current 48-file format check passes.
+  `uv check --no-sync` is run separately: initial 565/current 564 type diagnostics
+  remain, not suppressed and not claimed as a passing gate. Operator-owned
+  prek configuration is left untouched.
+- Current companion checks: 357 tests, 355 pass, two explicit server skips,
+  15.127s. Real disposable Forgejo/Git/b4 workflow passes in 19.811s. The dedicated
+  import script reports the retained ARM v13 publication `up_to_date` with no
+  remote or ledger writes. Source/wheel build and guide/script inclusion pass.
+- New `mail-text-v2` effects use original prose plus an escaped small named lore
+  link, not a numbered footnote. New PR covers strip only recognized trailing
+  diffstat/Git signatures and put revision metadata last. Existing publication
+  digests choose their original body; existing effect formats remain immutable.
+  Exact native inline replies tolerate blank-only mail quoting differences,
+  never changed words/ambiguous remarks. New nested mail waits for an accepted
+  explicit parent; conversation display omits quoted history and links the
+  proven parent, while raw mail remains complete. Parent ID/source/type and
+  inline body hashes are revalidated before delivery.
+- The live worker subsequently failed at 2026-10-30 17:16 CET on NNTP 430 and
+  retained pending work with an incident latch. This predates installation of
+  these changes. The incident is not cleared by a presentation/code upgrade;
+  previous P04/P05 successful rollout evidence below is historical, not a claim
+  that the current source round is healthy. No failed source work is discarded.
+
 - DOC-01 `DONE`: the implementation plan and this living ledger form the first
   commit, before implementation import. The user supplied an empty repository.
 - B01 `DONE`: source/history/tool baseline recorded below. The initial absence

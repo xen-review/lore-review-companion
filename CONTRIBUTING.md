@@ -64,6 +64,12 @@ AI-authored contributions; a compatible license alone does not change that.
 
 ## Development
 
+Run `uv check --no-sync`, `uv format --check` and the focused/full unit tests
+for each Python change. `uv check` runs type checking; its initial baseline is
+currently failing and must not be confused with passing unit tests. Use
+`uv format` to fix formatting and keep repository-wide mechanical changes in
+a separate commit. Do not synchronize away the externally pinned b4 runtime.
+
 Follow the [implementation plan](docs/design/PLAN.md) and
 [task ledger](docs/design/LEDGER.md). Reuse the existing tests and run focused
 validation after each substantive change. The full test and

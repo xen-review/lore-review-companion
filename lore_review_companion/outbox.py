@@ -124,7 +124,8 @@ def _assert_import_payload(
             effects = [
                 effect
                 for effect in ledger.comment_effects(parents[0], delivery.destination)
-                if effect.event_type == "IMPORT_CONVERSATION"
+                if effect.event_type
+                in ("IMPORT_CONVERSATION", "IMPORT_REVIEW", "IMPORT_REPLY")
                 and effect.effect_key == presentation.get("effect_key")
             ]
             if (
@@ -132,6 +133,12 @@ def _assert_import_payload(
                 or effects[0].payload.get("thread") != payload.get("thread")
                 or presentation.get("operation_key")
                 != effects[0].payload["request"]["operation_key"]
+                or presentation.get("type")
+                != {
+                    "IMPORT_CONVERSATION": "conversation",
+                    "IMPORT_REVIEW": "review",
+                    "IMPORT_REPLY": "review-reply",
+                }[effects[0].event_type]
             ):
                 raise PublicationConflict(
                     "Concise reply parent does not match this revision"
@@ -381,6 +388,20 @@ def plan_import_delivery(
     _assert_thread_sources(ledger, client, pull_index, deliveries)
     for delivery in deliveries:
         _assert_import_payload(ledger, delivery, source_url=client.source_url)
+        presentation = delivery.payload.get("presentation_parent")
+        if presentation is not None:
+            remote = client.lookup_operation(presentation["operation_key"])
+            parent_source = ledger.messages_by_id((presentation["message_id"],))[0]
+            if (
+                remote is None
+                or remote.get("type") != presentation["type"]
+                or remote.get("message_id") != parent_source.message_id
+                or remote.get("message_sha256") != parent_source.sha256
+                or remote.get("comment_id") != presentation["comment_id"]
+            ):
+                raise PublicationConflict(
+                    "Concise reply target differs from its accepted parent"
+                )
         if event_type == "IMPORT_REPLY":
             evidence = delivery.payload["evidence"]
             parent = next(

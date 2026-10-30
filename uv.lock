@@ -1,0 +1,27 @@
+version = 1
+revision = 5
+requires-python = ">=3.11"
+resolution-markers = [
+    "python_full_version >= '3.13'",
+    "python_full_version < '3.13'",
+]
+
+[[package]]
+name = "lore-review-companion"
+version = "0.1.0.dev0"
+source = { editable = "." }
+dependencies = [
+    { name = "standard-nntplib", marker = "python_full_version >= '3.13'" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "standard-nntplib", marker = "python_full_version >= '3.13'", specifier = "==3.13.0" }]
+
+[[package]]
+name = "standard-nntplib"
+version = "3.13.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/3c/9e/07b87ac6871581901bc695c61728e59f2d0191799501243be3ed96ae33d4/standard_nntplib-3.13.0.tar.gz", hash = "sha256:27d7f9853bf2f1a67111478d919fba297f9a4fb2b6785fbdea4d9f1cef967680", size = 28129, upload-time = "2024-10-30T16:01:38.736Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/92/76/b015bdbd2598632ddd036b18275f9412c365ccf1a3b470a06a2d77439a03/standard_nntplib-3.13.0-py3-none-any.whl", hash = "sha256:8317d862f95c38ad9743e62628a184fb476ebc21ff1c9c2191e114278da0e74f", size = 14578, upload-time = "2024-10-30T16:01:19.419Z" },
+]

@@ -18,6 +18,8 @@ dependencies = [
 
 [project.scripts]
 lore-review-companion = "lore_review_companion.cli:main"
+lore-review-setup-xen = "lore_review_companion.xen_setup:main"
+lore-review-import-xen = "lore_review_companion.xen_import:main"
 
 [tool.setuptools]
 packages = ["lore_review_companion"]

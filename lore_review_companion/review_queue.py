@@ -319,19 +319,25 @@ def queue_imported_reply(
             }
             conversation_text = reply_prose(message.body_text)
         if not existing and body_format == "mail-text-v2" and len(parents) == 1:
+            parent_source = ledger.messages_by_id(parents)[0]
             parent_effects = [
                 effect
                 for effect in ledger.comment_effects(parents[0], destination)
-                if effect.event_type == "IMPORT_CONVERSATION"
+                if effect.event_type
+                in ("IMPORT_CONVERSATION", "IMPORT_REVIEW", "IMPORT_REPLY")
                 and effect.payload.get("thread") == thread
             ]
-            if len(parent_effects) == 1:
-                parent_effect = parent_effects[0]
+            for parent_effect in parent_effects:
                 parent_request = parent_effect.payload["request"]
                 remote = client.lookup_operation(parent_request["operation_key"])
+                expected_type = {
+                    "IMPORT_CONVERSATION": "conversation",
+                    "IMPORT_REVIEW": "review",
+                    "IMPORT_REPLY": "review-reply",
+                }[parent_effect.event_type]
                 if (
                     remote is not None
-                    and remote.get("type") == "conversation"
+                    and remote.get("type") == expected_type
                     and remote.get("message_id") == parents[0]
                     and remote.get("message_sha256") == parent_request["message_sha256"]
                 ):
@@ -351,9 +357,18 @@ def queue_imported_reply(
                             "effect_key": parent_effect.effect_key,
                             "operation_key": parent_request["operation_key"],
                             "comment_id": remote["comment_id"],
+                            "type": expected_type,
                             "url": parent_url,
                         }
                     }
+                    break
+            if parent_source.kind == "reply" and not presentation:
+                return ReplyQueueSummary(
+                    0,
+                    0,
+                    len(extract_quoted_remarks(message.body_text)),
+                    "Explicit parent conversation is not accepted yet; retry after parent delivery",
+                )
         conversation_body = imported_mail_text(
             conversation_text,
             message.message_id,

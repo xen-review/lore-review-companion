@@ -25,6 +25,11 @@ for scope, current results, and next steps.
 
 ## Install
 
+For an end-to-end fresh deployment using Xen, see
+[Install And Bootstrap Xen Reviews](docs/INSTALL-XEN.md), with API provisioning
+and dedicated on-demand thread-import scripts. Stock Forgejo does not include
+the required review-import API.
+
 Python 3.11 or later and Git are required. From this repository:
 
 ```sh
@@ -155,8 +160,9 @@ Use `--kind reply` for responses to existing imported inline comments. Queue
 the parent email's review first and deliver it before queueing its responses.
 A response must quote exactly one complete retained parent remark and have one
 explicit parent Message-ID (`In-Reply-To`, or the final `References` entry).
-Nested responses use the accepted parent reply's comment ID. Missing acceptance
-or ambiguous text stays unresolved in the full-message conversation; it never
+Nested responses use the accepted parent reply's comment ID. New nested mail
+waits for accepted parent evidence before queueing. Ambiguous text stays
+unresolved in a concise conversation with its proven parent permalink; it never
 becomes an unrelated new review. Delivery binds the parent body hash, so a
 locally edited parent is not silently reused.
 Uncertain earlier writes need a newly reviewed `--retry-uncertain` plan.
@@ -173,16 +179,22 @@ verification claims and revoked grants are refused. Original import replay
 does not reset a correction or rewrite legacy content. Corrections are not
 automatic or part of the companion worker.
 
-The web UI shows unverified participant identity, importing account, lore link,
-source time/quality and actual import time on PR covers, conversation messages,
-review headers and inline threads, including exact historical patch views.
+The normal author is the imported submitting/reviewing participant. The web UI
+places importing account, source time and actual import time below content,
+including exact historical patch views; PRs have a separate-line lore link.
+It omits repeated participant labels and the parenthetical unverified suffix
+without claiming verified ownership. Source quality remains explicit in the API.
 Correction history is expandable and bounded to the latest 100 entries, with
 truncation made explicit. Ordinary issue/PR/comment/review read APIs expose the
 same `review_import` metadata and audit history under normal repository read
 permissions; no import credential is needed merely to inspect provenance.
 
-New imported conversations and inline remarks retain the original source prose
-with only a lore source footnote; the review header contains that footnote alone.
+New imported conversations and inline remarks retain source prose with a small
+named link, "Original review comment by Name", below a rule, not a numbered
+footnote or exposed full URL. Proven reply-to-reply conversations omit repeated
+nested quotes and link their accepted parent; exact inline answers use native
+review threads. Complete mail remains in the ledger. New PR descriptions omit
+trailing diffstat/generated Git signatures and put revision information last.
 Identity and chronology appear in the server's provenance UI, not generated
 comment narration. Existing queued or delivered effects keep their original
 rendering and request bytes so upgrades cannot invalidate replay or approval.
@@ -331,6 +343,12 @@ The environment prefix is `LORE_FORGE_`.
 
 ## Develop And Test
 
+Run `uv check --no-sync` for repository-wide type checking and
+`uv format --check` for all Python sources. Apply formatting with `uv format`
+and commit formatter-only changes separately. The initial `ty` baseline has
+565 diagnostics and is not a passing gate yet; unit tests are separate. Use
+`--no-sync` with the prepared b4 environment to avoid removing external pins.
+
 With the package installed in the virtual environment:
 
 ```sh
@@ -355,7 +373,7 @@ FORGEJO_REVIEW_IMPORT_COMPANION_PYTHON="$PWD/lore-review-companion/.venv/bin/pyt
 
 This wrapper creates private fixture-only tokens and disables mail/SSH in the
 disposable instance. Do not set `LORE_FORGEJO_IMPORT_FIXTURE` to production data.
-The verified local suite is 350 tests: 348 pass and two server opt-ins skip
+The verified local suite is 357 tests: 355 pass and two server opt-ins skip
 when real b4 is enabled. Hosted offline CI also passes Python 3.11/3.12/3.13.
 
 Runtime modules live in `lore_review_companion/`; tests live in `tests/`.

@@ -525,6 +525,7 @@ class ReviewQueueTests(unittest.TestCase):
         )
         remote = {
             "type": "review",
+            "comment_id": 20,
             "message_id": parent.message_id,
             "message_sha256": parent.sha256,
             "code_comment_ids": [30, 31],
@@ -544,6 +545,25 @@ class ReviewQueueTests(unittest.TestCase):
                 )
             self.assertEqual((result.inline_count, result.unresolved_count), (0, 1))
             self.assertIsNotNone(result.diagnostic)
+            if accepted is None:
+                self.assertEqual(result.conversation_id, 0)
+            else:
+                conversation = next(
+                    effect
+                    for effect in self.ledger.pending()
+                    if effect.id == result.conversation_id
+                )
+                self.assertTrue(
+                    conversation.payload["request"]["body"].startswith(
+                        "Which occurrence?\n\n---"
+                    )
+                )
+                self.assertNotIn(
+                    "> Same remark.", conversation.payload["request"]["body"]
+                )
+                self.assertIn(
+                    "#issuecomment-20", conversation.payload["request"]["body"]
+                )
         self.assertFalse(
             any(effect.event_type == "IMPORT_REPLY" for effect in self.ledger.pending())
         )

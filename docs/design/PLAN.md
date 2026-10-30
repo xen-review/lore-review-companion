@@ -39,7 +39,8 @@ running service is deterministic software, not an LLM agent.
 - Support incoming email to web reviews first. Draft export, reverse sync, and
   outbound review email are separate future work.
 - Show actual imported participant profiles for submitters and reviewers,
-  clearly labeled as unverified email identities. Never adopt an unrelated
+  retaining claimed-email identity in provenance without repeating unverified
+  labels above each message. Never adopt an unrelated
   existing account merely because its name or email matches a source header.
 - Record the authenticated companion separately from the displayed participant.
   Show an attribution such as "Imported by @review-companion from <lore link>".
@@ -160,9 +161,13 @@ write; conversation fallback must be a separately planned effect. Reply to an
 existing inline conversation only when source ancestry and mappings prove it.
 
 For new imported effects in this dedicated review-only repository, display the
-reviewer's original message or exact remark text with only a footnote linking
+reviewer's original message or exact remark text with only a small named link to
 to the source mail on lore. Do not add sender/time/tool narration or surround
-the prose with a generated code fence. Server provenance remains separate.
+the prose with a generated code fence. Server provenance remains separate and
+appears below content. New nested replies omit repeated quoted mail once an
+accepted explicit parent is proven, using native code-review replies where
+exact parent remarks match, otherwise a concise conversation and parent link.
+Raw mail remains complete in the ledger; old approved effect bytes are unchanged.
 Rendering is explicitly tagged; retained old effects keep their original bytes
 and operation identities rather than being silently rewritten on replay.
 
