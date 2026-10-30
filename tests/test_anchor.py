@@ -49,17 +49,27 @@ class DiffIndexTests(unittest.TestCase):
         self.assertEqual(anchor.new_position, 11)
 
     def test_duplicate_text_requires_a_unique_line_hint(self):
-        index = DiffIndex("diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -0,0 +1,2 @@\n+duplicate();\n+duplicate();\n")
+        index = DiffIndex(
+            "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -0,0 +1,2 @@\n+duplicate();\n+duplicate();\n"
+        )
         comment = {"path": "x", "content": "+duplicate();"}
         self.assertIsNone(index.resolve(comment))
         anchor = index.resolve({**comment, "line": 2})
         self.assertEqual(anchor.new_position, 2)
 
     def test_matching_respects_diff_side_for_identical_text(self):
-        index = DiffIndex("diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n-same\n+same\n same\n")
-        self.assertEqual(index.resolve({"path": "x", "content": "+same"}).new_position, 1)
-        self.assertEqual(index.resolve({"path": "x", "content": "-same"}).old_position, 1)
-        self.assertEqual(index.resolve({"path": "x", "content": " same"}).new_position, 2)
+        index = DiffIndex(
+            "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n-same\n+same\n same\n"
+        )
+        self.assertEqual(
+            index.resolve({"path": "x", "content": "+same"}).new_position, 1
+        )
+        self.assertEqual(
+            index.resolve({"path": "x", "content": "-same"}).old_position, 1
+        )
+        self.assertEqual(
+            index.resolve({"path": "x", "content": " same"}).new_position, 2
+        )
 
     def test_renamed_files_and_ambiguous_prefixed_paths_fail_closed(self):
         renamed = DiffIndex(
@@ -70,13 +80,13 @@ class DiffIndexTests(unittest.TestCase):
             "diff --git a/foo b/foo\n--- a/foo\n+++ b/foo\n@@ -0,0 +1 @@\n+same\n"
             "diff --git a/a/foo b/a/foo\n--- a/a/foo\n+++ b/a/foo\n@@ -0,0 +2 @@\n+same\n"
         )
-        self.assertIsNone(ambiguous.resolve({"path": "a/foo", "content": "+same", "line": 1}))
+        self.assertIsNone(
+            ambiguous.resolve({"path": "a/foo", "content": "+same", "line": 1})
+        )
 
     def test_unknown_text_is_not_anchored(self):
         self.assertIsNone(
-            self.index.resolve(
-                {"path": "src/sample.c", "content": "+not_in_patch();"}
-            )
+            self.index.resolve({"path": "src/sample.c", "content": "+not_in_patch();"})
         )
 
     def test_exact_multiline_quote_selects_right_side_range(self):
@@ -85,8 +95,15 @@ class DiffIndexTests(unittest.TestCase):
             "> +new_call();\n> +duplicate();\nPlease change both.\n",
         )
         anchor = self.index.resolve_quote(remark)
-        self.assertEqual((anchor.path, anchor.old_position, anchor.new_position, anchor.extra_lines_count),
-                         ("src/sample.c", 0, 11, 1))
+        self.assertEqual(
+            (
+                anchor.path,
+                anchor.old_position,
+                anchor.new_position,
+                anchor.extra_lines_count,
+            ),
+            ("src/sample.c", 0, 11, 1),
+        )
         self.assertIsNone(self.index.resolve_quote(remark, max_lines=1))
 
     def test_context_and_deletion_select_left_range(self):
@@ -95,16 +112,23 @@ class DiffIndexTests(unittest.TestCase):
             ">  keep();\n> -old_call();\nPlease retain this.\n",
         )
         anchor = self.index.resolve_quote(remark)
-        self.assertEqual((anchor.old_position, anchor.new_position, anchor.extra_lines_count), (10, 0, 1))
+        self.assertEqual(
+            (anchor.old_position, anchor.new_position, anchor.extra_lines_count),
+            (10, 0, 1),
+        )
 
     def test_complete_context_disambiguates_repeated_last_lines(self):
         index = DiffIndex(
             "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -0,0 +1,4 @@\n"
             "+first\n+repeat\n+other\n+repeat\n",
         )
-        (remark,) = extract_quoted_remarks("> --- a/x\n> +++ b/x\n> +other\n> +repeat\nRemark\n")
+        (remark,) = extract_quoted_remarks(
+            "> --- a/x\n> +++ b/x\n> +other\n> +repeat\nRemark\n"
+        )
         self.assertEqual(index.resolve_quote(remark).new_position, 3)
-        (ambiguous,) = extract_quoted_remarks("> --- a/x\n> +++ b/x\n> +repeat\nRemark\n")
+        (ambiguous,) = extract_quoted_remarks(
+            "> --- a/x\n> +++ b/x\n> +repeat\nRemark\n"
+        )
         self.assertIsNone(index.resolve_quote(ambiguous))
 
     def test_mixed_sides_disjoint_hunks_and_headerless_quotes_fail_closed(self):
@@ -124,7 +148,9 @@ class DiffIndexTests(unittest.TestCase):
         )
         anchor = self.index.resolve_quote(remark)
         self.assertEqual((anchor.new_position, anchor.extra_lines_count), (13, 1))
-        (renamed,) = extract_quoted_remarks("> --- a/old\n> +++ b/new\n> +new_call();\nRemark\n")
+        (renamed,) = extract_quoted_remarks(
+            "> --- a/old\n> +++ b/new\n> +new_call();\nRemark\n"
+        )
         self.assertIsNone(self.index.resolve_quote(renamed))
 
 

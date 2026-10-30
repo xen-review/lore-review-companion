@@ -102,8 +102,12 @@ def parse_atom_feed(feed_bytes: bytes, feed_url: str) -> AtomFeed:
             errors.append("Missing or out-of-inbox Atom entry link")
 
         author = element.find(f"{{{ATOM_NS}}}author")
-        author_name = _text(author, f"{{{ATOM_NS}}}name") if author is not None else None
-        author_email = _text(author, f"{{{ATOM_NS}}}email") if author is not None else None
+        author_name = (
+            _text(author, f"{{{ATOM_NS}}}name") if author is not None else None
+        )
+        author_email = (
+            _text(author, f"{{{ATOM_NS}}}email") if author is not None else None
+        )
 
         parent = element.find(f"{{{THREAD_NS}}}in-reply-to")
         parent_entry_id = parent.get("ref") if parent is not None else None

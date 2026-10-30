@@ -11,7 +11,7 @@ from lore_review_companion.ledger import Ledger
 
 FEED_URL = "https://lore.kernel.org/xen-devel/new.atom"
 
-FEED = b'''<?xml version="1.0" encoding="utf-8"?>
+FEED = b"""<?xml version="1.0" encoding="utf-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom"
       xmlns:thr="http://purl.org/syndication/thread/1.0">
   <id>mailto:xen-devel@lists.xen.org</id>
@@ -34,7 +34,7 @@ FEED = b'''<?xml version="1.0" encoding="utf-8"?>
     <link href="https://attacker.example/collect"/>
     <id>urn:uuid:entry-2</id>
   </entry>
-</feed>'''
+</feed>"""
 
 
 class AtomFeedTests(unittest.TestCase):
@@ -63,7 +63,10 @@ class AtomFeedTests(unittest.TestCase):
             (b"<html/>", FEED_URL),
             (b"<feed>", FEED_URL),
             (FEED.replace(b"<id>mailto:xen-devel@lists.xen.org</id>", b""), FEED_URL),
-            (FEED.replace(b"<updated>2026-10-28T00:00:00Z</updated>", b"", 1), FEED_URL),
+            (
+                FEED.replace(b"<updated>2026-10-28T00:00:00Z</updated>", b"", 1),
+                FEED_URL,
+            ),
             (FEED, "http://lore.kernel.org/xen-devel/new.atom"),
         ):
             with self.subTest(body=body[:12], url=url):
@@ -107,7 +110,9 @@ class AtomFeedTests(unittest.TestCase):
             self.assertEqual((replay.new_entries, replay.replayed_entries), (0, 2))
             self.assertEqual(first.invalid_entries, 1)
             with closing(ledger._connect()) as connection:
-                count = connection.execute("SELECT count(*) FROM atom_entries").fetchone()[0]
+                count = connection.execute(
+                    "SELECT count(*) FROM atom_entries"
+                ).fetchone()[0]
                 checkpoint = connection.execute(
                     "SELECT feed_updated_at FROM feed_checkpoints WHERE feed_url = ?",
                     (FEED_URL,),

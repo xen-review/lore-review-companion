@@ -13,7 +13,12 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from unittest.mock import patch
 
-from lore_review_companion.forge_api import MAX_JSON_BYTES, ForgeAPI, ForgeAPIError, read_private_token
+from lore_review_companion.forge_api import (
+    MAX_JSON_BYTES,
+    ForgeAPI,
+    ForgeAPIError,
+    read_private_token,
+)
 from lore_review_companion.forge_imports import ForgeImportClient
 from lore_review_companion.forge_comments import DeliveryUncertainError
 from lore_review_companion.import_policy import read_import_policy
@@ -34,7 +39,9 @@ class FakeResponse:
 
 
 class GiteaAPITests(unittest.TestCase):
-    def test_private_token_file_rejects_symlinks_public_permissions_and_invalid_data(self):
+    def test_private_token_file_rejects_symlinks_public_permissions_and_invalid_data(
+        self,
+    ):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "token"
             path.write_text("synthetic-token\n")
@@ -53,23 +60,35 @@ class GiteaAPITests(unittest.TestCase):
                     path.write_text(value)
                     with self.assertRaises(ValueError) as caught:
                         read_private_token(path)
-                    self.assertNotIn(value if value else "synthetic-token", str(caught.exception))
+                    self.assertNotIn(
+                        value if value else "synthetic-token", str(caught.exception)
+                    )
             self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
 
     def test_import_only_client_previews_without_user_or_comment_writes(self):
         requests = []
         capabilities = {
-            "version": 1, "repository_id": 1, "importer_id": 2, "importer_login": "review-companion",
-            "source_url": "https://lore.kernel.org/xen-devel/", "operations": ["conversation"],
+            "version": 1,
+            "repository_id": 1,
+            "importer_id": 2,
+            "importer_login": "review-companion",
+            "source_url": "https://lore.kernel.org/xen-devel/",
+            "operations": ["conversation"],
         }
 
         def transport(request, _timeout):
             requests.append(request)
             return FakeResponse(200, json.dumps(capabilities).encode())
 
-        client = ForgeImportClient(ForgeAPI("https://forge.test/api/v1/", transport=transport),
-                                   "owner", "repo", source_url=capabilities["source_url"])
-        result = client.import_conversation(2, {"operation_key": "reply:1", "body": "Review"})
+        client = ForgeImportClient(
+            ForgeAPI("https://forge.test/api/v1/", transport=transport),
+            "owner",
+            "repo",
+            source_url=capabilities["source_url"],
+        )
+        result = client.import_conversation(
+            2, {"operation_key": "reply:1", "body": "Review"}
+        )
         self.assertTrue(result.planned)
         self.assertEqual(len(requests), 1)
         self.assertTrue(requests[0].full_url.endswith("/review-imports/capabilities"))
@@ -80,17 +99,44 @@ class GiteaAPITests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 client.lookup_operation(key)
 
-    def test_unattended_policy_is_private_identity_bound_and_rechecked_before_writes(self):
-        policy_value = {"version": 1, "enabled": True, "expires_at": "2099-01-01T00:00:00+00:00",
-                        "api_url": "https://forge.test/api/v1/", "owner": "owner", "repository": "repo", "repository_id": 1,
-                        "importer_id": 2, "importer_login": "review-companion", "source_url": "https://lore.kernel.org/xen-devel/",
-                        "nntp_host": "nntp.lore.kernel.org", "nntp_group": "org.xenproject.lists.xen-devel",
-                        "git_remote": "https://forge.test/owner/repo.git", "git_username": "git-bot", "base_commit": "a" * 40,
-                        "target_branch": "staging", "message_limit": 100, "revision_limit": 8, "max_inline_lines": 50,
-                        "lookback_hours": 148, "notifications": "disabled", "identity_rule": "isolated-unverified", "retry_uncertain": False}
-        capabilities = {"version": 1, "repository_id": 1, "importer_id": 2, "importer_login": "review-companion",
-                        "source_url": policy_value["source_url"], "operations": ["pull", "conversation", "review", "review-reply"],
-                        "unattended_allowed": True, "max_inline_lines": 50}
+    def test_unattended_policy_is_private_identity_bound_and_rechecked_before_writes(
+        self,
+    ):
+        policy_value = {
+            "version": 1,
+            "enabled": True,
+            "expires_at": "2099-01-01T00:00:00+00:00",
+            "api_url": "https://forge.test/api/v1/",
+            "owner": "owner",
+            "repository": "repo",
+            "repository_id": 1,
+            "importer_id": 2,
+            "importer_login": "review-companion",
+            "source_url": "https://lore.kernel.org/xen-devel/",
+            "nntp_host": "nntp.lore.kernel.org",
+            "nntp_group": "org.xenproject.lists.xen-devel",
+            "git_remote": "https://forge.test/owner/repo.git",
+            "git_username": "git-bot",
+            "base_commit": "a" * 40,
+            "target_branch": "staging",
+            "message_limit": 100,
+            "revision_limit": 8,
+            "max_inline_lines": 50,
+            "lookback_hours": 148,
+            "notifications": "disabled",
+            "identity_rule": "isolated-unverified",
+            "retry_uncertain": False,
+        }
+        capabilities = {
+            "version": 1,
+            "repository_id": 1,
+            "importer_id": 2,
+            "importer_login": "review-companion",
+            "source_url": policy_value["source_url"],
+            "operations": ["pull", "conversation", "review", "review-reply"],
+            "unattended_allowed": True,
+            "max_inline_lines": 50,
+        }
         requests = []
 
         def transport(request, _timeout):
@@ -103,10 +149,17 @@ class GiteaAPITests(unittest.TestCase):
             path.write_text(json.dumps(policy_value))
             path.chmod(0o600)
             policy = read_import_policy(path)
-            client = ForgeImportClient(ForgeAPI(policy.api_url, transport=transport), policy.owner, policy.repository,
-                                       source_url=policy.source_url, unattended=True,
-                                       capability_guard=lambda result: policy.assert_current(path, result))
-            self.assertTrue(client.import_conversation(2, {"operation_key": "preview"}).planned)
+            client = ForgeImportClient(
+                ForgeAPI(policy.api_url, transport=transport),
+                policy.owner,
+                policy.repository,
+                source_url=policy.source_url,
+                unattended=True,
+                capability_guard=lambda result: policy.assert_current(path, result),
+            )
+            self.assertTrue(
+                client.import_conversation(2, {"operation_key": "preview"}).planned
+            )
             path.write_text(json.dumps({**policy_value, "enabled": False}))
             client.write_enabled = True
             with self.assertRaisesRegex(ValueError, "disabled"):
@@ -116,14 +169,24 @@ class GiteaAPITests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "no longer matches"):
                 client.import_conversation(2, {"operation_key": "preview"})
             capabilities["repository_id"] = 1
-            for changed in ({"expires_at": "2000-01-01T00:00:00+00:00"}, {"expires_at": "2099-01-01T00:00:00"},
-                            {"message_limit": True}, {"revision_limit": 33}, {"base_commit": "staging"},
-                            {"notifications": "enabled"}, {"identity_rule": "adopt-existing-users"}):
+            for changed in (
+                {"expires_at": "2000-01-01T00:00:00+00:00"},
+                {"expires_at": "2099-01-01T00:00:00"},
+                {"message_limit": True},
+                {"revision_limit": 33},
+                {"base_commit": "staging"},
+                {"notifications": "enabled"},
+                {"identity_rule": "adopt-existing-users"},
+            ):
                 with self.subTest(changed=changed):
                     path.write_text(json.dumps({**policy_value, **changed}))
                     with self.assertRaises(ValueError):
                         read_import_policy(path)
-            path.write_text(json.dumps(policy_value).replace('"enabled": true', '"enabled": false, "enabled": true'))
+            path.write_text(
+                json.dumps(policy_value).replace(
+                    '"enabled": true', '"enabled": false, "enabled": true'
+                )
+            )
             with self.assertRaisesRegex(ValueError, "schema"):
                 read_import_policy(path)
             path.write_text(json.dumps(policy_value))
@@ -140,15 +203,25 @@ class GiteaAPITests(unittest.TestCase):
                 client.import_conversation(2, {"operation_key": "preview"})
         self.assertTrue(all(request.get_method() == "GET" for request in requests))
 
-    def test_import_only_client_reconciles_response_loss_with_same_idempotent_post(self):
+    def test_import_only_client_reconciles_response_loss_with_same_idempotent_post(
+        self,
+    ):
         requests, accepted = [], {}
         capabilities = {
-            "version": 1, "repository_id": 1, "importer_id": 2, "importer_login": "review-companion",
-            "source_url": "https://lore.kernel.org/xen-devel/", "operations": ["conversation"],
+            "version": 1,
+            "repository_id": 1,
+            "importer_id": 2,
+            "importer_login": "review-companion",
+            "source_url": "https://lore.kernel.org/xen-devel/",
+            "operations": ["conversation"],
         }
         payload = {
-            "operation_key": "reply:1", "message_id": "review@example.test", "message_sha256": "a" * 64,
-            "address": "reviewer@example.test", "name": "Reviewer", "body": "Review",
+            "operation_key": "reply:1",
+            "message_id": "review@example.test",
+            "message_sha256": "a" * 64,
+            "address": "reviewer@example.test",
+            "name": "Reviewer",
+            "body": "Review",
         }
 
         def transport(request, _timeout):
@@ -159,21 +232,39 @@ class GiteaAPITests(unittest.TestCase):
                 sent = json.loads(request.data)
                 self.assertEqual(sent, payload)
                 if not accepted:
-                    accepted.update({
-                        "id": 10, "repository_id": 1, "importer_id": 2, "participant_id": 3,
-                        "comment_id": 20, "type": "conversation", "operation_key": sent["operation_key"],
-                        "message_id": sent["message_id"], "message_sha256": sent["message_sha256"],
-                        "source_url": capabilities["source_url"] + sent["message_id"] + "/",
-                    })
+                    accepted.update(
+                        {
+                            "id": 10,
+                            "repository_id": 1,
+                            "importer_id": 2,
+                            "participant_id": 3,
+                            "comment_id": 20,
+                            "type": "conversation",
+                            "operation_key": sent["operation_key"],
+                            "message_id": sent["message_id"],
+                            "message_sha256": sent["message_sha256"],
+                            "source_url": capabilities["source_url"]
+                            + sent["message_id"]
+                            + "/",
+                        }
+                    )
                     raise URLError("lost response")
                 return FakeResponse(200, json.dumps(accepted).encode())
             return FakeResponse(200, json.dumps(accepted).encode())
 
-        client = ForgeImportClient(ForgeAPI("https://forge.test/api/v1/", transport=transport), "owner", "repo",
-                                   source_url=capabilities["source_url"], write_enabled=True)
+        client = ForgeImportClient(
+            ForgeAPI("https://forge.test/api/v1/", transport=transport),
+            "owner",
+            "repo",
+            source_url=capabilities["source_url"],
+            write_enabled=True,
+        )
         result = client.import_conversation(2, payload)
         self.assertEqual(result.remote_object["comment_id"], 20)
-        self.assertEqual([request.get_method() for request in requests], ["GET", "POST", "GET", "POST"])
+        self.assertEqual(
+            [request.get_method() for request in requests],
+            ["GET", "POST", "GET", "POST"],
+        )
         self.assertEqual(client.lookup_operation("reply:1"), accepted)
         accepted["comment_id"] = False
         with self.assertRaises(DeliveryUncertainError):
@@ -184,8 +275,12 @@ class GiteaAPITests(unittest.TestCase):
 
     def test_import_only_client_preserves_rejection_and_uncertain_writes(self):
         capabilities = {
-            "version": 1, "repository_id": 1, "importer_id": 2, "importer_login": "review-companion",
-            "source_url": "https://lore.kernel.org/xen-devel/", "operations": ["conversation"],
+            "version": 1,
+            "repository_id": 1,
+            "importer_id": 2,
+            "importer_login": "review-companion",
+            "source_url": "https://lore.kernel.org/xen-devel/",
+            "operations": ["conversation"],
         }
         writes = []
         status = 409
@@ -198,8 +293,13 @@ class GiteaAPITests(unittest.TestCase):
             writes.append(request)
             return FakeResponse(status, b"failure")
 
-        client = ForgeImportClient(ForgeAPI("https://forge.test/api/v1/", transport=transport), "owner", "repo",
-                                   source_url=capabilities["source_url"], write_enabled=True)
+        client = ForgeImportClient(
+            ForgeAPI("https://forge.test/api/v1/", transport=transport),
+            "owner",
+            "repo",
+            source_url=capabilities["source_url"],
+            write_enabled=True,
+        )
         payload = {"operation_key": "reply:1"}
         self.assertIsNone(client.lookup_operation("reply:1"))
         with self.assertRaises(ForgeAPIError) as caught:
@@ -210,12 +310,18 @@ class GiteaAPITests(unittest.TestCase):
         with self.assertRaises(DeliveryUncertainError):
             client.import_conversation(2, payload)
         self.assertEqual(len(writes), 3)
-        self.assertTrue(all("/review-imports/" in request.full_url for request in writes))
+        self.assertTrue(
+            all("/review-imports/" in request.full_url for request in writes)
+        )
 
     def test_import_only_client_stops_on_revocation_after_uncertain_acceptance(self):
         capabilities = {
-            "version": 1, "repository_id": 1, "importer_id": 2, "importer_login": "review-companion",
-            "source_url": "https://lore.kernel.org/xen-devel/", "operations": ["conversation"],
+            "version": 1,
+            "repository_id": 1,
+            "importer_id": 2,
+            "importer_login": "review-companion",
+            "source_url": "https://lore.kernel.org/xen-devel/",
+            "operations": ["conversation"],
         }
         requests = []
         revoked = False
@@ -230,16 +336,25 @@ class GiteaAPITests(unittest.TestCase):
             revoked = True
             raise URLError("lost response after acceptance")
 
-        client = ForgeImportClient(ForgeAPI("https://forge.test/api/v1/", transport=transport), "owner", "repo",
-                                   source_url=capabilities["source_url"], write_enabled=True)
+        client = ForgeImportClient(
+            ForgeAPI("https://forge.test/api/v1/", transport=transport),
+            "owner",
+            "repo",
+            source_url=capabilities["source_url"],
+            write_enabled=True,
+        )
         with self.assertRaisesRegex(DeliveryUncertainError, "capability recheck"):
             client.import_conversation(2, {"operation_key": "reply:1"})
         self.assertEqual(requests, ["GET", "POST", "GET"])
 
     def test_import_only_client_keeps_review_and_reply_operations_explicit(self):
         capabilities = {
-            "version": 1, "repository_id": 1, "importer_id": 2, "importer_login": "review-companion",
-            "source_url": "https://lore.kernel.org/xen-devel/", "operations": ["review", "review-reply", "pull"],
+            "version": 1,
+            "repository_id": 1,
+            "importer_id": 2,
+            "importer_login": "review-companion",
+            "source_url": "https://lore.kernel.org/xen-devel/",
+            "operations": ["review", "review-reply", "pull"],
         }
         requests = []
         inline_ids = [30, 31]
@@ -251,60 +366,125 @@ class GiteaAPITests(unittest.TestCase):
             sent = json.loads(request.data)
             is_reply = request.full_url.endswith("/replies")
             is_pull = request.full_url.endswith("/review-imports/pulls")
-            return FakeResponse(200, json.dumps({
-                "id": 10, "repository_id": 1, "importer_id": 2, "participant_id": 3,
-                "comment_id": 20, "review_id": 21, "code_comment_ids": [] if is_reply else inline_ids,
-                "type": "pull" if is_pull else "review-reply" if is_reply else "review", "operation_key": sent["operation_key"],
-                "message_id": sent["message_id"], "message_sha256": sent["message_sha256"],
-                "source_url": capabilities["source_url"] + sent["message_id"] + "/",
-                "pull_index": 7, "issue_id": 40,
-                **{field: sent.get(field) for field in ("head_commit", "base_commit", "head_branch", "base_branch")},
-            }).encode())
+            return FakeResponse(
+                200,
+                json.dumps(
+                    {
+                        "id": 10,
+                        "repository_id": 1,
+                        "importer_id": 2,
+                        "participant_id": 3,
+                        "comment_id": 20,
+                        "review_id": 21,
+                        "code_comment_ids": [] if is_reply else inline_ids,
+                        "type": "pull"
+                        if is_pull
+                        else "review-reply"
+                        if is_reply
+                        else "review",
+                        "operation_key": sent["operation_key"],
+                        "message_id": sent["message_id"],
+                        "message_sha256": sent["message_sha256"],
+                        "source_url": capabilities["source_url"]
+                        + sent["message_id"]
+                        + "/",
+                        "pull_index": 7,
+                        "issue_id": 40,
+                        **{
+                            field: sent.get(field)
+                            for field in (
+                                "head_commit",
+                                "base_commit",
+                                "head_branch",
+                                "base_branch",
+                            )
+                        },
+                    }
+                ).encode(),
+            )
 
-        client = ForgeImportClient(ForgeAPI("https://forge.test/api/v1/", transport=transport), "owner", "repo",
-                                   source_url=capabilities["source_url"], write_enabled=True)
+        client = ForgeImportClient(
+            ForgeAPI("https://forge.test/api/v1/", transport=transport),
+            "owner",
+            "repo",
+            source_url=capabilities["source_url"],
+            write_enabled=True,
+        )
         payload = {
-            "operation_key": "review:1", "message_id": "review@example.test", "message_sha256": "a" * 64,
+            "operation_key": "review:1",
+            "message_id": "review@example.test",
+            "message_sha256": "a" * 64,
             "comments": [{"body": "first range"}, {"body": "second range"}],
         }
         result = client.import_review(2, payload)
         self.assertEqual(result.remote_object["code_comment_ids"], [30, 31])
-        reply = {"operation_key": "reply:1", "message_id": "reply@example.test", "message_sha256": "b" * 64, "parent_id": 30}
+        reply = {
+            "operation_key": "reply:1",
+            "message_id": "reply@example.test",
+            "message_sha256": "b" * 64,
+            "parent_id": 30,
+        }
         self.assertEqual(client.import_reply(2, reply).remote_object["review_id"], 21)
         self.assertTrue(requests[1].full_url.endswith("/pulls/2/reviews"))
         self.assertTrue(requests[3].full_url.endswith("/pulls/2/replies"))
         pull = {
-            "operation_key": "series:1", "message_id": "cover@example.test", "message_sha256": "c" * 64,
-            "head_branch": "lore-review/v1-head", "base_branch": "lore-review/v1-base",
-            "head_commit": "a" * 40, "base_commit": "b" * 40,
+            "operation_key": "series:1",
+            "message_id": "cover@example.test",
+            "message_sha256": "c" * 64,
+            "head_branch": "lore-review/v1-head",
+            "base_branch": "lore-review/v1-base",
+            "head_commit": "a" * 40,
+            "base_commit": "b" * 40,
         }
         self.assertEqual(client.import_pull(pull).remote_object["pull_index"], 7)
         self.assertTrue(requests[-1].full_url.endswith("/review-imports/pulls"))
         for invalid in ([True, 31], [30, 30], [30]):
             inline_ids = invalid
-            with self.subTest(identifiers=invalid), self.assertRaises(DeliveryUncertainError):
+            with (
+                self.subTest(identifiers=invalid),
+                self.assertRaises(DeliveryUncertainError),
+            ):
                 client.import_review(2, payload)
         with self.assertRaisesRegex(ValueError, "not supported"):
             client.import_conversation(2, {"operation_key": "conversation:1"})
 
     def test_import_comparison_reads_verify_exact_parent_and_diff_hash(self):
         capabilities = {
-            "version": 1, "repository_id": 1, "importer_id": 2, "importer_login": "review-companion",
-            "source_url": "https://lore.kernel.org/xen-devel/", "operations": ["review"],
+            "version": 1,
+            "repository_id": 1,
+            "importer_id": 2,
+            "importer_login": "review-companion",
+            "source_url": "https://lore.kernel.org/xen-devel/",
+            "operations": ["review"],
         }
         comparison = {
-            "head_commit": "a" * 40, "base_commit": "b" * 40, "merge_base": "b" * 40,
-            "before_commit": "b" * 40, "after_commit": "c" * 40, "diff": "exact patch\n",
+            "head_commit": "a" * 40,
+            "base_commit": "b" * 40,
+            "merge_base": "b" * 40,
+            "before_commit": "b" * 40,
+            "after_commit": "c" * 40,
+            "diff": "exact patch\n",
             "diff_sha256": hashlib.sha256(b"exact patch\n").hexdigest(),
         }
         requests = []
 
         def transport(request, _timeout):
             requests.append(request)
-            return FakeResponse(200, json.dumps(capabilities if request.full_url.endswith("/capabilities") else comparison).encode())
+            return FakeResponse(
+                200,
+                json.dumps(
+                    capabilities
+                    if request.full_url.endswith("/capabilities")
+                    else comparison
+                ).encode(),
+            )
 
-        client = ForgeImportClient(ForgeAPI("https://forge.test/api/v1/", transport=transport), "owner", "repo",
-                                   source_url=capabilities["source_url"])
+        client = ForgeImportClient(
+            ForgeAPI("https://forge.test/api/v1/", transport=transport),
+            "owner",
+            "repo",
+            source_url=capabilities["source_url"],
+        )
         self.assertEqual(client.comparison(2, after_commit="c" * 40), comparison)
         comparison["diff_sha256"] = "d" * 64
         with self.assertRaisesRegex(ValueError, "exact patch"):
@@ -312,7 +492,9 @@ class GiteaAPITests(unittest.TestCase):
         comparison["head_commit"] = True
         with self.assertRaisesRegex(ValueError, "invalid imported PR"):
             client.comparison(2)
-        self.assertTrue(all("/review-imports/" in request.full_url for request in requests))
+        self.assertTrue(
+            all("/review-imports/" in request.full_url for request in requests)
+        )
 
     @patch("lore_review_companion.forge_api.build_opener")
     def test_default_transport_passes_timeout_by_keyword(self, build_opener):
@@ -322,7 +504,9 @@ class GiteaAPITests(unittest.TestCase):
 
         self.assertEqual(api.request_json("api/v1/version"), {})
 
-        self.assertEqual(build_opener.return_value.open.call_args.kwargs, {"timeout": 3.5})
+        self.assertEqual(
+            build_opener.return_value.open.call_args.kwargs, {"timeout": 3.5}
+        )
         self.assertTrue(response.closed)
 
     def test_request_sets_token_and_decodes_json(self):
@@ -337,20 +521,28 @@ class GiteaAPITests(unittest.TestCase):
         result = api.request_json("/api/v1/version")
 
         self.assertEqual(result, {"version": "test"})
-        self.assertEqual(captured[0][0].get_header("Authorization"), "token local-token")
+        self.assertEqual(
+            captured[0][0].get_header("Authorization"), "token local-token"
+        )
         self.assertEqual(captured[0][1], 10)
 
     def test_rejects_external_and_traversal_paths_before_sending_token(self):
         requests = []
         api = ForgeAPI(
-            "https://gitea.test/api/v1/", token="local-token",
+            "https://gitea.test/api/v1/",
+            token="local-token",
             transport=lambda request, _timeout: requests.append(request),
         )
 
         for path in (
-            "https://other.test/collect", "//other.test/collect", "../users",
-            "repos/%2e%2e/users", "repos/%252e%252e/users", "repos/a%2fb/issues",
-            "repos/a\\b/issues", "repos/a?token=leak",
+            "https://other.test/collect",
+            "//other.test/collect",
+            "../users",
+            "repos/%2e%2e/users",
+            "repos/%252e%252e/users",
+            "repos/a%2fb/issues",
+            "repos/a\\b/issues",
+            "repos/a?token=leak",
         ):
             with self.subTest(path=path), self.assertRaises(ValueError):
                 api.request_json(path)
@@ -363,17 +555,23 @@ class GiteaAPITests(unittest.TestCase):
             def do_GET(self):
                 requests.append(self.path)
                 self.send_response(302)
-                self.send_header("Location", f"http://127.0.0.1:{self.server.server_port}/leak")
+                self.send_header(
+                    "Location", f"http://127.0.0.1:{self.server.server_port}/leak"
+                )
                 self.end_headers()
 
             def log_message(self, _format, *args):
                 pass
 
         server = HTTPServer(("127.0.0.1", 0), RedirectHandler)
-        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
+        thread = threading.Thread(
+            target=server.serve_forever, kwargs={"poll_interval": 0.01}
+        )
         thread.start()
         try:
-            api = ForgeAPI(f"http://127.0.0.1:{server.server_port}", token="local-token")
+            api = ForgeAPI(
+                f"http://127.0.0.1:{server.server_port}", token="local-token"
+            )
             with self.assertRaises(ForgeAPIError) as raised:
                 api.request_json("redirect")
             self.assertEqual(raised.exception.status, 302)
@@ -384,7 +582,11 @@ class GiteaAPITests(unittest.TestCase):
             server.server_close()
 
     def test_rejects_unsafe_base_urls(self):
-        for base_url in ("ftp://gitea.test/", "https://user:token@gitea.test/", "https://gitea.test/?x=1"):
+        for base_url in (
+            "ftp://gitea.test/",
+            "https://user:token@gitea.test/",
+            "https://gitea.test/?x=1",
+        ):
             with self.subTest(base_url=base_url), self.assertRaises(ValueError):
                 ForgeAPI(base_url)
         with self.assertRaisesRegex(ValueError, "require HTTPS"):
@@ -415,21 +617,34 @@ class GiteaAPITests(unittest.TestCase):
             return FakeResponse(200, b"diff contents")
 
         api = ForgeAPI("https://gitea.test/api/v1/", transport=transport)
-        self.assertEqual(api.request_bytes("repos/o/r/pulls/7.diff", max_bytes=20), b"diff contents")
+        self.assertEqual(
+            api.request_bytes("repos/o/r/pulls/7.diff", max_bytes=20), b"diff contents"
+        )
         self.assertEqual(requests[0].get_header("Accept"), "text/plain")
         with self.assertRaisesRegex(ForgeAPIError, "exceeds"):
             api.request_bytes("repos/o/r/pulls/7.diff", max_bytes=4)
 
     def test_bounds_json_and_rejects_incomplete_pagination(self):
-        api = ForgeAPI("https://gitea.test/api/v1/", transport=lambda _request, _timeout: FakeResponse(200, b" " * (MAX_JSON_BYTES + 1)))
+        api = ForgeAPI(
+            "https://gitea.test/api/v1/",
+            transport=lambda _request, _timeout: FakeResponse(
+                200, b" " * (MAX_JSON_BYTES + 1)
+            ),
+        )
         with self.assertRaisesRegex(ForgeAPIError, "exceeds"):
             api.request_json("user")
-        api = ForgeAPI("https://gitea.test/api/v1/", transport=lambda _request, _timeout: FakeResponse(200, b"[1]"))
+        api = ForgeAPI(
+            "https://gitea.test/api/v1/",
+            transport=lambda _request, _timeout: FakeResponse(200, b"[1]"),
+        )
         with self.assertRaisesRegex(ForgeAPIError, "page limit"):
             list(api.get_pages("pulls", per_page=1, max_pages=2))
 
     def test_invalid_json_preserves_the_response_status(self):
-        api = ForgeAPI("https://gitea.test/", transport=lambda _request, _timeout: FakeResponse(201, b"invalid"))
+        api = ForgeAPI(
+            "https://gitea.test/",
+            transport=lambda _request, _timeout: FakeResponse(201, b"invalid"),
+        )
         with self.assertRaises(ForgeAPIError) as raised:
             api.request_json("pulls", method="POST", payload={})
         self.assertEqual(raised.exception.status, 201)
@@ -495,7 +710,11 @@ class GiteaAPITests(unittest.TestCase):
     def test_timeout_reading_http_error_closes_response_and_is_uncertain(self):
         body = io.BytesIO(b"")
         error = HTTPError("https://gitea.test/secret", 500, "failure", {}, body)
-        api = ForgeAPI("https://gitea.test", transport=lambda *_: (_ for _ in ()).throw(error), max_retries=0)
+        api = ForgeAPI(
+            "https://gitea.test",
+            transport=lambda *_: (_ for _ in ()).throw(error),
+            max_retries=0,
+        )
         with patch.object(body, "read", side_effect=TimeoutError("secret")):
             with self.assertRaises(ForgeAPIError) as caught:
                 api.request_json("comments", method="POST", payload={})

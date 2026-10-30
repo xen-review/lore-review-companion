@@ -12,7 +12,10 @@ from typing import Iterable
 from lore_review_companion.mail_parser import ParsedMessage
 
 MAX_SERIES_PATCHES = 500
-_CHANGE_ID = re.compile(r"^change-id:[ \t]+([A-Za-z0-9][A-Za-z0-9._+-]{0,199})[ \t]*$", re.IGNORECASE | re.MULTILINE)
+_CHANGE_ID = re.compile(
+    r"^change-id:[ \t]+([A-Za-z0-9][A-Za-z0-9._+-]{0,199})[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 _CHANGE_ID_LINE = re.compile(r"^change-id:[^\n]*$", re.IGNORECASE | re.MULTILINE)
 
 
@@ -32,7 +35,8 @@ class SeriesRevision:
 def _change_id_bodies(revision: SeriesRevision) -> Iterable[str]:
     return (
         message.body_text.replace("\r\n", "\n").replace("\r", "\n")
-        for message in revision.messages if message.kind == "cover" or message.patch_index == 1
+        for message in revision.messages
+        if message.kind == "cover" or message.patch_index == 1
     )
 
 
@@ -73,12 +77,18 @@ def discover_series(messages: Iterable[ParsedMessage]) -> tuple[SeriesRevision, 
             if not expanded and message_id in root_cache:
                 continue
             current = by_id[message_id]
-            references = tuple(dict.fromkeys((*current.references, *current.in_reply_to)))
+            references = tuple(
+                dict.fromkeys((*current.references, *current.in_reply_to))
+            )
             if not expanded:
                 active.add(message_id)
                 stack.append((message_id, True))
                 for parent_id in reversed(references):
-                    if parent_id in by_id and parent_id not in active and parent_id not in root_cache:
+                    if (
+                        parent_id in by_id
+                        and parent_id not in active
+                        and parent_id not in root_cache
+                    ):
                         stack.append((parent_id, False))
                 continue
             errors = []
@@ -88,7 +98,10 @@ def discover_series(messages: Iterable[ParsedMessage]) -> tuple[SeriesRevision, 
             for parent_id in references:
                 if parent_id != message_id and parent_id in by_id:
                     if parent_id in active:
-                        root_id, parent_errors = parent_id, ("thread ancestry contains a cycle",)
+                        root_id, parent_errors = (
+                            parent_id,
+                            ("thread ancestry contains a cycle",),
+                        )
                     else:
                         root_id, parent_errors = root_cache[parent_id]
                     roots.append(root_id)
@@ -113,11 +126,21 @@ def discover_series(messages: Iterable[ParsedMessage]) -> tuple[SeriesRevision, 
 
     revisions: list[SeriesRevision] = []
     for (root_id, revision), members in sorted(grouped.items()):
-        members.sort(key=lambda item: (item.patch_index is None, item.patch_index or 0, item.message_id or ""))
+        members.sort(
+            key=lambda item: (
+                item.patch_index is None,
+                item.patch_index or 0,
+                item.message_id or "",
+            )
+        )
         covers = [message for message in members if message.kind == "cover"]
         patches = [message for message in members if message.kind == "patch"]
         conflicts: list[str] = sorted(ancestry_errors[(root_id, revision)])
-        expected_counts = {message.series_size for message in members if message.series_size is not None}
+        expected_counts = {
+            message.series_size
+            for message in members
+            if message.series_size is not None
+        }
         if len(expected_counts) > 1:
             conflicts.append("messages disagree on the series patch count")
         expected_count = next(iter(expected_counts), None)
@@ -141,18 +164,25 @@ def discover_series(messages: Iterable[ParsedMessage]) -> tuple[SeriesRevision, 
             missing = sorted(set(range(1, expected_count + 1)) - indexed.keys())
             if missing:
                 conflicts.append(
-                    "missing patch indices: " + ", ".join(str(index) for index in missing)
+                    "missing patch indices: "
+                    + ", ".join(str(index) for index in missing)
                 )
-            out_of_range = sorted(index for index in indexed if index < 1 or index > expected_count)
+            out_of_range = sorted(
+                index for index in indexed if index < 1 or index > expected_count
+            )
             if out_of_range:
                 conflicts.append(
                     "patch indices outside declared range: "
                     + ", ".join(str(index) for index in out_of_range)
                 )
 
-        title = next((cover.subject_title for cover in covers if cover.subject_title), "")
+        title = next(
+            (cover.subject_title for cover in covers if cover.subject_title), ""
+        )
         if not title:
-            title = next((patch.subject_title for patch in patches if patch.subject_title), "")
+            title = next(
+                (patch.subject_title for patch in patches if patch.subject_title), ""
+            )
         revisions.append(
             SeriesRevision(
                 series_key=f"lore:{root_id}",

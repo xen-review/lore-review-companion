@@ -40,10 +40,14 @@ def _run_git(
 ) -> str:
     command = [
         "git",
-        "-c", "core.hooksPath=" + os.devnull,
-        "-c", "commit.gpgsign=false",
-        "-c", "user.name=Lore Gitea preflight",
-        "-c", "user.email=lore-gitea-preflight@localhost",
+        "-c",
+        "core.hooksPath=" + os.devnull,
+        "-c",
+        "commit.gpgsign=false",
+        "-c",
+        "user.name=Lore Gitea preflight",
+        "-c",
+        "user.email=lore-gitea-preflight@localhost",
         *arguments,
     ]
     completed = subprocess.run(
@@ -71,37 +75,60 @@ class PreparedMailbox:
 
     def patch_commits(self, message_ids: tuple[str, ...]) -> tuple[PatchCommit, ...]:
         if (
-            not message_ids or len(message_ids) != self.result.patch_count
-            or any(not message_id for message_id in message_ids) or len(set(message_ids)) != len(message_ids)
+            not message_ids
+            or len(message_ids) != self.result.patch_count
+            or any(not message_id for message_id in message_ids)
+            or len(set(message_ids)) != len(message_ids)
         ):
-            raise GitPreflightError("One unique source Message-ID is required per assembled patch")
+            raise GitPreflightError(
+                "One unique source Message-ID is required per assembled patch"
+            )
         output = self.run_git(
-            "Inspect assembled patch chain", "--no-replace-objects", "rev-list", "--reverse", "--parents",
-            "--no-abbrev-commit", f"{self.result.base_commit}..{self.result.head_commit}",
+            "Inspect assembled patch chain",
+            "--no-replace-objects",
+            "rev-list",
+            "--reverse",
+            "--parents",
+            "--no-abbrev-commit",
+            f"{self.result.base_commit}..{self.result.head_commit}",
         )
         rows = [line.split() for line in output.splitlines()]
         if len(rows) != len(message_ids):
-            raise GitPreflightError("Assembled commit count differs from source patch membership")
+            raise GitPreflightError(
+                "Assembled commit count differs from source patch membership"
+            )
         comparisons = []
         parent = self.result.base_commit
         for message_id, row in zip(message_ids, rows, strict=True):
             if len(row) != 2 or row[1] != parent:
-                raise GitPreflightError("Assembled patches must form one exact single-parent chain")
+                raise GitPreflightError(
+                    "Assembled patches must form one exact single-parent chain"
+                )
             comparisons.append(PatchCommit(message_id, parent, row[0]))
             parent = row[0]
         if parent != self.result.head_commit:
-            raise GitPreflightError("Assembled patch chain does not reach the pinned head")
+            raise GitPreflightError(
+                "Assembled patch chain does not reach the pinned head"
+            )
         return tuple(comparisons)
 
     def run_git(
-        self, stage: str, *arguments: str, input_bytes: bytes | None = None,
+        self,
+        stage: str,
+        *arguments: str,
+        input_bytes: bytes | None = None,
         environment_overrides: Mapping[str, str] | None = None,
     ) -> str:
         environment = dict(self.environment)
         environment.update(environment_overrides or {})
         return _run_git(
-            environment, self.timeout, stage, "-C", str(self.repository),
-            *arguments, input_bytes=input_bytes,
+            environment,
+            self.timeout,
+            stage,
+            "-C",
+            str(self.repository),
+            *arguments,
+            input_bytes=input_bytes,
         )
 
 
@@ -132,30 +159,55 @@ def prepare_patch_mailbox(
         }
 
         base_commit = _run_git(
-            environment, timeout,
-            "Resolve base", "-C", str(repository), "rev-parse", "--verify",
-            "--end-of-options", f"{base_ref}^{{commit}}",
+            environment,
+            timeout,
+            "Resolve base",
+            "-C",
+            str(repository),
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            f"{base_ref}^{{commit}}",
         )
         clone = Path(temp_dir) / "repository"
         _run_git(
-            environment, timeout,
-            "Clone repository", "clone", "--shared", "--no-checkout", "--no-tags",
-            "--", str(repository), str(clone),
+            environment,
+            timeout,
+            "Clone repository",
+            "clone",
+            "--shared",
+            "--no-checkout",
+            "--no-tags",
+            "--",
+            str(repository),
+            str(clone),
         )
-        prepared = PreparedMailbox(clone, PreflightResult(base_commit, "", 0), environment, timeout)
+        prepared = PreparedMailbox(
+            clone, PreflightResult(base_commit, "", 0), environment, timeout
+        )
         prepared.run_git("Checkout base", "checkout", "--detach", base_commit)
         prepared.run_git(
-            "Apply mailbox", "am", "--no-gpg-sign", "--no-verify",
+            "Apply mailbox",
+            "am",
+            "--no-gpg-sign",
+            "--no-verify",
             "--committer-date-is-author-date",
             input_bytes=patch_mailbox,
         )
         head_commit = prepared.run_git("Inspect result", "rev-parse", "HEAD")
-        patch_count = int(prepared.run_git(
-            "Inspect result", "rev-list", "--count",
-            f"{base_commit}..{head_commit}",
-        ))
+        patch_count = int(
+            prepared.run_git(
+                "Inspect result",
+                "rev-list",
+                "--count",
+                f"{base_commit}..{head_commit}",
+            )
+        )
         yield PreparedMailbox(
-            clone, PreflightResult(base_commit, head_commit, patch_count), environment, timeout,
+            clone,
+            PreflightResult(base_commit, head_commit, patch_count),
+            environment,
+            timeout,
         )
 
 
@@ -167,5 +219,7 @@ def preflight_patch_mailbox(
     timeout: float = 120,
 ) -> PreflightResult:
     """Apply a complete mailbox in a disposable clone and return its result."""
-    with prepare_patch_mailbox(repository, base_ref, patch_mailbox, timeout=timeout) as prepared:
+    with prepare_patch_mailbox(
+        repository, base_ref, patch_mailbox, timeout=timeout
+    ) as prepared:
         return prepared.result

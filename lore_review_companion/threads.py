@@ -10,6 +10,7 @@ from typing import Iterable
 from lore_review_companion.mail_parser import ParsedMessage
 from lore_review_companion.series import SeriesRevision
 
+
 @dataclass(frozen=True)
 class ThreadMatch:
     message: ParsedMessage
@@ -25,7 +26,8 @@ class ThreadMatches:
 
 
 def match_thread_replies(
-    messages: Iterable[ParsedMessage], revisions: Iterable[SeriesRevision],
+    messages: Iterable[ParsedMessage],
+    revisions: Iterable[SeriesRevision],
 ) -> ThreadMatches:
     by_id: dict[str, ParsedMessage] = {}
     conflicts: set[str] = set()
@@ -43,7 +45,12 @@ def match_thread_replies(
         for message in revision.messages:
             if message.message_id:
                 members.setdefault(message.message_id, set()).add(
-                    (revision.series_key, revision.revision, message.message_id, message.kind)
+                    (
+                        revision.series_key,
+                        revision.revision,
+                        message.message_id,
+                        message.kind,
+                    )
                 )
 
     resolved: dict[str, set[tuple[str, int, str, str]]] = {}
@@ -67,13 +74,21 @@ def match_thread_replies(
                 if message is None or message.kind != "reply":
                     resolved[current] = set()
                     continue
-                known_parents = tuple(parent for parent in message.in_reply_to if parent in by_id or parent in members)
+                known_parents = tuple(
+                    parent
+                    for parent in message.in_reply_to
+                    if parent in by_id or parent in members
+                )
                 if known_parents and len(known_parents) != len(message.in_reply_to):
                     resolved[current] = set()
                     continue
                 if not known_parents:
                     known_parents = next(
-                        ((parent,) for parent in reversed(message.references) if parent in by_id or parent in members),
+                        (
+                            (parent,)
+                            for parent in reversed(message.references)
+                            if parent in by_id or parent in members
+                        ),
                         (),
                     )
                 dependencies[current] = known_parents
@@ -83,8 +98,13 @@ def match_thread_replies(
                     if parent not in active and parent not in resolved:
                         stack.append((parent, False))
                 continue
-            targets = [set() if parent in active else resolved[parent] for parent in dependencies[current]]
-            resolved[current] = set().union(*targets) if targets and all(targets) else set()
+            targets = [
+                set() if parent in active else resolved[parent]
+                for parent in dependencies[current]
+            ]
+            resolved[current] = (
+                set().union(*targets) if targets and all(targets) else set()
+            )
             active.remove(current)
         return resolved[message_id]
 
@@ -96,12 +116,16 @@ def match_thread_replies(
     )
     for reply in replies:
         targets = resolve(reply.message_id or "")
-        series_revisions = {(series_key, revision) for series_key, revision, _, _ in targets}
+        series_revisions = {
+            (series_key, revision) for series_key, revision, _, _ in targets
+        }
         if len(series_revisions) != 1:
             unmatched.append(reply)
             continue
         series_key, revision = next(iter(series_revisions))
         patches = {message_id for _, _, message_id, kind in targets if kind == "patch"}
-        patch_id = next(iter(patches)) if len(targets) == 1 and len(patches) == 1 else None
+        patch_id = (
+            next(iter(patches)) if len(targets) == 1 and len(patches) == 1 else None
+        )
         matched.append(ThreadMatch(reply, series_key, revision, patch_id))
     return ThreadMatches(tuple(matched), tuple(unmatched))

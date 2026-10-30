@@ -23,22 +23,40 @@ from lore_review_companion.ledger import Ledger
 SOURCE = "https://lore.kernel.org/xen-devel/"
 UPSTREAM = "https://github.com/xen-project/xen.git"
 IMPORTER = "review-companion"
-SAFETY = {name: False for name in (
-    "has_actions", "allow_merge_commits", "allow_rebase", "allow_rebase_explicit", "allow_squash_merge",
-    "allow_fast_forward_only_merge", "allow_manual_merge", "autodetect_manual_merge", "allow_rebase_update",
-    "default_allow_maintainer_edit",
-)}
+SAFETY = {
+    name: False
+    for name in (
+        "has_actions",
+        "allow_merge_commits",
+        "allow_rebase",
+        "allow_rebase_explicit",
+        "allow_squash_merge",
+        "allow_fast_forward_only_merge",
+        "allow_manual_merge",
+        "autodetect_manual_merge",
+        "allow_rebase_update",
+        "default_allow_maintainer_edit",
+    )
+}
 
 
 def private_directory(path: Path) -> None:
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
     info = path.lstat()
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
-        raise ValueError("Configuration/state directory must be private and owned by this user")
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != os.geteuid()
+        or info.st_mode & 0o077
+    ):
+        raise ValueError(
+            "Configuration/state directory must be private and owned by this user"
+        )
 
 
 def write_private(path: Path, content: str) -> None:
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    descriptor = os.open(
+        path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
+    )
     with os.fdopen(descriptor, "w") as stream:
         stream.write(content)
         stream.flush()
@@ -54,7 +72,9 @@ def optional(api: ForgeAPI, path: str):
         raise
 
 
-def provision_xen(api: ForgeAPI, config: Path, state: Path, *, email: str, enable_policy: bool = False) -> dict:
+def provision_xen(
+    api: ForgeAPI, config: Path, state: Path, *, email: str, enable_policy: bool = False
+) -> dict:
     private_directory(config)
     private_directory(state)
     administrator = api.request_json("user")
@@ -64,80 +84,189 @@ def provision_xen(api: ForgeAPI, config: Path, state: Path, *, email: str, enabl
     if user is None:
         password = secrets.token_urlsafe(48)
         write_private(config / "initial-password", password + "\n")
-        user = api.request_json("admin/users", method="POST", payload={
-            "username": IMPORTER, "email": email, "password": password,
-            "must_change_password": False, "send_notify": False, "restricted": False,
-            "full_name": "Review Companion",
-        })
-    if user.get("is_admin") or user.get("login") != IMPORTER or user.get("email") != email:
-        raise ValueError("Existing importer identity is incompatible; no account adoption or password reset performed")
+        user = api.request_json(
+            "admin/users",
+            method="POST",
+            payload={
+                "username": IMPORTER,
+                "email": email,
+                "password": password,
+                "must_change_password": False,
+                "send_notify": False,
+                "restricted": False,
+                "full_name": "Review Companion",
+            },
+        )
+    if (
+        user.get("is_admin")
+        or user.get("login") != IMPORTER
+        or user.get("email") != email
+    ):
+        raise ValueError(
+            "Existing importer identity is incompatible; no account adoption or password reset performed"
+        )
     for name in ("xen-project", "xen-review"):
         if optional(api, f"orgs/{name}") is None:
-            api.request_json("orgs", method="POST", payload={"username": name, "visibility": "public"})
+            api.request_json(
+                "orgs",
+                method="POST",
+                payload={"username": name, "visibility": "public"},
+            )
     mirror = optional(api, "repos/xen-project/xen")
     if mirror is None:
-        mirror = api.request_json("repos/migrate", method="POST", payload={
-            "repo_owner": "xen-project", "repo_name": "xen", "clone_addr": UPSTREAM, "mirror": True,
-        })
-    if mirror.get("mirror") is not True or mirror.get("original_url", "").rstrip("/") != UPSTREAM:
-        raise ValueError("Existing xen-project/xen is not the expected GitHub Xen mirror")
+        mirror = api.request_json(
+            "repos/migrate",
+            method="POST",
+            payload={
+                "repo_owner": "xen-project",
+                "repo_name": "xen",
+                "clone_addr": UPSTREAM,
+                "mirror": True,
+            },
+        )
+    if (
+        mirror.get("mirror") is not True
+        or mirror.get("original_url", "").rstrip("/") != UPSTREAM
+    ):
+        raise ValueError(
+            "Existing xen-project/xen is not the expected GitHub Xen mirror"
+        )
     teams = api.request_json("orgs/xen-review/teams", params={"limit": 50})
-    owners = [team for team in teams if team.get("name") == "Owners" and team.get("permission") == "owner"]
+    owners = [
+        team
+        for team in teams
+        if team.get("name") == "Owners" and team.get("permission") == "owner"
+    ]
     if len(owners) != 1:
         raise ValueError("Expected one Owners team; inspect organization ownership")
     api.request_json(f"teams/{owners[0]['id']}/members/{IMPORTER}", method="PUT")
     review = optional(api, "repos/xen-review/xen")
     if review is None:
-        review = api.request_json("repos/xen-project/xen/forks", method="POST", payload={"organization": "xen-review", "name": "xen"})
-    if review.get("mirror") or review.get("parent", {}).get("id") != mirror["id"] or review.get("archived"):
-        raise ValueError("Existing xen-review/xen must be an active writable fork of xen-project/xen")
-    api.request_json("repos/xen-review/xen", method="PATCH", payload={**SAFETY, "has_pull_requests": True})
-    api.request_json(f"repos/xen-review/xen/review-import-grants/{IMPORTER}", method="PUT",
-                     payload={"source_url": SOURCE, "allow_unattended": True})
-    for filename, scopes in (("import-token", ["write:review-import", "write:repository", "write:issue"]),
-                             ("git-token", ["write:repository"])):
+        review = api.request_json(
+            "repos/xen-project/xen/forks",
+            method="POST",
+            payload={"organization": "xen-review", "name": "xen"},
+        )
+    if (
+        review.get("mirror")
+        or review.get("parent", {}).get("id") != mirror["id"]
+        or review.get("archived")
+    ):
+        raise ValueError(
+            "Existing xen-review/xen must be an active writable fork of xen-project/xen"
+        )
+    api.request_json(
+        "repos/xen-review/xen",
+        method="PATCH",
+        payload={**SAFETY, "has_pull_requests": True},
+    )
+    api.request_json(
+        f"repos/xen-review/xen/review-import-grants/{IMPORTER}",
+        method="PUT",
+        payload={"source_url": SOURCE, "allow_unattended": True},
+    )
+    for filename, scopes in (
+        ("import-token", ["write:review-import", "write:repository", "write:issue"]),
+        ("git-token", ["write:repository"]),
+    ):
         path = config / filename
         if path.exists():
             read_private_token(path)
             continue
-        token = api.request_json(f"admin/users/{IMPORTER}/tokens", method="POST", payload={
-            "name": f"lore-xen-{filename}", "scopes": scopes,
-            "repositories": [{"owner": "xen-review", "name": "xen"}],
-        })
+        token = api.request_json(
+            f"admin/users/{IMPORTER}/tokens",
+            method="POST",
+            payload={
+                "name": f"lore-xen-{filename}",
+                "scopes": scopes,
+                "repositories": [{"owner": "xen-review", "name": "xen"}],
+            },
+        )
         try:
             write_private(path, token["sha1"] + "\n")
         except Exception:
-            api.request_json(f"admin/users/{IMPORTER}/tokens/{token['id']}", method="DELETE")
+            api.request_json(
+                f"admin/users/{IMPORTER}/tokens/{token['id']}", method="DELETE"
+            )
             raise
-    runtime_api = ForgeAPI(api.base_url, token=read_private_token(config / "import-token"))
-    capabilities = ForgeImportClient(runtime_api, "xen-review", "xen", source_url=SOURCE, unattended=True).capabilities()
-    if capabilities["repository_id"] != review["id"] or capabilities["importer_id"] != user["id"]:
+    runtime_api = ForgeAPI(
+        api.base_url, token=read_private_token(config / "import-token")
+    )
+    capabilities = ForgeImportClient(
+        runtime_api, "xen-review", "xen", source_url=SOURCE, unattended=True
+    ).capabilities()
+    if (
+        capabilities["repository_id"] != review["id"]
+        or capabilities["importer_id"] != user["id"]
+    ):
         raise ValueError("Runtime token does not match the created repository/importer")
     git_api = ForgeAPI(api.base_url, token=read_private_token(config / "git-token"))
-    if not git_api.request_json("repos/xen-review/xen").get("permissions", {}).get("push"):
+    if (
+        not git_api.request_json("repos/xen-review/xen")
+        .get("permissions", {})
+        .get("push")
+    ):
         raise ValueError("Git token lacks selected review-repository push permission")
     repository = state / "xen.git"
     source_remote = mirror["clone_url"]
     if not repository.exists():
-        subprocess.run(["git", "clone", "--bare", "--", source_remote, str(repository)], check=True)
-    elif subprocess.check_output(["git", "--git-dir", str(repository), "remote", "get-url", "origin"], text=True).strip() != source_remote:
-        raise ValueError("Existing assembly clone has a different origin; inspect it rather than overwriting")
+        subprocess.run(
+            ["git", "clone", "--bare", "--", source_remote, str(repository)], check=True
+        )
+    elif (
+        subprocess.check_output(
+            ["git", "--git-dir", str(repository), "remote", "get-url", "origin"],
+            text=True,
+        ).strip()
+        != source_remote
+    ):
+        raise ValueError(
+            "Existing assembly clone has a different origin; inspect it rather than overwriting"
+        )
     branch = mirror["default_branch"]
     base = api.request_json(f"repos/xen-project/xen/branches/{branch}")["commit"]["id"]
-    subprocess.run(["git", "--git-dir", str(repository), "cat-file", "-e", base + "^{commit}"], check=True)
+    subprocess.run(
+        ["git", "--git-dir", str(repository), "cat-file", "-e", base + "^{commit}"],
+        check=True,
+    )
     policy = {
-        "version": 1, "enabled": enable_policy, "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
-        "api_url": api.base_url, "owner": "xen-review", "repository": "xen", "repository_id": review["id"],
-        "importer_id": user["id"], "importer_login": IMPORTER, "source_url": SOURCE,
-        "nntp_host": "nntp.lore.kernel.org", "nntp_group": "org.xenproject.lists.xen-devel",
-        "git_remote": review["clone_url"], "git_username": IMPORTER, "base_commit": base, "target_branch": branch,
-        "message_limit": 32, "revision_limit": 2, "max_inline_lines": min(50, capabilities["max_inline_lines"]),
-        "lookback_hours": 148, "notifications": "disabled", "identity_rule": "isolated-unverified", "retry_uncertain": False,
+        "version": 1,
+        "enabled": enable_policy,
+        "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+        "api_url": api.base_url,
+        "owner": "xen-review",
+        "repository": "xen",
+        "repository_id": review["id"],
+        "importer_id": user["id"],
+        "importer_login": IMPORTER,
+        "source_url": SOURCE,
+        "nntp_host": "nntp.lore.kernel.org",
+        "nntp_group": "org.xenproject.lists.xen-devel",
+        "git_remote": review["clone_url"],
+        "git_username": IMPORTER,
+        "base_commit": base,
+        "target_branch": branch,
+        "message_limit": 32,
+        "revision_limit": 2,
+        "max_inline_lines": min(50, capabilities["max_inline_lines"]),
+        "lookback_hours": 148,
+        "notifications": "disabled",
+        "identity_rule": "isolated-unverified",
+        "retry_uncertain": False,
     }
     policy_path = config / "import-policy.json"
     if policy_path.exists():
         retained = json.loads(policy_path.read_text())
-        if any(retained.get(key) != policy[key] for key in ("api_url", "repository_id", "importer_id", "source_url", "git_remote")):
+        if any(
+            retained.get(key) != policy[key]
+            for key in (
+                "api_url",
+                "repository_id",
+                "importer_id",
+                "source_url",
+                "git_remote",
+            )
+        ):
             raise ValueError("Existing policy belongs to another deployment")
         return retained
     write_private(policy_path, json.dumps(policy, indent=2) + "\n")
@@ -148,28 +277,82 @@ def main(arguments=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--api-url", required=True)
     parser.add_argument("--admin-token-file", type=Path, required=True)
-    parser.add_argument("--email", required=True, help="Operator-controlled integration account email")
-    parser.add_argument("--config-dir", type=Path, default=Path.home() / ".config/lore-review-companion")
-    parser.add_argument("--state-dir", type=Path, default=Path.home() / ".local/state/lore-review-companion")
-    parser.add_argument("--apply", action="store_true", help="Explicitly authorize the documented provisioning API writes")
-    parser.add_argument("--enable-policy", action="store_true", help="Authorize bounded imports for seven days; does not enable a timer")
-    parser.add_argument("--bootstrap-rounds", type=int, default=0, help="Run 0..32 bounded recent-mail rounds after provisioning")
+    parser.add_argument(
+        "--email", required=True, help="Operator-controlled integration account email"
+    )
+    parser.add_argument(
+        "--config-dir", type=Path, default=Path.home() / ".config/lore-review-companion"
+    )
+    parser.add_argument(
+        "--state-dir",
+        type=Path,
+        default=Path.home() / ".local/state/lore-review-companion",
+    )
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Explicitly authorize the documented provisioning API writes",
+    )
+    parser.add_argument(
+        "--enable-policy",
+        action="store_true",
+        help="Authorize bounded imports for seven days; does not enable a timer",
+    )
+    parser.add_argument(
+        "--bootstrap-rounds",
+        type=int,
+        default=0,
+        help="Run 0..32 bounded recent-mail rounds after provisioning",
+    )
     options = parser.parse_args(arguments)
-    if not 0 <= options.bootstrap_rounds <= 32 or (options.bootstrap_rounds and not options.enable_policy):
+    if not 0 <= options.bootstrap_rounds <= 32 or (
+        options.bootstrap_rounds and not options.enable_policy
+    ):
         parser.error("Bootstrap requires --enable-policy and 0..32 rounds")
     if not options.apply:
-        print("Plan: create review-companion; xen-project/Xen GitHub mirror with server defaults; xen-review Owners membership and fork; review-only grant; private selected-repo tokens, assembly clone and seven-day policy. Add --apply to provision; no requests made.")
+        print(
+            "Plan: create review-companion; xen-project/Xen GitHub mirror with server defaults; xen-review Owners membership and fork; review-only grant; private selected-repo tokens, assembly clone and seven-day policy. Add --apply to provision; no requests made."
+        )
         return 0
     try:
-        api = ForgeAPI(options.api_url, token=read_private_token(options.admin_token_file), timeout=600, max_retries=0)
-        policy = provision_xen(api, options.config_dir, options.state_dir, email=options.email, enable_policy=options.enable_policy)
-        print(json.dumps({"review_repository": policy["git_remote"], "base_commit": policy["base_commit"],
-                          "policy_enabled": policy["enabled"], "expires_at": policy["expires_at"]}))
-        runtime = ForgeAPI(policy["api_url"], token=read_private_token(options.config_dir / "import-token"))
+        api = ForgeAPI(
+            options.api_url,
+            token=read_private_token(options.admin_token_file),
+            timeout=600,
+            max_retries=0,
+        )
+        policy = provision_xen(
+            api,
+            options.config_dir,
+            options.state_dir,
+            email=options.email,
+            enable_policy=options.enable_policy,
+        )
+        print(
+            json.dumps(
+                {
+                    "review_repository": policy["git_remote"],
+                    "base_commit": policy["base_commit"],
+                    "policy_enabled": policy["enabled"],
+                    "expires_at": policy["expires_at"],
+                }
+            )
+        )
+        runtime = ForgeAPI(
+            policy["api_url"],
+            token=read_private_token(options.config_dir / "import-token"),
+        )
         for _round in range(options.bootstrap_rounds):
-            result = run_import_worker_round(Ledger(options.state_dir / "mail.sqlite3"), options.state_dir / "xen.git",
-                                            options.config_dir / "import-policy.json", options.state_dir / "worker.sqlite3", runtime,
-                                            GitHttpCredentials(IMPORTER, read_private_token(options.config_dir / "git-token")))
+            result = run_import_worker_round(
+                Ledger(options.state_dir / "mail.sqlite3"),
+                options.state_dir / "xen.git",
+                options.config_dir / "import-policy.json",
+                options.state_dir / "worker.sqlite3",
+                runtime,
+                GitHttpCredentials(
+                    IMPORTER, read_private_token(options.config_dir / "git-token")
+                ),
+            )
             print(json.dumps(result.__dict__))
         return 0
     except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as error:

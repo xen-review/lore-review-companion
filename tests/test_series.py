@@ -3,7 +3,11 @@
 import unittest
 
 from lore_review_companion.mail_parser import parse_message
-from lore_review_companion.series import change_id_candidates, discover_series, has_invalid_change_id_claims
+from lore_review_companion.series import (
+    change_id_candidates,
+    discover_series,
+    has_invalid_change_id_claims,
+)
 
 
 def message(message_id, subject, *, headers=""):
@@ -68,13 +72,17 @@ class DiscoverSeriesTests(unittest.TestCase):
         revisions = discover_series((first, second))
         self.assertEqual(len(revisions), 2)
         self.assertNotEqual(revisions[0].series_key, revisions[1].series_key)
-        self.assertEqual([change_id_candidates(revision) for revision in revisions],
-                         [("20260101-change-123",), ("20260101-change-123",)])
+        self.assertEqual(
+            [change_id_candidates(revision) for revision in revisions],
+            [("20260101-change-123",), ("20260101-change-123",)],
+        )
         ambiguous = parse_message(
             b"Message-ID: <ambiguous@example.test>\nSubject: [PATCH 1/1] change\n\n"
             b"change-id: first\nchange-id: second\n"
         )
-        self.assertEqual(change_id_candidates(discover_series((ambiguous,))[0]), ("first", "second"))
+        self.assertEqual(
+            change_id_candidates(discover_series((ambiguous,))[0]), ("first", "second")
+        )
         crlf = parse_message(
             b"Message-ID: <crlf@example.test>\r\nSubject: [PATCH 1/1] change\r\n\r\nchange-id: stable\r\n"
         )
@@ -106,24 +114,45 @@ class DiscoverSeriesTests(unittest.TestCase):
         revisions = discover_series([patch, reply])
 
         self.assertEqual(len(revisions), 1)
-        self.assertEqual([item.message_id for item in revisions[0].messages], ["patch@example.test"])
+        self.assertEqual(
+            [item.message_id for item in revisions[0].messages], ["patch@example.test"]
+        )
 
     def test_cyclic_thread_ancestry_is_not_publishable(self):
-        first = message("first@example.test", "[PATCH 1/2] first", headers="In-Reply-To: <second@example.test>\n")
-        second = message("second@example.test", "[PATCH 2/2] second", headers="In-Reply-To: <first@example.test>\n")
+        first = message(
+            "first@example.test",
+            "[PATCH 1/2] first",
+            headers="In-Reply-To: <second@example.test>\n",
+        )
+        second = message(
+            "second@example.test",
+            "[PATCH 2/2] second",
+            headers="In-Reply-To: <first@example.test>\n",
+        )
         revisions = discover_series([first, second])
         self.assertTrue(all(not revision.complete for revision in revisions))
-        self.assertTrue(any("thread ancestry contains a cycle" in revision.conflicts for revision in revisions))
+        self.assertTrue(
+            any(
+                "thread ancestry contains a cycle" in revision.conflicts
+                for revision in revisions
+            )
+        )
 
     def test_multiple_known_thread_roots_and_duplicate_ids_are_not_publishable(self):
         first = message("first@example.test", "[PATCH 1/1] first")
         second = message("second@example.test", "[PATCH 1/1] second")
         ambiguous = message(
-            "third@example.test", "[PATCH 1/1] third",
+            "third@example.test",
+            "[PATCH 1/1] third",
             headers="References: <first@example.test> <second@example.test>\n",
         )
         revisions = discover_series([first, second, ambiguous])
-        self.assertTrue(any("thread ancestry identifies multiple roots" in revision.conflicts for revision in revisions))
+        self.assertTrue(
+            any(
+                "thread ancestry identifies multiple roots" in revision.conflicts
+                for revision in revisions
+            )
+        )
         (duplicate,) = discover_series([first, first])
         self.assertFalse(duplicate.complete)
         self.assertIn("duplicate Message-ID: first@example.test", duplicate.conflicts)
@@ -137,13 +166,18 @@ class DiscoverSeriesTests(unittest.TestCase):
     def test_deep_ancestry_is_followed_without_a_total_depth_limit(self):
         messages = [message("0@example.test", "[PATCH 1/1] root")]
         for index in range(1, 1200):
-            messages.append(message(
-                f"{index}@example.test", f"[PATCH v{index + 1} 1/1] nested",
-                headers=f"In-Reply-To: <{index - 1}@example.test>\n",
-            ))
+            messages.append(
+                message(
+                    f"{index}@example.test",
+                    f"[PATCH v{index + 1} 1/1] nested",
+                    headers=f"In-Reply-To: <{index - 1}@example.test>\n",
+                )
+            )
         revisions = discover_series(reversed(messages))
         self.assertEqual(len(revisions), len(messages))
-        self.assertTrue(all(revision.root_message_id == "0@example.test" for revision in revisions))
+        self.assertTrue(
+            all(revision.root_message_id == "0@example.test" for revision in revisions)
+        )
         self.assertTrue(all(revision.complete for revision in revisions))
 
 

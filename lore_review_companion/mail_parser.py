@@ -44,12 +44,19 @@ def nntp_matches_source(article: bytes, source: bytes) -> bool:
         if message.defects:
             return None
         fields = list(message.raw_items())
-        transport = [name.lower() for name, _ in fields if name.lower() in _NNTP_TRANSPORT_HEADERS]
-        if (nntp and sorted(transport) != sorted(_NNTP_TRANSPORT_HEADERS)) or (not nntp and transport):
+        transport = [
+            name.lower()
+            for name, _ in fields
+            if name.lower() in _NNTP_TRANSPORT_HEADERS
+        ]
+        if (nntp and sorted(transport) != sorted(_NNTP_TRANSPORT_HEADERS)) or (
+            not nntp and transport
+        ):
             return None
         headers = tuple(
             (name, re.sub(r"\n(?=[ \t])", "", value))
-            for name, value in fields if name.lower() not in _NNTP_TRANSPORT_HEADERS
+            for name, value in fields
+            if name.lower() not in _NNTP_TRANSPORT_HEADERS
         )
         return headers, body
 
@@ -119,20 +126,35 @@ def extract_quoted_remarks(body: str) -> tuple[QuotedRemark, ...]:
     def flush() -> None:
         nonempty = [(number, text) for number, text in remarks if text.strip()]
         if quoted and nonempty:
-            results.append(QuotedRemark(
-                tuple(quoted), tuple(headers_by_depth.get(depth, ())),
-                "\n".join(text for _, text in remarks).strip(), depth, quote_start,
-                nonempty[0][0], nonempty[-1][0],
-            ))
+            results.append(
+                QuotedRemark(
+                    tuple(quoted),
+                    tuple(headers_by_depth.get(depth, ())),
+                    "\n".join(text for _, text in remarks).strip(),
+                    depth,
+                    quote_start,
+                    nonempty[0][0],
+                    nonempty[-1][0],
+                )
+            )
         remarks.clear()
 
     for number, line in enumerate(body.splitlines(), start=1):
         if not line.startswith(">"):
             trailer = _TRAILER_RE.fullmatch(line)
-            if line == "-- " or (trailer and trailer.group("name").lower() in {
-                "reviewed-by", "acked-by", "tested-by", "signed-off-by", "reported-by",
-                "suggested-by", "co-developed-by",
-            }):
+            if line == "-- " or (
+                trailer
+                and trailer.group("name").lower()
+                in {
+                    "reviewed-by",
+                    "acked-by",
+                    "tested-by",
+                    "signed-off-by",
+                    "reported-by",
+                    "suggested-by",
+                    "co-developed-by",
+                }
+            ):
                 flush()
                 break
             if quoted:
@@ -158,7 +180,9 @@ def extract_quoted_remarks(body: str) -> tuple[QuotedRemark, ...]:
             headers[:] = [raw]
         elif raw.startswith(("--- ", "+++ ")):
             header_kind = raw[:4]
-            headers[:] = [header for header in headers if not header.startswith(header_kind)]
+            headers[:] = [
+                header for header in headers if not header.startswith(header_kind)
+            ]
             headers.append(raw)
         quoted.append(raw)
     else:
@@ -189,7 +213,9 @@ def _message_ids(header: object | None) -> tuple[str, ...]:
     ids = []
     for match in _MESSAGE_ID_RE.finditer(value):
         if len(ids) >= MAX_THREAD_REFERENCES:
-            raise ValueError("Thread reference header exceeds the 1000 Message-ID limit")
+            raise ValueError(
+                "Thread reference header exceeds the 1000 Message-ID limit"
+            )
         ids.append(match.group(1))
     if ids:
         return tuple(ids)
@@ -210,15 +236,17 @@ def _message_time_estimate(message: Message) -> MessageTimeEstimate | None:
             try:
                 parsed = parsedate_to_datetime(value.strip())
                 if parsed.tzinfo is not None and parsed.utcoffset() is not None:
-                    return MessageTimeEstimate(parsed.astimezone(timezone.utc).isoformat(), source)
+                    return MessageTimeEstimate(
+                        parsed.astimezone(timezone.utc).isoformat(), source
+                    )
             except (TypeError, ValueError, OverflowError, IndexError):
                 continue
     return None
 
 
-def _subject_metadata(subject: str, has_thread_parent: bool) -> tuple[
-    MessageKind, int | None, int | None, int | None, str
-]:
+def _subject_metadata(
+    subject: str, has_thread_parent: bool
+) -> tuple[MessageKind, int | None, int | None, int | None, str]:
     if _REPLY_PREFIX_RE.match(subject):
         return "reply", None, None, None, _REPLY_PREFIX_RE.sub("", subject).strip()
 
@@ -231,9 +259,15 @@ def _subject_metadata(subject: str, has_thread_parent: bool) -> tuple[
     if patch_tag is not None:
         version_match = _PATCH_VERSION_RE.search(patch_tag)
         index_match = _PATCH_INDEX_RE.search(patch_tag)
-        patch_version = _bounded_header_number(version_match.group(1)) if version_match else None
-        patch_index = _bounded_header_number(index_match.group(1)) if index_match else None
-        series_size = _bounded_header_number(index_match.group(2)) if index_match else None
+        patch_version = (
+            _bounded_header_number(version_match.group(1)) if version_match else None
+        )
+        patch_index = (
+            _bounded_header_number(index_match.group(1)) if index_match else None
+        )
+        series_size = (
+            _bounded_header_number(index_match.group(2)) if index_match else None
+        )
         kind: MessageKind = "cover" if patch_index == 0 else "patch"
         title = _SUBJECT_TAG_RE.sub("", subject)
         title = _REPLY_PREFIX_RE.sub("", title).strip(" \t:-")
@@ -245,7 +279,11 @@ def _subject_metadata(subject: str, has_thread_parent: bool) -> tuple[
 
 
 def _body_text(message: Message) -> tuple[str, str | None]:
-    part = message.get_body(preferencelist=("plain",)) if message.is_multipart() else message
+    part = (
+        message.get_body(preferencelist=("plain",))
+        if message.is_multipart()
+        else message
+    )
     if part is None or part.get_content_type() != "text/plain":
         return "", "No text/plain body was available"
     try:
@@ -253,7 +291,9 @@ def _body_text(message: Message) -> tuple[str, str | None]:
     except (LookupError, UnicodeError) as error:
         return "", f"Could not decode message body: {error}"
     if isinstance(content, bytes):
-        content = content.decode(part.get_content_charset() or "utf-8", errors="replace")
+        content = content.decode(
+            part.get_content_charset() or "utf-8", errors="replace"
+        )
     return str(content), None
 
 
@@ -263,7 +303,9 @@ def _trailers(body: str, is_patch: bool) -> tuple[Trailer, ...]:
     if signature is not None:
         lines = lines[:signature]
     if is_patch:
-        diff_separator = next((index for index, line in enumerate(lines) if line == "---"), None)
+        diff_separator = next(
+            (index for index, line in enumerate(lines) if line == "---"), None
+        )
         if diff_separator is not None:
             lines = lines[:diff_separator]
 
@@ -365,4 +407,9 @@ def parse_mbox(path: Path) -> tuple[ParsedMessage, ...]:
     if not raw_input:
         return ()
     result = parse_message(raw_input)
-    return (replace(result, errors=("No mbox records found; retained the raw input", *result.errors)),)
+    return (
+        replace(
+            result,
+            errors=("No mbox records found; retained the raw input", *result.errors),
+        ),
+    )

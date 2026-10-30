@@ -45,15 +45,27 @@ def inspect_b4_runtime(python_executable: str, *, timeout: float = 30) -> dict:
     """Reject private-runtime drift before assembly or legacy review parsing."""
     try:
         result = subprocess.run(
-            [python_executable, "-I", "-c", _RUNTIME_PROBE], check=True,
-            capture_output=True, text=True, timeout=timeout,
-            env={"PATH": os.environ.get("PATH", os.defpath)}, stdin=subprocess.DEVNULL,
+            [python_executable, "-I", "-c", _RUNTIME_PROBE],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env={"PATH": os.environ.get("PATH", os.defpath)},
+            stdin=subprocess.DEVNULL,
         )
         runtime = json.loads(result.stdout)
     except (OSError, subprocess.SubprocessError, ValueError) as error:
-        raise B4AssemblyError("Cannot inspect the configured b4 interpreter; install the pinned runtime") from error
-    if not isinstance(runtime, dict) or runtime.get("versions") != PINNED_B4_VERSIONS or runtime.get("source_sha256") != PINNED_B4_SOURCE:
-        raise B4AssemblyError("Unsupported b4/liblore runtime fingerprint; install the reviewed source pins")
+        raise B4AssemblyError(
+            "Cannot inspect the configured b4 interpreter; install the pinned runtime"
+        ) from error
+    if (
+        not isinstance(runtime, dict)
+        or runtime.get("versions") != PINNED_B4_VERSIONS
+        or runtime.get("source_sha256") != PINNED_B4_SOURCE
+    ):
+        raise B4AssemblyError(
+            "Unsupported b4/liblore runtime fingerprint; install the reviewed source pins"
+        )
     return runtime
 
 
@@ -152,23 +164,35 @@ json.dump({'revision': series.get('revision'), 'change_id': series.get('change-i
 
 
 def read_local_review_drafts(
-    repository: Path, branch: str, reviewer_email: str, *, python_executable: str, timeout: float = 30,
+    repository: Path,
+    branch: str,
+    reviewer_email: str,
+    *,
+    python_executable: str,
+    timeout: float = 30,
 ) -> DraftSnapshot:
     """Read one reviewer's b4 drafts without changing the branch, checkout, or b4 database."""
     repository = repository.resolve(strict=True)
     if not repository.is_dir() or not branch.startswith("b4/review/"):
         raise ValueError("An existing repository and b4/review/ branch are required")
-    if not reviewer_email or any(ord(character) < 33 or ord(character) == 127 for character in reviewer_email):
+    if not reviewer_email or any(
+        ord(character) < 33 or ord(character) == 127 for character in reviewer_email
+    ):
         raise ValueError("An explicit reviewer email is required")
     if not python_executable:
         raise ValueError("The b4 Python executable is required")
     _check_review_runtime(python_executable, timeout)
     with tempfile.TemporaryDirectory(prefix="lore-gitea-drafts-") as temp_dir:
         environment = {
-            "PATH": os.environ.get("PATH", os.defpath), "HOME": temp_dir,
-            "XDG_CONFIG_HOME": temp_dir, "XDG_CACHE_HOME": temp_dir,
-            "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0", "GIT_NO_REPLACE_OBJECTS": "1",
+            "PATH": os.environ.get("PATH", os.defpath),
+            "HOME": temp_dir,
+            "XDG_CONFIG_HOME": temp_dir,
+            "XDG_CACHE_HOME": temp_dir,
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_NO_REPLACE_OBJECTS": "1",
             "PYTHONNOUSERSITE": "1",
         }
 
@@ -176,49 +200,87 @@ def read_local_review_drafts(
             try:
                 result = subprocess.run(
                     ["git", "--no-replace-objects", "-C", str(repository), *args],
-                    capture_output=True, text=True, timeout=timeout, env=environment, check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    env=environment,
+                    check=True,
                 )
-            except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            except (
+                OSError,
+                subprocess.CalledProcessError,
+                subprocess.TimeoutExpired,
+            ) as error:
                 raise B4ReviewError("Could not read the b4 review branch") from error
             return result.stdout.strip()
 
         git("check-ref-format", "--branch", branch)
-        commit = git("rev-parse", "--verify", "--end-of-options", f"refs/heads/{branch}^{{commit}}")
+        commit = git(
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            f"refs/heads/{branch}^{{commit}}",
+        )
         if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit) is None:
             raise B4ReviewError("b4 review branch did not resolve to a full commit ID")
         try:
             size = int(git("cat-file", "-s", commit))
         except ValueError as error:
-            raise B4ReviewError("Could not determine b4 tracking commit size") from error
+            raise B4ReviewError(
+                "Could not determine b4 tracking commit size"
+            ) from error
         if size > 8 * 1024 * 1024:
             raise B4ReviewError("b4 tracking commit exceeds the 8 MiB limit")
         try:
             result = subprocess.run(
-                [python_executable, "-c", _DRAFT_READER, str(repository), commit, reviewer_email],
-                capture_output=True, text=True, timeout=timeout, env=environment, check=False,
+                [
+                    python_executable,
+                    "-c",
+                    _DRAFT_READER,
+                    str(repository),
+                    commit,
+                    reviewer_email,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=environment,
+                check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as error:
             raise B4ReviewError(f"Could not run b4 draft reader: {error}") from error
         if result.returncode:
-            raise B4ReviewError(f"b4 draft reader failed ({result.returncode}): {result.stderr.strip()}")
+            raise B4ReviewError(
+                f"b4 draft reader failed ({result.returncode}): {result.stderr.strip()}"
+            )
     try:
         data = json.loads(result.stdout)
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
         raise B4ReviewError("b4 draft reader returned invalid JSON") from error
     if (
-        not isinstance(data, dict) or not isinstance(data.get("revision"), int)
-        or isinstance(data.get("revision"), bool) or data["revision"] < 1
-        or (data.get("change_id") is not None and not isinstance(data["change_id"], str))
+        not isinstance(data, dict)
+        or not isinstance(data.get("revision"), int)
+        or isinstance(data.get("revision"), bool)
+        or data["revision"] < 1
+        or (
+            data.get("change_id") is not None and not isinstance(data["change_id"], str)
+        )
         or not isinstance(data.get("drafts"), list)
     ):
         raise B4ReviewError("b4 draft reader returned invalid tracking data")
     drafts = []
     for item in data["drafts"]:
         if (
-            not isinstance(item, dict) or not isinstance(item.get("patch_index"), int)
-            or isinstance(item.get("patch_index"), bool) or item["patch_index"] < 0
-            or (item.get("message_id") is not None and not isinstance(item["message_id"], str))
-            or not isinstance(item.get("reply"), str) or not isinstance(item.get("trailers"), list)
+            not isinstance(item, dict)
+            or not isinstance(item.get("patch_index"), int)
+            or isinstance(item.get("patch_index"), bool)
+            or item["patch_index"] < 0
+            or (
+                item.get("message_id") is not None
+                and not isinstance(item["message_id"], str)
+            )
+            or not isinstance(item.get("reply"), str)
+            or not isinstance(item.get("trailers"), list)
             or any(not isinstance(trailer, str) for trailer in item["trailers"])
             or not isinstance(item.get("comments"), list)
         ):
@@ -226,19 +288,49 @@ def read_local_review_drafts(
         comments = []
         for comment in item["comments"]:
             if (
-                not isinstance(comment, dict) or not isinstance(comment.get("path"), str)
-                or not isinstance(comment.get("line"), int) or isinstance(comment.get("line"), bool)
+                not isinstance(comment, dict)
+                or not isinstance(comment.get("path"), str)
+                or not isinstance(comment.get("line"), int)
+                or isinstance(comment.get("line"), bool)
                 or not isinstance(comment.get("text"), str)
-                or (comment.get("content") is not None and not isinstance(comment["content"], str))
+                or (
+                    comment.get("content") is not None
+                    and not isinstance(comment["content"], str)
+                )
             ):
                 raise B4ReviewError("b4 draft reader returned an invalid comment")
-            comments.append(QuotedComment(comment["path"], comment["line"], comment["text"], comment.get("content")))
-        drafts.append(LocalDraft(item["patch_index"], item.get("message_id"), item["reply"], tuple(item["trailers"]), tuple(comments)))
-    return DraftSnapshot(branch, commit, reviewer_email, data["revision"], data.get("change_id"), tuple(drafts))
+            comments.append(
+                QuotedComment(
+                    comment["path"],
+                    comment["line"],
+                    comment["text"],
+                    comment.get("content"),
+                )
+            )
+        drafts.append(
+            LocalDraft(
+                item["patch_index"],
+                item.get("message_id"),
+                item["reply"],
+                tuple(item["trailers"]),
+                tuple(comments),
+            )
+        )
+    return DraftSnapshot(
+        branch,
+        commit,
+        reviewer_email,
+        data["revision"],
+        data.get("change_id"),
+        tuple(drafts),
+    )
 
 
 def extract_quoted_comments(
-    body: str, *, python_executable: str, timeout: float = 30,
+    body: str,
+    *,
+    python_executable: str,
+    timeout: float = 30,
 ) -> tuple[QuotedComment, ...]:
     """Run b4's version-checked quoted-reply parser in an isolated interpreter."""
     if not isinstance(body, str) or not python_executable:
@@ -254,13 +346,20 @@ def extract_quoted_comments(
         }
         try:
             completed = subprocess.run(
-                [python_executable, "-c", _REVIEW_PARSER], input=json.dumps(body),
-                capture_output=True, text=True, timeout=timeout, env=environment, check=False,
+                [python_executable, "-c", _REVIEW_PARSER],
+                input=json.dumps(body),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=environment,
+                check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as error:
             raise B4ReviewError(f"Could not run b4 review parser: {error}") from error
         if completed.returncode:
-            raise B4ReviewError(f"b4 review parser failed ({completed.returncode}): {completed.stderr.strip()}")
+            raise B4ReviewError(
+                f"b4 review parser failed ({completed.returncode}): {completed.stderr.strip()}"
+            )
         try:
             parsed = json.loads(completed.stdout)
         except (json.JSONDecodeError, UnicodeDecodeError) as error:
@@ -270,13 +369,22 @@ def extract_quoted_comments(
         comments = []
         for item in parsed:
             if (
-                not isinstance(item, dict) or not isinstance(item.get("path"), str)
-                or not isinstance(item.get("line"), int) or isinstance(item.get("line"), bool)
+                not isinstance(item, dict)
+                or not isinstance(item.get("path"), str)
+                or not isinstance(item.get("line"), int)
+                or isinstance(item.get("line"), bool)
                 or not isinstance(item.get("text"), str)
-                or (item.get("content") is not None and not isinstance(item["content"], str))
+                or (
+                    item.get("content") is not None
+                    and not isinstance(item["content"], str)
+                )
             ):
                 raise B4ReviewError("b4 review parser returned an invalid comment")
-            comments.append(QuotedComment(item["path"], item["line"], item["text"], item.get("content")))
+            comments.append(
+                QuotedComment(
+                    item["path"], item["line"], item["text"], item.get("content")
+                )
+            )
         return tuple(comments)
 
 
@@ -295,10 +403,18 @@ def assemble_local_series(
     messages = parse_mbox(mailbox_path)
     candidates = discover_series(messages)
     if len(candidates) != 1 or not candidates[0].complete or candidates[0].conflicts:
-        raise B4AssemblyError("Assembly requires exactly one complete, unambiguous source revision")
+        raise B4AssemblyError(
+            "Assembly requires exactly one complete, unambiguous source revision"
+        )
     selected = candidates[0]
-    if revision is not None and (not isinstance(revision, int) or isinstance(revision, bool) or revision != selected.revision):
-        raise B4AssemblyError("Requested revision does not match the complete source mailbox")
+    if revision is not None and (
+        not isinstance(revision, int)
+        or isinstance(revision, bool)
+        or revision != selected.revision
+    ):
+        raise B4AssemblyError(
+            "Requested revision does not match the complete source mailbox"
+        )
     interpreter = python_executable or sys.executable
     if executable is not None:
         located = shutil.which(executable)
@@ -307,9 +423,13 @@ def assemble_local_series(
         with Path(located).open("r", encoding="utf-8") as entrypoint:
             shebang = entrypoint.readline(4096).strip()
         if not shebang.startswith("#!/") or len(shebang[2:].split()) != 1:
-            raise B4AssemblyError("Configured b4 executable must use an explicit Python interpreter")
+            raise B4AssemblyError(
+                "Configured b4 executable must use an explicit Python interpreter"
+            )
         interpreter = shebang[2:]
-        if python_executable is not None and os.path.abspath(interpreter) != os.path.abspath(python_executable):
+        if python_executable is not None and os.path.abspath(
+            interpreter
+        ) != os.path.abspath(python_executable):
             raise B4AssemblyError("b4 executable and configured interpreter differ")
     inspect_b4_runtime(interpreter, timeout=timeout)
 
@@ -324,7 +444,8 @@ def assemble_local_series(
             "am",
             "--use-local-mbox",
             str(mailbox_path),
-            "--use-version", str(selected.revision),
+            "--use-version",
+            str(selected.revision),
             "--no-add-trailers",
             "--no-partial-reroll",
             "--no-cover",
@@ -360,9 +481,12 @@ def assemble_local_series(
             raise B4AssemblyError(
                 f"Expected one assembled patch mailbox, found {len(outputs)}"
             )
-        source_patches = tuple(sorted(
-            (message for message in messages if message.kind == "patch"), key=lambda message: message.patch_index or 1,
-        ))
+        source_patches = tuple(
+            sorted(
+                (message for message in messages if message.kind == "patch"),
+                key=lambda message: message.patch_index or 1,
+            )
+        )
         output_patches = parse_mbox(outputs[0])
 
         def patch_identity(message) -> tuple[str, str | None, str]:
@@ -373,7 +497,9 @@ def assemble_local_series(
             if body.startswith("From: "):
                 _, author = parseaddr(body.split("\n", 1)[0][6:])
                 if not author:
-                    raise B4AssemblyError("Source patch contains an invalid in-body author")
+                    raise B4AssemblyError(
+                        "Source patch contains an invalid in-body author"
+                    )
             _, separator, diff = body.partition("diff --git ")
             diff = diff.split("\n-- \n", 1)[0].rstrip()
             return message.subject_title, author, separator + diff
@@ -381,7 +507,9 @@ def assemble_local_series(
         if len(output_patches) != selected.expected_patch_count or tuple(
             patch_identity(message) for message in output_patches
         ) != tuple(patch_identity(message) for message in source_patches):
-            raise B4AssemblyError("Assembled mailbox does not match the selected patch membership")
+            raise B4AssemblyError(
+                "Assembled mailbox does not match the selected patch membership"
+            )
         return AssemblyResult(
             patch_mailbox=outputs[0].read_bytes(),
             stdout=completed.stdout,

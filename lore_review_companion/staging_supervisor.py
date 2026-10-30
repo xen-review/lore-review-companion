@@ -18,7 +18,11 @@ def _sync_directory(path: Path) -> None:
 
 
 def run_staging_sync(pending: Path, arguments: list[str]) -> int:
-    descriptor = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
+    descriptor = os.open(
+        pending,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+        0o600,
+    )
     try:
         os.fsync(descriptor)
         _sync_directory(pending.parent)
@@ -36,5 +40,7 @@ def run_staging_sync(pending: Path, arguments: list[str]) -> int:
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        raise SystemExit("Expected pending-file path and staging synchronization arguments")
+        raise SystemExit(
+            "Expected pending-file path and staging synchronization arguments"
+        )
     raise SystemExit(run_staging_sync(Path(sys.argv[1]), sys.argv[2:]))

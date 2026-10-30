@@ -10,9 +10,24 @@ from pathlib import Path
 from unittest.mock import patch
 
 from lore_review_companion.cli import main
-from lore_review_companion.git_branches import GitHttpCredentials, RevisionBranchConflict, RevisionBranchError, RevisionBranchUncertain, ensure_revision_branch, ensure_revision_refs, inspect_upstream_history, plan_staging_sync, revision_branch_name, sync_staging
+from lore_review_companion.git_branches import (
+    GitHttpCredentials,
+    RevisionBranchConflict,
+    RevisionBranchError,
+    RevisionBranchUncertain,
+    ensure_revision_branch,
+    ensure_revision_refs,
+    inspect_upstream_history,
+    plan_staging_sync,
+    revision_branch_name,
+    sync_staging,
+)
 from lore_review_companion.ledger import Ledger
-from lore_review_companion.preflight import GitPreflightError, preflight_patch_mailbox, prepare_patch_mailbox
+from lore_review_companion.preflight import (
+    GitPreflightError,
+    preflight_patch_mailbox,
+    prepare_patch_mailbox,
+)
 from lore_review_companion.series import discover_series
 from test_series import message
 
@@ -60,7 +75,10 @@ class PreflightTests(unittest.TestCase):
             return directory
 
         try:
-            with patch("lore_review_companion.preflight.tempfile.TemporaryDirectory", side_effect=make_directory):
+            with patch(
+                "lore_review_companion.preflight.tempfile.TemporaryDirectory",
+                side_effect=make_directory,
+            ):
                 return preflight_patch_mailbox(self.repository, base, mailbox)
         finally:
             self.assertTrue(directories)
@@ -97,69 +115,137 @@ class PreflightTests(unittest.TestCase):
         self.assertFalse((self.repository / ".git" / "rebase-apply").exists())
 
     def test_prepared_repository_exists_only_inside_context(self):
-        with prepare_patch_mailbox(self.repository, self.base, self.mailbox) as prepared:
+        with prepare_patch_mailbox(
+            self.repository, self.base, self.mailbox
+        ) as prepared:
             repository = prepared.repository
             self.assertTrue(repository.exists())
-            self.assertEqual(prepared.run_git("Inspect", "rev-parse", "HEAD"), prepared.result.head_commit)
+            self.assertEqual(
+                prepared.run_git("Inspect", "rev-parse", "HEAD"),
+                prepared.result.head_commit,
+            )
         self.assertFalse(repository.exists())
 
     def test_maps_ordered_patch_messages_to_exact_linear_commits(self):
-        with prepare_patch_mailbox(self.repository, self.base, self.mailbox) as prepared:
-            mapping = prepared.patch_commits(("first@example.test", "second@example.test"))
+        with prepare_patch_mailbox(
+            self.repository, self.base, self.mailbox
+        ) as prepared:
+            mapping = prepared.patch_commits(
+                ("first@example.test", "second@example.test")
+            )
             self.assertEqual(mapping[0].before_commit, self.base)
             self.assertEqual(mapping[1].before_commit, mapping[0].after_commit)
             self.assertEqual(mapping[1].after_commit, prepared.result.head_commit)
             self.assertNotEqual(mapping[0].after_commit, prepared.result.head_commit)
-            self.assertEqual(tuple(item.message_id for item in mapping), ("first@example.test", "second@example.test"))
-            for members in ((), ("first@example.test",), ("same@example.test", "same@example.test")):
-                with self.subTest(members=members), self.assertRaises(GitPreflightError):
+            self.assertEqual(
+                tuple(item.message_id for item in mapping),
+                ("first@example.test", "second@example.test"),
+            )
+            for members in (
+                (),
+                ("first@example.test",),
+                ("same@example.test", "same@example.test"),
+            ):
+                with (
+                    self.subTest(members=members),
+                    self.assertRaises(GitPreflightError),
+                ):
                     prepared.patch_commits(members)
-            with patch.object(type(prepared), "run_git", return_value=f"{prepared.result.head_commit} {self.base} other-parent"):
+            with patch.object(
+                type(prepared),
+                "run_git",
+                return_value=f"{prepared.result.head_commit} {self.base} other-parent",
+            ):
                 with self.assertRaises(GitPreflightError):
-                    prepared.patch_commits(("first@example.test", "second@example.test"))
+                    prepared.patch_commits(
+                        ("first@example.test", "second@example.test")
+                    )
 
     def test_revision_branch_dry_run_create_and_replay(self):
         remote = self.create_remote()
         arguments = {
-            "target_branch": "main", "series_key": "lore:thread@example.test",
-            "revision": 1, "expected_patch_count": 2,
+            "target_branch": "main",
+            "series_key": "lore:thread@example.test",
+            "revision": 1,
+            "expected_patch_count": 2,
         }
-        with prepare_patch_mailbox(self.repository, self.base, self.mailbox) as prepared:
+        with prepare_patch_mailbox(
+            self.repository, self.base, self.mailbox
+        ) as prepared:
             preview = ensure_revision_branch(prepared, remote, **arguments)
             self.assertTrue(preview.planned)
-            self.assertEqual(self.git("ls-remote", str(remote), f"refs/heads/{preview.branch}"), b"")
+            self.assertEqual(
+                self.git("ls-remote", str(remote), f"refs/heads/{preview.branch}"), b""
+            )
 
-            created = ensure_revision_branch(prepared, remote, write_enabled=True, **arguments)
-            replay = ensure_revision_branch(prepared, remote, write_enabled=True, **arguments)
+            created = ensure_revision_branch(
+                prepared, remote, write_enabled=True, **arguments
+            )
+            replay = ensure_revision_branch(
+                prepared, remote, write_enabled=True, **arguments
+            )
 
         self.assertTrue(created.created)
         self.assertFalse(replay.created)
         self.assertFalse(replay.planned)
         self.assertEqual(created.head_commit, replay.head_commit)
-        self.assertIn(created.head_commit.encode(), self.git("ls-remote", str(remote), f"refs/heads/{created.branch}"))
+        self.assertIn(
+            created.head_commit.encode(),
+            self.git("ls-remote", str(remote), f"refs/heads/{created.branch}"),
+        )
 
     def test_paired_revision_refs_keep_old_comparison_when_upstream_moves(self):
         remote = self.create_remote()
-        arguments = {"target_branch": "main", "series_key": "lore:thread@example.test", "revision": 1, "expected_patch_count": 2}
-        with prepare_patch_mailbox(self.repository, self.base, self.mailbox) as prepared:
+        arguments = {
+            "target_branch": "main",
+            "series_key": "lore:thread@example.test",
+            "revision": 1,
+            "expected_patch_count": 2,
+        }
+        with prepare_patch_mailbox(
+            self.repository, self.base, self.mailbox
+        ) as prepared:
             preview = ensure_revision_refs(prepared, remote, **arguments)
             self.assertTrue(preview.head.planned)
             self.assertTrue(preview.base.planned)
-            created = ensure_revision_refs(prepared, remote, write_enabled=True, **arguments)
+            created = ensure_revision_refs(
+                prepared, remote, write_enabled=True, **arguments
+            )
             self.assertTrue(created.head.created)
             self.assertTrue(created.base.created)
             self.assertEqual(created.base.head_commit, self.base)
-            prepared.run_git("Advance upstream", "push", "--", str(remote), f"{prepared.result.head_commit}:refs/heads/main")
-            replayed = ensure_revision_refs(prepared, remote, write_enabled=True, **arguments)
+            prepared.run_git(
+                "Advance upstream",
+                "push",
+                "--",
+                str(remote),
+                f"{prepared.result.head_commit}:refs/heads/main",
+            )
+            replayed = ensure_revision_refs(
+                prepared, remote, write_enabled=True, **arguments
+            )
             self.assertFalse(replayed.head.created)
             self.assertFalse(replayed.base.created)
             self.assertEqual(replayed.base.head_commit, self.base)
             refs = prepared.run_git("Inspect refs", "ls-remote", "--refs", str(remote))
-            other = ensure_revision_refs(prepared, remote, write_enabled=True, **{**arguments, "revision": 2, "target_branch": created.base.branch})
+            other = ensure_revision_refs(
+                prepared,
+                remote,
+                write_enabled=True,
+                **{**arguments, "revision": 2, "target_branch": created.base.branch},
+            )
             self.assertNotEqual(created.head.branch, other.head.branch)
             self.assertIn(f"{self.base}\trefs/heads/{created.base.branch}", refs)
-            self.assertIn(f"{created.head.head_commit}\trefs/heads/{created.head.branch}", refs)
-            prepared.run_git("Corrupt test base", "push", "--", str(remote), f"{prepared.result.head_commit}:refs/heads/{created.base.branch}")
+            self.assertIn(
+                f"{created.head.head_commit}\trefs/heads/{created.head.branch}", refs
+            )
+            prepared.run_git(
+                "Corrupt test base",
+                "push",
+                "--",
+                str(remote),
+                f"{prepared.result.head_commit}:refs/heads/{created.base.branch}",
+            )
             with self.assertRaises(RevisionBranchConflict):
                 ensure_revision_refs(prepared, remote, write_enabled=True, **arguments)
 
@@ -170,17 +256,32 @@ class PreflightTests(unittest.TestCase):
         before = self.git("ls-remote", str(remote), "refs/heads/staging")
         plan = plan_staging_sync(self.repository, remote)
         self.assertEqual(plan.target_commit, self.base)
-        self.assertEqual(plan.source_commit, self.git("rev-parse", "HEAD").decode().strip())
+        self.assertEqual(
+            plan.source_commit, self.git("rev-parse", "HEAD").decode().strip()
+        )
         self.assertEqual(len(plan.approval_digest()), 64)
-        self.assertEqual(self.git("ls-remote", str(remote), "refs/heads/staging"), before)
+        self.assertEqual(
+            self.git("ls-remote", str(remote), "refs/heads/staging"), before
+        )
         with redirect_stdout(StringIO()) as output:
-            self.assertEqual(main([
-                "plan-staging-sync", "--source-repository", str(self.repository), "--remote", str(remote),
-            ]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "plan-staging-sync",
+                        "--source-repository",
+                        str(self.repository),
+                        "--remote",
+                        str(remote),
+                    ]
+                ),
+                0,
+            )
         preview = json.loads(output.getvalue())
         self.assertEqual(preview["plan"]["target_commit"], self.base)
         self.assertEqual(preview["approval_digest"], plan.approval_digest())
-        self.assertEqual(self.git("ls-remote", str(remote), "refs/heads/staging"), before)
+        self.assertEqual(
+            self.git("ls-remote", str(remote), "refs/heads/staging"), before
+        )
         self.git("checkout", "-qb", "divergent", self.base)
         self.file.write_text("different\n")
         self.git("commit", "-qam", "different")
@@ -198,15 +299,40 @@ class PreflightTests(unittest.TestCase):
         self.git("push", str(remote), f"{self.base}:refs/heads/staging")
         other = Path(self.tempdir.name) / "other"
         subprocess.run(["git", "init", "-q", str(other)], check=True)
-        subprocess.run([
-            "git", "-C", str(other), "-c", "user.name=Test", "-c", "user.email=test@example.test",
-            "commit", "--allow-empty", "-qm", "unrelated",
-        ], check=True)
-        subprocess.run(["git", "-C", str(other), "push", str(remote), "HEAD:refs/heads/other"], check=True, capture_output=True)
-        unknown = subprocess.run(
-            ["git", "-C", str(other), "rev-parse", "HEAD"], check=True, capture_output=True,
-        ).stdout.decode().strip()
-        subprocess.run(["git", "-C", str(remote), "update-ref", "refs/heads/staging", unknown], check=True)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(other),
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.test",
+                "commit",
+                "--allow-empty",
+                "-qm",
+                "unrelated",
+            ],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(other), "push", str(remote), "HEAD:refs/heads/other"],
+            check=True,
+            capture_output=True,
+        )
+        unknown = (
+            subprocess.run(
+                ["git", "-C", str(other), "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+            )
+            .stdout.decode()
+            .strip()
+        )
+        subprocess.run(
+            ["git", "-C", str(remote), "update-ref", "refs/heads/staging", unknown],
+            check=True,
+        )
         with self.assertRaisesRegex(RevisionBranchConflict, "unavailable"):
             plan_staging_sync(self.repository, remote)
         (self.repository / ".git" / "info" / "grafts").write_text("")
@@ -223,8 +349,14 @@ class PreflightTests(unittest.TestCase):
         self.assertTrue(result.updated)
         self.assertFalse(result.reconciled)
         self.assertEqual(self.git("show-ref"), before)
-        self.assertTrue(self.git("ls-remote", str(remote), "refs/heads/staging").startswith(plan.source_commit.encode()))
-        self.assertFalse(sync_staging(plan_staging_sync(self.repository, remote)).updated)
+        self.assertTrue(
+            self.git("ls-remote", str(remote), "refs/heads/staging").startswith(
+                plan.source_commit.encode()
+            )
+        )
+        self.assertFalse(
+            sync_staging(plan_staging_sync(self.repository, remote)).updated
+        )
         with self.assertRaisesRegex(RevisionBranchConflict, "changed"):
             sync_staging(plan)
 
@@ -241,11 +373,18 @@ class PreflightTests(unittest.TestCase):
                 raise subprocess.TimeoutExpired(command, options["timeout"])
             return result
 
-        with patch("lore_review_companion.git_branches.subprocess.run", side_effect=lose_acknowledgment):
+        with patch(
+            "lore_review_companion.git_branches.subprocess.run",
+            side_effect=lose_acknowledgment,
+        ):
             result = sync_staging(plan)
         self.assertTrue(result.updated)
         self.assertTrue(result.reconciled)
-        self.assertTrue(self.git("ls-remote", str(remote), "refs/heads/staging").startswith(plan.source_commit.encode()))
+        self.assertTrue(
+            self.git("ls-remote", str(remote), "refs/heads/staging").startswith(
+                plan.source_commit.encode()
+            )
+        )
 
     def test_staging_sync_never_overwrites_a_racing_divergent_update(self):
         remote = self.create_remote()
@@ -261,16 +400,36 @@ class PreflightTests(unittest.TestCase):
         def race_push(command, **options):
             if "push" in command:
                 self.assertNotIn("--force", command)
-                self.assertFalse(any(argument.startswith("--force-with-lease") for argument in command))
-                original_run([
-                    "git", "-C", str(self.repository), "push", str(remote), f"{racing}:refs/heads/staging",
-                ], check=True, capture_output=True)
+                self.assertFalse(
+                    any(
+                        argument.startswith("--force-with-lease")
+                        for argument in command
+                    )
+                )
+                original_run(
+                    [
+                        "git",
+                        "-C",
+                        str(self.repository),
+                        "push",
+                        str(remote),
+                        f"{racing}:refs/heads/staging",
+                    ],
+                    check=True,
+                    capture_output=True,
+                )
             return original_run(command, **options)
 
-        with patch("lore_review_companion.git_branches.subprocess.run", side_effect=race_push):
+        with patch(
+            "lore_review_companion.git_branches.subprocess.run", side_effect=race_push
+        ):
             with self.assertRaises(RevisionBranchUncertain):
                 sync_staging(plan)
-        self.assertTrue(self.git("ls-remote", str(remote), "refs/heads/staging").startswith(racing.encode()))
+        self.assertTrue(
+            self.git("ls-remote", str(remote), "refs/heads/staging").startswith(
+                racing.encode()
+            )
+        )
 
     def test_upstream_history_is_read_only_and_does_not_infer_squashed_changes(self):
         head = self.git("rev-parse", "HEAD").decode().strip()
@@ -280,7 +439,12 @@ class PreflightTests(unittest.TestCase):
         self.assertFalse(included.shallow_repository)
         self.assertTrue(included.tree_matches_revision_head)
         self.assertFalse(included.local_arrival_candidate)
-        self.assertEqual(inspect_upstream_history(self.repository, head, "refs/heads/base-only").classification, "not_verified")
+        self.assertEqual(
+            inspect_upstream_history(
+                self.repository, head, "refs/heads/base-only"
+            ).classification,
+            "not_verified",
+        )
         unavailable = inspect_upstream_history(self.repository, "f" * 40, "HEAD")
         self.assertEqual(unavailable.classification, "head_unavailable")
         self.assertIsNone(unavailable.tree_matches_revision_head)
@@ -289,26 +453,74 @@ class PreflightTests(unittest.TestCase):
         ledger.record_parsed_message(patch)
         (revision,) = discover_series((patch,))
         ledger.record_series_revision(revision)
-        key = ("https://gitea.test/api/v1/repos/o/r", revision.series_key, revision.revision)
+        key = (
+            "https://gitea.test/api/v1/repos/o/r",
+            revision.series_key,
+            revision.revision,
+        )
         ledger.begin_publication(*key, "digest", self.base, "lore/branch", head)
-        ledger.transition_publication(*key, expected=("prepared",), status="complete", pull_index=7)
+        ledger.transition_publication(
+            *key, expected=("prepared",), status="complete", pull_index=7
+        )
         with redirect_stdout(StringIO()) as output:
-            self.assertEqual(main([
-                "inspect-upstream", "--ledger", str(ledger.path), "--repository", str(self.repository),
-                "--api-url", "https://gitea.test/api/v1/", "--owner", "o", "--repo", "r", "--pull-index", "7",
-            ]), 0)
-        self.assertEqual(json.loads(output.getvalue())["evidence"]["classification"], "head_in_history")
+            self.assertEqual(
+                main(
+                    [
+                        "inspect-upstream",
+                        "--ledger",
+                        str(ledger.path),
+                        "--repository",
+                        str(self.repository),
+                        "--api-url",
+                        "https://gitea.test/api/v1/",
+                        "--owner",
+                        "o",
+                        "--repo",
+                        "r",
+                        "--pull-index",
+                        "7",
+                    ]
+                ),
+                0,
+            )
+        self.assertEqual(
+            json.loads(output.getvalue())["evidence"]["classification"],
+            "head_in_history",
+        )
         with redirect_stdout(StringIO()) as output:
-            self.assertEqual(main([
-                "inspect-upstream", "--ledger", str(ledger.path), "--repository", str(self.repository),
-                "--api-url", "https://gitea.test/api/v1/", "--owner", "o", "--repo", "r", "--pull-index", "7",
-                "--patch-equivalence",
-            ]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "inspect-upstream",
+                        "--ledger",
+                        str(ledger.path),
+                        "--repository",
+                        str(self.repository),
+                        "--api-url",
+                        "https://gitea.test/api/v1/",
+                        "--owner",
+                        "o",
+                        "--repo",
+                        "r",
+                        "--pull-index",
+                        "7",
+                        "--patch-equivalence",
+                    ]
+                ),
+                0,
+            )
         evidence = json.loads(output.getvalue())["evidence"]["patch_equivalence"]
         self.assertEqual(evidence["base_commit"], self.base)
-        self.assertEqual([item["evidence"] for item in evidence["commits"]], ["ancestor", "ancestor"])
-        self.assertEqual(json.loads(output.getvalue())["evidence"]["revision_paths"], {"changed_paths": 1, "matching_paths": 1})
-        self.assertTrue(json.loads(output.getvalue())["evidence"]["local_arrival_candidate"])
+        self.assertEqual(
+            [item["evidence"] for item in evidence["commits"]], ["ancestor", "ancestor"]
+        )
+        self.assertEqual(
+            json.loads(output.getvalue())["evidence"]["revision_paths"],
+            {"changed_paths": 1, "matching_paths": 1},
+        )
+        self.assertTrue(
+            json.loads(output.getvalue())["evidence"]["local_arrival_candidate"]
+        )
         (self.repository / ".git" / "info" / "grafts").write_text("")
         with self.assertRaisesRegex(RevisionBranchError, "grafts"):
             inspect_upstream_history(self.repository, head, "HEAD")
@@ -326,7 +538,9 @@ class PreflightTests(unittest.TestCase):
         restored = inspect_upstream_history(self.repository, head, "HEAD")
         self.assertTrue(restored.tree_matches_revision_head)
         self.git("revert", "--no-edit", head)
-        reverted = inspect_upstream_history(self.repository, head, "HEAD", base_commit=self.base)
+        reverted = inspect_upstream_history(
+            self.repository, head, "HEAD", base_commit=self.base
+        )
         self.assertEqual(reverted.classification, "head_in_history")
         self.assertFalse(reverted.tree_matches_revision_head)
         self.assertFalse(reverted.local_arrival_candidate)
@@ -336,26 +550,74 @@ class PreflightTests(unittest.TestCase):
         first = self.git("rev-parse", "HEAD^").decode().strip()
         self.git("checkout", "-qb", "upstream", self.base)
         self.git("-c", "user.name=Other Committer", "cherry-pick", first)
-        partial = inspect_upstream_history(self.repository, head, "HEAD", base_commit=self.base)
+        partial = inspect_upstream_history(
+            self.repository, head, "HEAD", base_commit=self.base
+        )
         self.assertEqual(partial.classification, "not_verified")
         self.assertFalse(partial.local_arrival_candidate)
-        self.assertEqual([item.evidence for item in partial.patch_equivalence.commits], ["patch_equivalent", "not_found"])
-        self.assertEqual((partial.revision_paths.changed_paths, partial.revision_paths.matching_paths), (1, 0))
+        self.assertEqual(
+            [item.evidence for item in partial.patch_equivalence.commits],
+            ["patch_equivalent", "not_found"],
+        )
+        self.assertEqual(
+            (
+                partial.revision_paths.changed_paths,
+                partial.revision_paths.matching_paths,
+            ),
+            (1, 0),
+        )
         self.git("-c", "user.name=Other Committer", "cherry-pick", head)
-        before = (self.git("rev-parse", "HEAD"), self.git("show-ref"), self.git("status", "--porcelain"))
-        matched = inspect_upstream_history(self.repository, head, "HEAD", base_commit=self.base)
-        self.assertEqual([item.evidence for item in matched.patch_equivalence.commits], ["patch_equivalent", "patch_equivalent"])
+        before = (
+            self.git("rev-parse", "HEAD"),
+            self.git("show-ref"),
+            self.git("status", "--porcelain"),
+        )
+        matched = inspect_upstream_history(
+            self.repository, head, "HEAD", base_commit=self.base
+        )
+        self.assertEqual(
+            [item.evidence for item in matched.patch_equivalence.commits],
+            ["patch_equivalent", "patch_equivalent"],
+        )
         self.assertFalse(matched.local_arrival_candidate)
-        self.assertEqual((matched.revision_paths.changed_paths, matched.revision_paths.matching_paths), (1, 1))
-        self.assertEqual((self.git("rev-parse", "HEAD"), self.git("show-ref"), self.git("status", "--porcelain")), before)
+        self.assertEqual(
+            (
+                matched.revision_paths.changed_paths,
+                matched.revision_paths.matching_paths,
+            ),
+            (1, 1),
+        )
+        self.assertEqual(
+            (
+                self.git("rev-parse", "HEAD"),
+                self.git("show-ref"),
+                self.git("status", "--porcelain"),
+            ),
+            before,
+        )
         with self.assertRaisesRegex(RevisionBranchError, "scan limit"):
-            inspect_upstream_history(self.repository, head, "HEAD", base_commit=self.base, patch_scan_limit=1)
+            inspect_upstream_history(
+                self.repository, head, "HEAD", base_commit=self.base, patch_scan_limit=1
+            )
         self.git("revert", "--no-edit", "HEAD")
-        reverted = inspect_upstream_history(self.repository, head, "HEAD", base_commit=self.base)
-        self.assertEqual([item.evidence for item in reverted.patch_equivalence.commits], ["patch_equivalent", "patch_equivalent"])
-        self.assertEqual((reverted.revision_paths.changed_paths, reverted.revision_paths.matching_paths), (1, 0))
+        reverted = inspect_upstream_history(
+            self.repository, head, "HEAD", base_commit=self.base
+        )
+        self.assertEqual(
+            [item.evidence for item in reverted.patch_equivalence.commits],
+            ["patch_equivalent", "patch_equivalent"],
+        )
+        self.assertEqual(
+            (
+                reverted.revision_paths.changed_paths,
+                reverted.revision_paths.matching_paths,
+            ),
+            (1, 0),
+        )
 
-    def test_upstream_revision_paths_include_renames_modes_and_ignore_unrelated_files(self):
+    def test_upstream_revision_paths_include_renames_modes_and_ignore_unrelated_files(
+        self,
+    ):
         renamed = "renamed\nfile.txt"
         self.git("mv", "content.txt", renamed)
         self.git("commit", "-qm", "rename")
@@ -363,17 +625,35 @@ class PreflightTests(unittest.TestCase):
         (self.repository / "unrelated.txt").write_text("unrelated\n")
         self.git("add", "unrelated.txt")
         self.git("commit", "-qm", "unrelated")
-        matched = inspect_upstream_history(self.repository, head, "HEAD", base_commit=self.base)
+        matched = inspect_upstream_history(
+            self.repository, head, "HEAD", base_commit=self.base
+        )
         self.assertFalse(matched.tree_matches_revision_head)
-        self.assertEqual((matched.revision_paths.changed_paths, matched.revision_paths.matching_paths), (2, 2))
+        self.assertEqual(
+            (
+                matched.revision_paths.changed_paths,
+                matched.revision_paths.matching_paths,
+            ),
+            (2, 2),
+        )
         self.assertTrue(matched.local_arrival_candidate)
         (self.repository / renamed).chmod(0o755)
         self.git("add", renamed)
         self.git("commit", "-qm", "change mode")
-        changed = inspect_upstream_history(self.repository, head, "HEAD", base_commit=self.base)
-        self.assertEqual((changed.revision_paths.changed_paths, changed.revision_paths.matching_paths), (2, 1))
+        changed = inspect_upstream_history(
+            self.repository, head, "HEAD", base_commit=self.base
+        )
+        self.assertEqual(
+            (
+                changed.revision_paths.changed_paths,
+                changed.revision_paths.matching_paths,
+            ),
+            (2, 1),
+        )
         self.assertFalse(changed.local_arrival_candidate)
-        self.assertIsNone(inspect_upstream_history(self.repository, head, "HEAD").revision_paths)
+        self.assertIsNone(
+            inspect_upstream_history(self.repository, head, "HEAD").revision_paths
+        )
 
     def test_upstream_revision_paths_report_net_zero_without_inferring_arrival(self):
         self.git("checkout", "-qb", "net-zero", self.base)
@@ -381,14 +661,24 @@ class PreflightTests(unittest.TestCase):
         self.git("commit", "-qam", "temporary")
         self.git("revert", "--no-edit", "HEAD")
         head = self.git("rev-parse", "HEAD").decode().strip()
-        evidence = inspect_upstream_history(self.repository, head, "HEAD", base_commit=self.base)
-        self.assertEqual((evidence.revision_paths.changed_paths, evidence.revision_paths.matching_paths), (0, 0))
+        evidence = inspect_upstream_history(
+            self.repository, head, "HEAD", base_commit=self.base
+        )
+        self.assertEqual(
+            (
+                evidence.revision_paths.changed_paths,
+                evidence.revision_paths.matching_paths,
+            ),
+            (0, 0),
+        )
         self.assertFalse(evidence.local_arrival_candidate)
 
     def test_upstream_arrival_candidate_rejects_shallow_history(self):
         head = self.git("rev-parse", "HEAD").decode().strip()
         (self.repository / ".git" / "shallow").write_text(f"{self.base}\n")
-        evidence = inspect_upstream_history(self.repository, head, "HEAD", base_commit=self.base)
+        evidence = inspect_upstream_history(
+            self.repository, head, "HEAD", base_commit=self.base
+        )
         self.assertTrue(evidence.shallow_repository)
         self.assertEqual(evidence.classification, "head_in_history")
         self.assertFalse(evidence.local_arrival_candidate)
@@ -400,20 +690,42 @@ class PreflightTests(unittest.TestCase):
         head = self.git("rev-parse", "HEAD").decode().strip()
         self.git("checkout", "-qb", "partial-upstream", self.base)
         self.git("cherry-pick", head)
-        partial = inspect_upstream_history(self.repository, head, "HEAD", base_commit=self.base)
-        self.assertEqual((partial.revision_paths.changed_paths, partial.revision_paths.matching_paths), (2, 1))
+        partial = inspect_upstream_history(
+            self.repository, head, "HEAD", base_commit=self.base
+        )
+        self.assertEqual(
+            (
+                partial.revision_paths.changed_paths,
+                partial.revision_paths.matching_paths,
+            ),
+            (2, 1),
+        )
         self.git("revert", "--no-edit", "HEAD")
-        reverted = inspect_upstream_history(self.repository, head, "HEAD", base_commit=self.base)
-        self.assertEqual((reverted.revision_paths.changed_paths, reverted.revision_paths.matching_paths), (2, 0))
+        reverted = inspect_upstream_history(
+            self.repository, head, "HEAD", base_commit=self.base
+        )
+        self.assertEqual(
+            (
+                reverted.revision_paths.changed_paths,
+                reverted.revision_paths.matching_paths,
+            ),
+            (2, 0),
+        )
 
-    def test_upstream_patch_equivalence_rejects_unavailable_unrelated_and_merge_history(self):
+    def test_upstream_patch_equivalence_rejects_unavailable_unrelated_and_merge_history(
+        self,
+    ):
         head = self.git("rev-parse", "HEAD").decode().strip()
         first = self.git("rev-parse", "HEAD^").decode().strip()
         with self.assertRaisesRegex(RevisionBranchError, "must be available"):
-            inspect_upstream_history(self.repository, "f" * 40, "HEAD", base_commit=self.base)
+            inspect_upstream_history(
+                self.repository, "f" * 40, "HEAD", base_commit=self.base
+            )
         self.git("update-ref", "refs/heads/base-only", self.base)
         with self.assertRaisesRegex(RevisionBranchError, "ancestor of both"):
-            inspect_upstream_history(self.repository, head, "refs/heads/base-only", base_commit=first)
+            inspect_upstream_history(
+                self.repository, head, "refs/heads/base-only", base_commit=first
+            )
         self.git("checkout", "-qb", "side", first)
         (self.repository / "other.txt").write_text("other\n")
         self.git("add", "other.txt")
@@ -422,27 +734,39 @@ class PreflightTests(unittest.TestCase):
         self.git("merge", "--no-ff", "-qm", "merge", "side")
         merge_head = self.git("rev-parse", "HEAD").decode().strip()
         with self.assertRaisesRegex(RevisionBranchError, "non-merge"):
-            inspect_upstream_history(self.repository, merge_head, "HEAD", base_commit=self.base)
+            inspect_upstream_history(
+                self.repository, merge_head, "HEAD", base_commit=self.base
+            )
 
     def test_revision_branch_rejects_mismatched_target_and_patch_count(self):
         remote = self.create_remote()
         arguments = {
-            "target_branch": "main", "series_key": "lore:thread@example.test",
-            "revision": 1, "expected_patch_count": 2,
+            "target_branch": "main",
+            "series_key": "lore:thread@example.test",
+            "revision": 1,
+            "expected_patch_count": 2,
         }
         self.git("push", str(remote), "HEAD:refs/heads/main")
-        with prepare_patch_mailbox(self.repository, self.base, self.mailbox) as prepared:
+        with prepare_patch_mailbox(
+            self.repository, self.base, self.mailbox
+        ) as prepared:
             with self.assertRaisesRegex(RevisionBranchConflict, "Target ref"):
-                ensure_revision_branch(prepared, remote, write_enabled=True, **arguments)
+                ensure_revision_branch(
+                    prepared, remote, write_enabled=True, **arguments
+                )
             arguments["expected_patch_count"] = 1
             with self.assertRaisesRegex(ValueError, "patch count"):
-                ensure_revision_branch(prepared, remote, write_enabled=True, **arguments)
+                ensure_revision_branch(
+                    prepared, remote, write_enabled=True, **arguments
+                )
 
     def test_revision_branch_create_only_lease_rejects_racing_fast_forward(self):
         remote = self.create_remote()
         series_key = "lore:thread@example.test"
         branch = revision_branch_name(series_key, 1)
-        with prepare_patch_mailbox(self.repository, self.base, self.mailbox) as prepared:
+        with prepare_patch_mailbox(
+            self.repository, self.base, self.mailbox
+        ) as prepared:
             run_git = type(prepared).run_git
 
             def race(instance, stage, *arguments, **kwargs):
@@ -453,8 +777,13 @@ class PreflightTests(unittest.TestCase):
             with patch.object(type(prepared), "run_git", new=race):
                 with self.assertRaisesRegex(RevisionBranchConflict, "already differs"):
                     ensure_revision_branch(
-                        prepared, remote, target_branch="main", series_key=series_key,
-                        revision=1, expected_patch_count=2, write_enabled=True,
+                        prepared,
+                        remote,
+                        target_branch="main",
+                        series_key=series_key,
+                        revision=1,
+                        expected_patch_count=2,
+                        write_enabled=True,
                     )
 
         remote_ref = self.git("ls-remote", str(remote), f"refs/heads/{branch}")
@@ -462,7 +791,9 @@ class PreflightTests(unittest.TestCase):
 
     def test_revision_branch_reconciles_lost_push_acknowledgment(self):
         remote = self.create_remote()
-        with prepare_patch_mailbox(self.repository, self.base, self.mailbox) as prepared:
+        with prepare_patch_mailbox(
+            self.repository, self.base, self.mailbox
+        ) as prepared:
             run_git = type(prepared).run_git
 
             def lose_acknowledgment(instance, stage, *arguments, **kwargs):
@@ -473,8 +804,13 @@ class PreflightTests(unittest.TestCase):
 
             with patch.object(type(prepared), "run_git", new=lose_acknowledgment):
                 result = ensure_revision_branch(
-                    prepared, remote, target_branch="main", series_key="lore:thread@example.test",
-                    revision=1, expected_patch_count=2, write_enabled=True,
+                    prepared,
+                    remote,
+                    target_branch="main",
+                    series_key="lore:thread@example.test",
+                    revision=1,
+                    expected_patch_count=2,
+                    write_enabled=True,
                 )
 
         self.assertFalse(result.created)
@@ -484,7 +820,9 @@ class PreflightTests(unittest.TestCase):
         credentials = GitHttpCredentials("operator", "sample-token")
         environment = credentials.environment("http://127.0.0.1:30002/o/r.git")
         self.assertEqual(environment["GIT_CONFIG_KEY_0"], "http.extraHeader")
-        self.assertTrue(environment["GIT_CONFIG_VALUE_0"].startswith("Authorization: Basic "))
+        self.assertTrue(
+            environment["GIT_CONFIG_VALUE_0"].startswith("Authorization: Basic ")
+        )
         self.assertEqual(environment["GIT_CONFIG_VALUE_1"], "false")
         self.assertNotIn("sample-token", repr(credentials))
         with self.assertRaisesRegex(ValueError, "require HTTPS"):

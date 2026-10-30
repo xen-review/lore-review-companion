@@ -57,8 +57,12 @@ class DiffIndex:
     """Index changed and context lines from a unified Git diff."""
 
     def __init__(self, diff_text: str):
-        self._positions: dict[tuple[str, str], list[tuple[Anchor, str]]] = defaultdict(list)
-        self._ranges: dict[tuple[str, str, int], list[tuple[str, int]]] = defaultdict(list)
+        self._positions: dict[tuple[str, str], list[tuple[Anchor, str]]] = defaultdict(
+            list
+        )
+        self._ranges: dict[tuple[str, str, int], list[tuple[str, int]]] = defaultdict(
+            list
+        )
         old_path = ""
         new_path = ""
         old_line = 0
@@ -114,9 +118,15 @@ class DiffIndex:
                 old_line += 1
                 new_line += 1
 
-    def resolve_quote(self, remark: QuotedRemark, *, max_lines: int = 50) -> RangeAnchor | None:
+    def resolve_quote(
+        self, remark: QuotedRemark, *, max_lines: int = 50
+    ) -> RangeAnchor | None:
         """Resolve a complete exact quote on one side without line-hint guesses."""
-        if not isinstance(max_lines, int) or isinstance(max_lines, bool) or max_lines < 1:
+        if (
+            not isinstance(max_lines, int)
+            or isinstance(max_lines, bool)
+            or max_lines < 1
+        ):
             raise ValueError("The maximum selected line count must be positive")
         paths = set()
         for header in (*remark.headers, *remark.quote):
@@ -132,7 +142,9 @@ class DiffIndex:
             quote.pop()
         tokens = []
         for line in quote:
-            if line.startswith(("diff --git ", "index ", "--- ", "+++ ")) or _HUNK_RE.match(line):
+            if line.startswith(
+                ("diff --git ", "index ", "--- ", "+++ ")
+            ) or _HUNK_RE.match(line):
                 if tokens:
                     return None
                 continue
@@ -152,16 +164,22 @@ class DiffIndex:
             if path != selected_path or candidate_side != side:
                 continue
             for offset in range(len(lines) - len(tokens) + 1):
-                window = lines[offset:offset + len(tokens)]
+                window = lines[offset : offset + len(tokens)]
                 if [content for content, _ in window] != tokens:
                     continue
                 start = window[0][1]
-                if [number for _, number in window] != list(range(start, start + len(tokens))):
+                if [number for _, number in window] != list(
+                    range(start, start + len(tokens))
+                ):
                     continue
-                candidates.add(RangeAnchor(
-                    path, start if side == "old" else 0, start if side == "new" else 0,
-                    len(tokens) - 1,
-                ))
+                candidates.add(
+                    RangeAnchor(
+                        path,
+                        start if side == "old" else 0,
+                        start if side == "new" else 0,
+                        len(tokens) - 1,
+                    )
+                )
         return next(iter(candidates)) if len(candidates) == 1 else None
 
     def resolve(self, comment: dict[str, object]) -> Anchor | None:
@@ -176,8 +194,11 @@ class DiffIndex:
         if path.startswith(("a/", "b/")):
             paths.add(path[2:])
         candidates = [
-            anchor for candidate_path in paths
-            for anchor, candidate_side in self._positions.get((candidate_path, line), [])
+            anchor
+            for candidate_path in paths
+            for anchor, candidate_side in self._positions.get(
+                (candidate_path, line), []
+            )
             if side is None or candidate_side == side
         ]
         if len({candidate.path for candidate in candidates}) > 1:
@@ -198,7 +219,9 @@ class DiffIndex:
         return hinted[0] if len(hinted) == 1 else None
 
 
-def resolve_comments(diff_text: str, comments: Iterable[dict[str, object]]) -> list[Anchor | None]:
+def resolve_comments(
+    diff_text: str, comments: Iterable[dict[str, object]]
+) -> list[Anchor | None]:
     """Resolve extracted b4 comments in input order; unresolved comments stay None."""
     index = DiffIndex(diff_text)
     return [index.resolve(comment) for comment in comments]

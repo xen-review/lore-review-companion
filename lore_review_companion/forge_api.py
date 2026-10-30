@@ -52,15 +52,26 @@ def read_private_token(path: Path) -> str:
         descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
         try:
             info = os.fstat(descriptor)
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077 or not 1 <= info.st_size <= 4096:
-                raise ValueError("Token file must be a private regular file owned by this user")
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.geteuid()
+                or info.st_mode & 0o077
+                or not 1 <= info.st_size <= 4096
+            ):
+                raise ValueError(
+                    "Token file must be a private regular file owned by this user"
+                )
             raw = os.read(descriptor, 4097)
         finally:
             os.close(descriptor)
         token = raw.decode("ascii").strip()
     except (OSError, UnicodeError) as error:
         raise ValueError("Token file could not be read safely") from error
-    if not token or len(raw) > 4096 or any(ord(character) < 33 or ord(character) == 127 for character in token):
+    if (
+        not token
+        or len(raw) > 4096
+        or any(ord(character) < 33 or ord(character) == 127 for character in token)
+    ):
         raise ValueError("Token file contains an invalid credential")
     return token
 
@@ -79,9 +90,12 @@ class ForgeAPI:
     ):
         origin = urlsplit(base_url)
         if (
-            origin.scheme not in ("http", "https") or not origin.hostname
-            or origin.username is not None or origin.password is not None
-            or origin.query or origin.fragment
+            origin.scheme not in ("http", "https")
+            or not origin.hostname
+            or origin.username is not None
+            or origin.password is not None
+            or origin.query
+            or origin.fragment
         ):
             raise ValueError("Gitea API base URL must be a credential-free HTTP(S) URL")
         if token and origin.scheme == "http":
@@ -90,7 +104,9 @@ class ForgeAPI:
             except ValueError:
                 is_loopback = origin.hostname.lower() == "localhost"
             if not is_loopback:
-                raise ValueError("Gitea API credentials require HTTPS except on loopback")
+                raise ValueError(
+                    "Gitea API credentials require HTTPS except on loopback"
+                )
         if timeout <= 0:
             raise ValueError("timeout must be positive")
         if max_retries < 0:
@@ -113,7 +129,13 @@ class ForgeAPI:
         params: Mapping[str, Any] | None = None,
         payload: Mapping[str, Any] | None = None,
     ) -> Any:
-        status, response_body = self._request(path, method=method, params=params, payload=payload, max_bytes=MAX_JSON_BYTES)
+        status, response_body = self._request(
+            path,
+            method=method,
+            params=params,
+            payload=payload,
+            max_bytes=MAX_JSON_BYTES,
+        )
         if response_body is None:
             return None
         try:
@@ -122,25 +144,40 @@ class ForgeAPI:
             raise ForgeAPIError(status, "Gitea returned invalid JSON") from error
 
     def request_bytes(
-        self, path: str, *, params: Mapping[str, Any] | None = None,
+        self,
+        path: str,
+        *,
+        params: Mapping[str, Any] | None = None,
         max_bytes: int = 8 * 1024 * 1024,
     ) -> bytes:
         if max_bytes < 1:
             raise ValueError("max_bytes must be positive")
-        _, response_body = self._request(path, params=params, accept="text/plain", max_bytes=max_bytes)
+        _, response_body = self._request(
+            path, params=params, accept="text/plain", max_bytes=max_bytes
+        )
         return response_body or b""
 
     def _request(
-        self, path: str, *, method: str = "GET", params: Mapping[str, Any] | None = None,
-        payload: Mapping[str, Any] | None = None, accept: str = "application/json",
+        self,
+        path: str,
+        *,
+        method: str = "GET",
+        params: Mapping[str, Any] | None = None,
+        payload: Mapping[str, Any] | None = None,
+        accept: str = "application/json",
         max_bytes: int | None = None,
     ) -> tuple[int, bytes | None]:
         parts = urlsplit(path)
         if (
-            parts.scheme or parts.netloc or parts.query or parts.fragment
+            parts.scheme
+            or parts.netloc
+            or parts.query
+            or parts.fragment
             or any(ord(character) < 32 or ord(character) == 127 for character in path)
         ):
-            raise ValueError("Gitea API path must be a relative path without a query or fragment")
+            raise ValueError(
+                "Gitea API path must be a relative path without a query or fragment"
+            )
         for segment in parts.path.lstrip("/").split("/"):
             decoded = segment
             while True:
@@ -169,15 +206,25 @@ class ForgeAPI:
                     response = self.transport(request, self.timeout)
                     try:
                         status = response.status
-                        response_body = response.read(max_bytes + 1) if max_bytes is not None else response.read()
+                        response_body = (
+                            response.read(max_bytes + 1)
+                            if max_bytes is not None
+                            else response.read()
+                        )
                         retry_after = response.headers.get("Retry-After")
                     finally:
                         response.close()
                 except HTTPError as error:
                     try:
                         status = error.code
-                        response_body = error.read(max_bytes + 1) if max_bytes is not None else error.read()
-                        retry_after = error.headers.get("Retry-After") if error.headers else None
+                        response_body = (
+                            error.read(max_bytes + 1)
+                            if max_bytes is not None
+                            else error.read()
+                        )
+                        retry_after = (
+                            error.headers.get("Retry-After") if error.headers else None
+                        )
                     finally:
                         error.close()
             except (URLError, OSError, EOFError, HTTPException) as error:
@@ -185,17 +232,27 @@ class ForgeAPI:
                     self._wait(attempt, None)
                     attempt += 1
                     continue
-                detail = error.reason if isinstance(error, URLError) else type(error).__name__
+                detail = (
+                    error.reason
+                    if isinstance(error, URLError)
+                    else type(error).__name__
+                )
                 raise ForgeAPIError(None, f"Gitea request failed: {detail}") from error
 
             if 200 <= status < 300:
                 if max_bytes is not None and len(response_body) > max_bytes:
-                    raise ForgeAPIError(status, f"Gitea response exceeds {max_bytes} bytes")
+                    raise ForgeAPIError(
+                        status, f"Gitea response exceeds {max_bytes} bytes"
+                    )
                 if status == 204 or not response_body:
                     return status, None
                 return status, response_body
 
-            if retryable and status in (429, 500, 502, 503, 504) and attempt < self.max_retries:
+            if (
+                retryable
+                and status in (429, 500, 502, 503, 504)
+                and attempt < self.max_retries
+            ):
                 self._wait(attempt, retry_after)
                 attempt += 1
                 continue
@@ -250,8 +307,11 @@ def authenticated_user(api: ForgeAPI) -> AuthenticatedUser:
     login = user.get("login") if isinstance(user, dict) else None
     user_id = user.get("id") if isinstance(user, dict) else None
     if (
-        not isinstance(login, str) or not login.strip()
-        or not isinstance(user_id, int) or isinstance(user_id, bool) or user_id < 1
+        not isinstance(login, str)
+        or not login.strip()
+        or not isinstance(user_id, int)
+        or isinstance(user_id, bool)
+        or user_id < 1
     ):
         raise ValueError("Gitea did not identify the authenticated account")
     return AuthenticatedUser(user_id, login)

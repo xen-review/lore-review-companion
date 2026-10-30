@@ -39,8 +39,14 @@ class DeliveryResult:
 
 
 def with_tool_attribution(body: str, login: str) -> str:
-    if not isinstance(login, str) or len(login) > 255 or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", login) is None:
-        raise ValueError("Authenticated Gitea login cannot be safely used for attribution")
+    if (
+        not isinstance(login, str)
+        or len(login) > 255
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", login) is None
+    ):
+        raise ValueError(
+            "Authenticated Gitea login cannot be safely used for attribution"
+        )
     return f"Review mirror on behalf of @{login}\n\n{body}"
 
 
@@ -55,14 +61,30 @@ def submission_text(text: str) -> str:
     text = text.replace("\r\n", "\n").rstrip()
     text = re.sub(r"\n-- ?\n[0-9][^\n]*\Z", "", text).rstrip()
     lines = text.splitlines()
-    summary = next((index for index in range(len(lines) - 1, -1, -1)
-                    if re.fullmatch(r"\s*\d+ files? changed(?:, \d+ (?:insertions?\(\+\)|deletions?\(-\)))*\s*", lines[index])), None)
+    summary = next(
+        (
+            index
+            for index in range(len(lines) - 1, -1, -1)
+            if re.fullmatch(
+                r"\s*\d+ files? changed(?:, \d+ (?:insertions?\(\+\)|deletions?\(-\)))*\s*",
+                lines[index],
+            )
+        ),
+        None,
+    )
     if summary is not None:
         start = summary
-        while start > 0 and re.fullmatch(r" .+\s+\|\s+(?:\d+\s*[-+]*|Bin .+)", lines[start - 1]):
+        while start > 0 and re.fullmatch(
+            r" .+\s+\|\s+(?:\d+\s*[-+]*|Bin .+)", lines[start - 1]
+        ):
             start -= 1
-        if start < summary and all(not line.strip() or re.fullmatch(r" (?:create|delete) mode .+| (?:rename|copy) .+| mode change .+", line)
-                                   for line in lines[summary + 1:]):
+        if start < summary and all(
+            not line.strip()
+            or re.fullmatch(
+                r" (?:create|delete) mode .+| (?:rename|copy) .+| mode change .+", line
+            )
+            for line in lines[summary + 1 :]
+        ):
             lines = lines[:start]
             if lines and lines[-1] == "---":
                 lines.pop()
@@ -70,12 +92,22 @@ def submission_text(text: str) -> str:
     return text
 
 
-def imported_mail_text(text: str, message_id: str, source_url: str, body_format: str | None, author: str = "") -> str:
+def imported_mail_text(
+    text: str,
+    message_id: str,
+    source_url: str,
+    body_format: str | None,
+    author: str = "",
+) -> str:
     if body_format is None:
         return quote_untrusted_text(text)
     if body_format == "mail-text-v2":
-        url = html.escape(f"{source_url.rstrip('/')}/{quote(message_id, safe='@')}/", quote=True)
-        label = html.escape(f"Original review comment by {author or 'the sender'}", quote=True)
+        url = html.escape(
+            f"{source_url.rstrip('/')}/{quote(message_id, safe='@')}/", quote=True
+        )
+        label = html.escape(
+            f"Original review comment by {author or 'the sender'}", quote=True
+        )
         link = f'<small><a href="{url}" rel="nofollow noreferrer">{label}</a></small>'
         return f"{text.rstrip()}\n\n---\n\n{link}" if text.strip() else link
     if body_format != "mail-text-v1":
@@ -88,13 +120,20 @@ def imported_mail_text(text: str, message_id: str, source_url: str, body_format:
 
 
 def reply_prose(text: str) -> str:
-    return "\n".join(line for line in text.splitlines()
-                     if not line.startswith(">") and not re.fullmatch(r"On .+ wrote:\s*", line)).strip()
+    return "\n".join(
+        line
+        for line in text.splitlines()
+        if not line.startswith(">") and not re.fullmatch(r"On .+ wrote:\s*", line)
+    ).strip()
 
 
-def quoted_parent_matches(quoted: tuple[str, ...], parent: str, body_format: str | None) -> bool:
+def quoted_parent_matches(
+    quoted: tuple[str, ...], parent: str, body_format: str | None
+) -> bool:
     if body_format == "mail-text-v2":
-        return tuple(line for line in quoted if line.strip()) == tuple(line for line in parent.splitlines() if line.strip())
+        return tuple(line for line in quoted if line.strip()) == tuple(
+            line for line in parent.splitlines() if line.strip()
+        )
     return "\n".join(quoted) == parent
 
 
@@ -113,19 +152,27 @@ def _with_marker(body: str, marker: str) -> str:
 
 class ForgeCommentPublisher:
     def __init__(
-        self, api: ForgeAPI, owner: str, repo: str, *, write_enabled: bool = False,
-        allow_inline_writes: bool = False, max_inline_lines: int = 1,
+        self,
+        api: ForgeAPI,
+        owner: str,
+        repo: str,
+        *,
+        write_enabled: bool = False,
+        allow_inline_writes: bool = False,
+        max_inline_lines: int = 1,
     ):
         if not owner or not repo:
             raise ValueError("owner and repository must be non-empty")
-        if not isinstance(max_inline_lines, int) or isinstance(max_inline_lines, bool) or max_inline_lines < 1:
+        if (
+            not isinstance(max_inline_lines, int)
+            or isinstance(max_inline_lines, bool)
+            or max_inline_lines < 1
+        ):
             raise ValueError("The configured inline line limit must be positive")
         self.api = api
         self.owner = owner
         self.repo = repo
-        self.repository_path = (
-            f"repos/{quote(owner, safe='')}/{quote(repo, safe='')}"
-        )
+        self.repository_path = f"repos/{quote(owner, safe='')}/{quote(repo, safe='')}"
         self.write_enabled = write_enabled
         self.allow_inline_writes = allow_inline_writes
         self.max_inline_lines = max_inline_lines
@@ -146,7 +193,9 @@ class ForgeCommentPublisher:
 
         payload = {"body": _with_marker(body, marker)}
         if not self.write_enabled:
-            return DeliveryResult({"path": path, **payload}, created=False, planned=True)
+            return DeliveryResult(
+                {"path": path, **payload}, created=False, planned=True
+            )
 
         try:
             created = self.api.request_json(
@@ -169,7 +218,9 @@ class ForgeCommentPublisher:
         existing = self._find_issue_comment(path, marker)
         if existing:
             return DeliveryResult(existing, created=True)
-        raise DeliveryUncertainError("Gitea accepted the comment but it is not yet visible")
+        raise DeliveryUncertainError(
+            "Gitea accepted the comment but it is not yet visible"
+        )
 
     def ensure_inline_comment(
         self,
@@ -184,25 +235,38 @@ class ForgeCommentPublisher:
         merge_base: str | None = None,
     ) -> DeliveryResult:
         if (
-            not isinstance(anchor.path, str) or not anchor.path
-            or not isinstance(anchor.old_position, int) or isinstance(anchor.old_position, bool)
-            or not isinstance(anchor.new_position, int) or isinstance(anchor.new_position, bool)
+            not isinstance(anchor.path, str)
+            or not anchor.path
+            or not isinstance(anchor.old_position, int)
+            or isinstance(anchor.old_position, bool)
+            or not isinstance(anchor.new_position, int)
+            or isinstance(anchor.new_position, bool)
             or (anchor.old_position > 0) == (anchor.new_position > 0)
-            or anchor.old_position < 0 or anchor.new_position < 0
+            or anchor.old_position < 0
+            or anchor.new_position < 0
         ):
-            raise ValueError("inline anchor must identify exactly one positive diff position")
-        if not isinstance(head_commit, str) or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", head_commit):
+            raise ValueError(
+                "inline anchor must identify exactly one positive diff position"
+            )
+        if not isinstance(head_commit, str) or not re.fullmatch(
+            r"[0-9a-f]{40}|[0-9a-f]{64}", head_commit
+        ):
             raise ValueError("inline comment requires the full reviewed head commit")
         if isinstance(anchor, RangeAnchor) and (
-            not isinstance(anchor.extra_lines_count, int) or isinstance(anchor.extra_lines_count, bool)
+            not isinstance(anchor.extra_lines_count, int)
+            or isinstance(anchor.extra_lines_count, bool)
             or not 0 <= anchor.extra_lines_count < self.max_inline_lines
         ):
             raise ValueError("inline range exceeds the configured line limit")
         if (base_commit is None) != (merge_base is None) or any(
-            not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit)
-            for commit in (base_commit, merge_base) if commit is not None
+            not isinstance(commit, str)
+            or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit)
+            for commit in (base_commit, merge_base)
+            if commit is not None
         ):
-            raise ValueError("inline comparison requires full base and merge-base commits")
+            raise ValueError(
+                "inline comparison requires full base and merge-base commits"
+            )
         marker = _marker(source_message_id, effect_key)
         path = f"{self.repository_path}/pulls/{self._pull_index(pull_index)}"
         existing, matching_review = self._find_inline_comment(path, marker)
@@ -218,8 +282,14 @@ class ForgeCommentPublisher:
             raise StaleAnchorError("Pull request head differs from the reviewed commit")
         if base_commit is not None:
             base = pull.get("base")
-            if not isinstance(base, dict) or base.get("sha") != base_commit or pull.get("merge_base") != merge_base:
-                raise StaleAnchorError("Pull request base or merge base differs from the reviewed comparison")
+            if (
+                not isinstance(base, dict)
+                or base.get("sha") != base_commit
+                or pull.get("merge_base") != merge_base
+            ):
+                raise StaleAnchorError(
+                    "Pull request base or merge base differs from the reviewed comparison"
+                )
 
         payload = {
             "event": "COMMENT",
@@ -237,12 +307,18 @@ class ForgeCommentPublisher:
         if isinstance(anchor, RangeAnchor):
             payload["comments"][0]["extra_lines_count"] = anchor.extra_lines_count
         if not self.write_enabled:
-            return DeliveryResult({"path": f"{path}/reviews", **payload}, created=False, planned=True)
+            return DeliveryResult(
+                {"path": f"{path}/reviews", **payload}, created=False, planned=True
+            )
         if not self.allow_inline_writes:
-            raise InlineWritesDisabledError("Inline writes require an isolated account and explicit opt-in")
+            raise InlineWritesDisabledError(
+                "Inline writes require an isolated account and explicit opt-in"
+            )
         for review in self.api.get_pages(f"{path}/reviews"):
             if str(review.get("state", "")).upper() == "PENDING":
-                raise InlineWritesDisabledError("A pending review already exists on this pull request")
+                raise InlineWritesDisabledError(
+                    "A pending review already exists on this pull request"
+                )
 
         try:
             review = self.api.request_json(
@@ -252,7 +328,12 @@ class ForgeCommentPublisher:
             existing, matching_review = self._find_inline_comment(path, marker)
             if existing:
                 return DeliveryResult(existing, created=False)
-            if matching_review or error.status is None or error.status >= 500 or 200 <= error.status < 300:
+            if (
+                matching_review
+                or error.status is None
+                or error.status >= 500
+                or 200 <= error.status < 300
+            ):
                 raise DeliveryUncertainError(
                     "Gitea may have accepted the review; retry only after reconciliation"
                 ) from error
@@ -261,7 +342,9 @@ class ForgeCommentPublisher:
         existing, _ = self._find_inline_comment(path, marker)
         if existing:
             return DeliveryResult(existing, created=True)
-        raise DeliveryUncertainError("Gitea accepted the review but its inline comment is not visible")
+        raise DeliveryUncertainError(
+            "Gitea accepted the review but its inline comment is not visible"
+        )
 
     def _find_issue_comment(self, path: str, marker: str) -> dict[str, Any] | None:
         for comment in self.api.get_pages(path):
@@ -290,6 +373,10 @@ class ForgeCommentPublisher:
 
     @staticmethod
     def _pull_index(pull_index: int) -> int:
-        if not isinstance(pull_index, int) or isinstance(pull_index, bool) or pull_index < 1:
+        if (
+            not isinstance(pull_index, int)
+            or isinstance(pull_index, bool)
+            or pull_index < 1
+        ):
             raise ValueError("pull request index must be a positive integer")
         return pull_index
