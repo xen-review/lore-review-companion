@@ -438,7 +438,7 @@ def main(argv: list[str] | None = None) -> int:
     migration.add_argument("--write", action="store_true")
     migration.add_argument("--approve", help="Approval digest from the reviewed migration plan")
     import_queue = commands.add_parser("queue-imports", help="Queue retained replies using exact imported patch comparisons")
-    import_deliver = commands.add_parser("deliver-imports", help="Preview or approve imported conversation/review effects")
+    import_deliver = commands.add_parser("deliver-imports", help="Preview or approve imported conversation/review/reply effects")
     for command in (import_queue, import_deliver):
         command.add_argument("--ledger", type=Path, required=True)
         command.add_argument("--api-url", required=True)
@@ -452,7 +452,7 @@ def main(argv: list[str] | None = None) -> int:
     import_queue.add_argument("--revision", type=int, required=True)
     import_queue.add_argument("--repository", type=Path, required=True)
     import_queue.add_argument("--max-inline-lines", type=int, default=50)
-    import_deliver.add_argument("--kind", choices=("conversation", "review"), required=True)
+    import_deliver.add_argument("--kind", choices=("conversation", "review", "reply"), required=True)
     import_deliver.add_argument("--limit", type=int, default=100)
     import_deliver.add_argument("--write", action="store_true")
     import_deliver.add_argument("--approve")
@@ -492,7 +492,7 @@ def main(argv: list[str] | None = None) -> int:
                                                 args.repository, ledger.messages_by_id(tuple(args.message_id)),
                                                 max_inline_lines=args.max_inline_lines)
             else:
-                event_type = "IMPORT_CONVERSATION" if args.kind == "conversation" else "IMPORT_REVIEW"
+                event_type = {"conversation": "IMPORT_CONVERSATION", "review": "IMPORT_REVIEW", "reply": "IMPORT_REPLY"}[args.kind]
                 if write_enabled:
                     result = deliver_approved_imports(ledger, client, args.pull_index, event_type, approved_digest=args.approve,
                                                      limit=args.limit, retry_uncertain=args.retry_uncertain)

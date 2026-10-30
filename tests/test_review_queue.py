@@ -140,7 +140,7 @@ class ReviewQueueTests(unittest.TestCase):
         original_transport = self.api.transport
         capabilities = {
             "version": 1, "repository_id": 1, "importer_id": 5, "importer_login": "mirror-bot",
-            "source_url": client.source_url, "operations": ["conversation", "review"], "max_inline_lines": 50,
+            "source_url": client.source_url, "operations": ["conversation", "review", "review-reply"], "max_inline_lines": 50,
         }
         accepted, posts = {}, []
 
@@ -149,9 +149,16 @@ class ReviewQueueTests(unittest.TestCase):
                 return FakeResponse(200, capabilities)
             if "/review-imports/pulls/7/patches/" in request.full_url:
                 return FakeResponse(200, snapshot)
+            if "/review-imports/operations/" in request.full_url:
+                return FakeResponse(200, accepted)
             if request.get_method() == "POST" and "/review-imports/" in request.full_url:
                 posts.append(request)
                 sent = json.loads(request.data)
+                if request.full_url.endswith("/replies"):
+                    return FakeResponse(200, {**accepted, "id": 11, "comment_id": 31, "type": "review-reply",
+                                              "operation_key": sent["operation_key"], "message_id": sent["message_id"],
+                                              "message_sha256": sent["message_sha256"],
+                                              "source_url": client.source_url + sent["message_id"] + "/"})
                 if not accepted:
                     accepted.update({
                         "id": 10, "repository_id": 1, "importer_id": 5, "participant_id": 6,
@@ -178,6 +185,46 @@ class ReviewQueueTests(unittest.TestCase):
         self.assertEqual(json.loads(posts[0].data), json.loads(posts[1].data))
         self.assertEqual([item.event_type for item in self.ledger.pending()], ["IMPORT_CONVERSATION"])
         self.assertEqual(accepted["code_comment_ids"], [30])
+        followup = parse_message(
+            b"From: Second Reviewer <second@example.test>\nMessage-ID: <followup@example.test>\nSubject: Re: first\n"
+            b"In-Reply-To: <imported@example.test>\n\n> Please change both lines.\nAgreed, and keep this context.\n"
+        )
+        followup_match, = [item for item in match_thread_replies((*revision.messages, reply, followup), (revision,)).matched
+                          if item.message.message_id == followup.message_id]
+        with patch.object(client, "lookup_operation", return_value=accepted):
+            queued = queue_imported_reply(self.ledger, client, 7, followup_match, patch_commits=commits, patch_diffs={first.message_id: PATCH})
+        self.assertEqual((queued.inline_count, queued.unresolved_count), (1, 0))
+        inline_reply, = [item for item in self.ledger.pending() if item.event_type == "IMPORT_REPLY"]
+        self.assertEqual(inline_reply.payload["request"]["parent_id"], 30)
+        self.assertEqual(inline_reply.payload["request"]["parent_body_sha256"], hashlib.sha256(request["comments"][0]["body"].encode()).hexdigest())
+        reply_plan = plan_import_delivery(self.ledger, writer, 7, "IMPORT_REPLY")
+        accepted["code_comment_ids"] = [99]
+        with self.assertRaisesRegex(PublicationConflict, "accepted parent operation"):
+            deliver_approved_imports(self.ledger, writer, 7, "IMPORT_REPLY", approved_digest=reply_plan.approval_digest())
+        accepted["code_comment_ids"] = [30]
+        delivered_reply = deliver_approved_imports(self.ledger, writer, 7, "IMPORT_REPLY", approved_digest=reply_plan.approval_digest())
+        self.assertEqual((delivered_reply.delivered, delivered_reply.failed), (1, 0))
+        self.assertTrue(posts[-1].full_url.endswith("/review-imports/pulls/7/replies"))
+        accepted_reply = {**accepted, "type": "review-reply", "comment_id": 31,
+                          "operation_key": inline_reply.payload["request"]["operation_key"],
+                          "message_id": followup.message_id, "message_sha256": followup.sha256}
+        nested = parse_message(
+            b"From: Third Reviewer <third@example.test>\nMessage-ID: <nested@example.test>\nSubject: Re: first\n"
+            b"In-Reply-To: <followup@example.test>\n\n> Agreed, and keep this context.\nDone in the next revision.\n"
+        )
+        nested_match, = [item for item in match_thread_replies((*revision.messages, reply, followup, nested), (revision,)).matched
+                        if item.message.message_id == nested.message_id]
+        with patch.object(client, "lookup_operation", return_value=accepted_reply):
+            nested_result = queue_imported_reply(self.ledger, client, 7, nested_match, patch_commits=commits, patch_diffs={first.message_id: PATCH})
+            queued_once = self.ledger.pending()
+            queue_imported_reply(self.ledger, client, 7, nested_match, patch_commits=commits, patch_diffs={first.message_id: PATCH})
+        self.assertEqual(self.ledger.pending(), queued_once)
+        self.assertEqual((nested_result.inline_count, nested_result.unresolved_count), (1, 0))
+        with patch.object(writer, "lookup_operation", return_value=accepted_reply):
+            nested_plan = plan_import_delivery(self.ledger, writer, 7, "IMPORT_REPLY")
+            self.assertEqual(nested_plan.deliveries[0].payload["request"]["parent_id"], 31)
+            nested_delivery = deliver_approved_imports(self.ledger, writer, 7, "IMPORT_REPLY", approved_digest=nested_plan.approval_digest())
+        self.assertEqual((nested_delivery.delivered, nested_delivery.failed), (1, 0))
         conversation = self.ledger.pending()[0]
         altered = json.loads(json.dumps(conversation.payload))
         altered["request"]["address"] = "someone-else@example.test"
@@ -185,11 +232,39 @@ class ReviewQueueTests(unittest.TestCase):
             connection.execute("UPDATE outbox SET payload = ? WHERE id = ?", (json.dumps(altered), conversation.id))
         with self.assertRaisesRegex(PublicationConflict, "identity evidence"):
             plan_import_delivery(self.ledger, writer, 7, "IMPORT_CONVERSATION")
-        self.assertEqual(len(posts), 2)
+        self.assertEqual(len(posts), 4)
         with self.assertRaisesRegex(DeliveryStateConflict, "migration"):
             queue_thread_reply(self.ledger, self.publisher, 7, match)
         with self.assertRaisesRegex(ValueError, "membership"):
             queue_imported_reply(self.ledger, client, 7, match, patch_commits=commits[::-1], patch_diffs={})
+
+    def test_imported_inline_replies_keep_ambiguous_and_unaccepted_targets_unresolved(self):
+        client = ForgeImportClient(self.api, "xen-project", "xen", source_url="https://lore.kernel.org/xen-devel/")
+        quote = b"> --- a/src/sample.c\n> +++ b/src/sample.c\n> +new_call();\n> +duplicate();\nSame remark.\n\n"
+        parent = parse_message(
+            b"From: Reviewer <reviewer@example.test>\nMessage-ID: <parent@example.test>\nSubject: Re: patch\n"
+            b"In-Reply-To: <patch@example.test>\n\n" + quote + quote
+        )
+        commits = (PatchCommit("patch@example.test", "b" * 40, "a" * 40),)
+        snapshot = {"head_commit": "a" * 40, "base_commit": "b" * 40, "merge_base": "b" * 40,
+                    "before_commit": "b" * 40, "after_commit": "a" * 40, "diff": PATCH,
+                    "diff_sha256": hashlib.sha256(PATCH.encode()).hexdigest()}
+        with patch.object(client, "comparison", return_value=snapshot), patch.object(client, "capabilities", return_value={"max_inline_lines": 50, "operations": ["review"]}):
+            queued = queue_imported_reply(self.ledger, client, 7, replace(self.match, message=parent),
+                                          patch_commits=commits, patch_diffs={"patch@example.test": PATCH})
+        self.assertEqual(queued.inline_count, 2)
+        followup = parse_message(
+            b"From: Second Reviewer <second@example.test>\nMessage-ID: <ambiguous@example.test>\nSubject: Re: patch\n"
+            b"In-Reply-To: <parent@example.test>\n\n> Same remark.\nWhich occurrence?\n"
+        )
+        remote = {"type": "review", "message_id": parent.message_id, "message_sha256": parent.sha256, "code_comment_ids": [30, 31]}
+        for accepted in (None, remote):
+            with self.subTest(accepted=accepted is not None), patch.object(client, "lookup_operation", return_value=accepted):
+                result = queue_imported_reply(self.ledger, client, 7, replace(self.match, message=followup),
+                                              patch_commits=commits, patch_diffs={"patch@example.test": PATCH})
+            self.assertEqual((result.inline_count, result.unresolved_count), (0, 1))
+            self.assertIsNotNone(result.diagnostic)
+        self.assertFalse(any(effect.event_type == "IMPORT_REPLY" for effect in self.ledger.pending()))
 
     def test_cli_native_queue_does_not_require_b4_and_passes_range_limit(self):
         arguments = [

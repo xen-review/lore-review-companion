@@ -2425,6 +2425,17 @@ class Ledger:
             )
             return frozenset(row[0] for row in rows)
 
+    def comment_effects(self, message_id: str, destination: str) -> tuple[Delivery, ...]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT id, message_id, event_type, destination, effect_key, payload, attempts, last_error, write_state"
+                " FROM outbox WHERE message_id = ? AND destination = ? ORDER BY id LIMIT 1001",
+                (_normalize_message_id(message_id), destination),
+            ).fetchall()
+            if len(rows) > 1000:
+                raise DeliveryStateConflict("Message effects exceed the bounded import lookup limit")
+            return tuple(Delivery(**{**dict(row), "payload": json.loads(row["payload"])}) for row in rows)
+
     def pending(
         self, limit: int = 100, *, destination: str | None = None, event_type: str | None = None,
         after_id: int = 0, delivery_ids: tuple[int, ...] | None = None,

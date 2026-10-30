@@ -46,7 +46,9 @@ class ImportDeliveryPlan:
         return hashlib.sha256(value).hexdigest()
 
 
-def _assert_import_payload(ledger: Ledger, delivery: Delivery) -> None:
+def _assert_import_payload(ledger: Ledger, delivery: Delivery, *, depth: int = 0) -> None:
+    if depth > 100:
+        raise PublicationConflict("Imported reply evidence exceeds the bounded ancestry limit")
     payload = delivery.payload
     request = payload.get("request")
     source = ledger.messages_by_id((delivery.message_id,))[0]
@@ -59,13 +61,52 @@ def _assert_import_payload(ledger: Ledger, delivery: Delivery) -> None:
         or request.get("source_time_basis") != ("unverified" if source.time_estimate else "unknown")
     ):
         raise PublicationConflict("Imported delivery lacks matching raw-mail identity evidence")
-    marker = "imported-full-message-v1" if delivery.event_type == "IMPORT_CONVERSATION" else "imported-review-v1"
+    marker = ("imported-full-message-v1" if delivery.event_type == "IMPORT_CONVERSATION" else
+              delivery.effect_key if delivery.event_type == "IMPORT_REPLY" else "imported-review-v1")
     expected_key = hashlib.sha256(f"{delivery.message_id}\0{marker}".encode()).hexdigest()
     if request.get("operation_key") != expected_key:
         raise PublicationConflict("Imported operation key does not match the retained source message")
     if delivery.event_type == "IMPORT_CONVERSATION":
         if request.get("body") != quote_untrusted_text(source.body_text):
             raise PublicationConflict("Imported conversation differs from the retained complete message")
+        return
+    if delivery.event_type == "IMPORT_REPLY":
+        evidence = payload.get("evidence")
+        parents = source.in_reply_to or source.references[-1:]
+        if (
+            not isinstance(evidence, dict) or evidence.get("parser") != "quote-blocks-v1"
+            or evidence.get("source_sha256") != source.sha256 or len(parents) != 1
+            or evidence.get("parent_message_id") != parents[0]
+            or type(evidence.get("parent_position")) is not int or evidence["parent_position"] < 0
+        ):
+            raise PublicationConflict("Imported reply lacks explicit quoted parent evidence")
+        effects = [effect for effect in ledger.comment_effects(parents[0], delivery.destination)
+                   if effect.effect_key == evidence.get("parent_effect_key") and effect.event_type in ("IMPORT_REVIEW", "IMPORT_REPLY")]
+        if len(effects) != 1:
+            raise PublicationConflict("Imported reply parent effect is unavailable")
+        parent = effects[0]
+        if parent.payload.get("thread") != payload.get("thread"):
+            raise PublicationConflict("Imported reply parent belongs to a different revision thread")
+        _assert_import_payload(ledger, parent, depth=depth+1)
+        parent_request = parent.payload["request"]
+        if evidence.get("parent_operation_key") != parent_request["operation_key"]:
+            raise PublicationConflict("Imported reply parent operation changed")
+        position = evidence["parent_position"]
+        parent_remarks = parent.payload["evidence"]["remarks"] if parent.event_type == "IMPORT_REVIEW" else [parent.payload["evidence"]["remark"]]
+        comments = parent_request["comments"] if parent.event_type == "IMPORT_REVIEW" else [parent_request]
+        remark = next((item for item in extract_quoted_remarks(source.body_text)
+                       if json.loads(json.dumps(asdict(item))) == evidence.get("remark")), None)
+        if position >= len(parent_remarks) or position >= len(comments) or remark is None or (
+            "\n".join(remark.quote) != parent_remarks[position]["text"]
+            or request.get("body") != quote_untrusted_text(remark.text)
+            or request.get("parent_body_sha256") != hashlib.sha256(comments[position]["body"].encode()).hexdigest()
+            or type(request.get("parent_id")) is not int or request["parent_id"] <= 0
+        ):
+            raise PublicationConflict("Imported reply no longer exactly quotes its retained parent remark")
+        remark_position = extract_quoted_remarks(source.body_text).index(remark)
+        serialized = json.dumps(asdict(remark), sort_keys=True, separators=(",", ":"))
+        if delivery.effect_key != f"imported-reply-v1:{remark_position}:{hashlib.sha256(serialized.encode()).hexdigest()}":
+            raise PublicationConflict("Imported reply effect identity changed")
         return
     evidence, comments = payload.get("evidence"), request.get("comments")
     if (
@@ -108,10 +149,10 @@ def plan_import_delivery(
     ledger: Ledger, client: ForgeImportClient, pull_index: int, event_type: str, *,
     limit: int = 100, retry_uncertain: bool = False,
 ) -> ImportDeliveryPlan:
-    if event_type not in ("IMPORT_CONVERSATION", "IMPORT_REVIEW"):
+    if event_type not in ("IMPORT_CONVERSATION", "IMPORT_REVIEW", "IMPORT_REPLY"):
         raise ValueError("Unsupported imported event type")
     capabilities = client.capabilities()
-    operation = "conversation" if event_type == "IMPORT_CONVERSATION" else "review"
+    operation = {"IMPORT_CONVERSATION": "conversation", "IMPORT_REVIEW": "review", "IMPORT_REPLY": "review-reply"}[event_type]
     if operation not in capabilities["operations"]:
         raise ValueError("Imported operation is not enabled by repository capabilities")
     supported_limit = capabilities.get("max_inline_lines")
@@ -124,6 +165,19 @@ def plan_import_delivery(
     _assert_thread_sources(ledger, client, pull_index, deliveries)
     for delivery in deliveries:
         _assert_import_payload(ledger, delivery)
+        if event_type == "IMPORT_REPLY":
+            evidence = delivery.payload["evidence"]
+            parent = next(effect for effect in ledger.comment_effects(evidence["parent_message_id"], destination)
+                          if effect.effect_key == evidence["parent_effect_key"])
+            remote = client.lookup_operation(evidence["parent_operation_key"])
+            parent_source = ledger.messages_by_id((evidence["parent_message_id"],))[0]
+            identifiers = (remote or {}).get("code_comment_ids", []) if parent.event_type == "IMPORT_REVIEW" else [(remote or {}).get("comment_id")]
+            position = evidence["parent_position"]
+            expected_type = "review" if parent.event_type == "IMPORT_REVIEW" else "review-reply"
+            if (remote is None or remote.get("message_sha256") != parent_source.sha256 or remote.get("message_id") != parent_source.message_id
+                    or remote.get("type") != expected_type or position >= len(identifiers)
+                    or type(identifiers[position]) is not int or identifiers[position] != delivery.payload["request"]["parent_id"]):
+                raise PublicationConflict("Imported reply target no longer matches the accepted parent operation")
         if event_type == "IMPORT_REVIEW":
             if supported_limit and delivery.payload["max_inline_lines"] > supported_limit:
                 raise ValueError("Queued ranges exceed the current repository capability")
@@ -164,7 +218,8 @@ def deliver_approved_imports(
                 continue
             ledger.begin_delivery(delivery.id, retry_uncertain=retry_uncertain)
             try:
-                method = client.import_conversation if event_type == "IMPORT_CONVERSATION" else client.import_review
+                method = {"IMPORT_CONVERSATION": client.import_conversation, "IMPORT_REVIEW": client.import_review,
+                          "IMPORT_REPLY": client.import_reply}[event_type]
                 result = method(pull_index, delivery.payload["request"])
                 if result.planned:
                     raise DeliveryUncertainError("Imported delivery was not confirmed")

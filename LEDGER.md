@@ -23,8 +23,8 @@ No automatic pushes. Forgejo changes belong to the separate parent repository.
   exact range resolution (C04) is also verified. Versioned delivery is next.
 - C05 `IN PROGRESS`: native quote-to-range queue, evidence preview, approval,
   delivery and replay are verified, including imported-author per-patch effects.
-  Explicit queue/delivery CLI commands are verified; publication orchestration
-  and isolated whole-workflow acceptance remain. No runtime
+  Explicit publication/queue/delivery CLI commands and exact email-to-inline
+  thread replies are verified; isolated whole-workflow acceptance remains. No runtime
   b4 parser is needed for native replies.
 - C02 `DONE`: exact local b4/liblore sources are installed and fingerprinted;
   real offline assembly and read-only draft checks passed.
@@ -48,7 +48,7 @@ No automatic pushes. Forgejo changes belong to the separate parent repository.
   rewriting V1. Protected Git/API credentials and uncertainty approvals are
   separate; the legacy lifecycle is unchanged.
 - Historical sample publications remain background evidence only; the current
-  baseline is 334 tests, with only the live-server acceptance test skipped
+  baseline is 335 tests, with only the live-server acceptance test skipped
   when the pinned real-b4 opt-ins are enabled.
 
 ## Discovery
@@ -81,7 +81,7 @@ installed versions, historical commits and current tests are B01, not assumed.
 | C02 | DONE | B04 | Verified b4 0.17.dev0/liblore 0.10.1 combined source fingerprint; same-interpreter offline assembly pins revision, disables trailers/partial rerolls and checks ordered patch content/count. 12 focused tests pass including real local b4. |
 | C03 | DONE | B04 | Added deterministic quoted-block extraction with depth/headers/source offsets, remarks and conservative signature/trailer boundaries. 13 mail-parser tests pass, including nested/trimmed and MIME/CRLF cases. Full message remains canonical. |
 | C04 | DONE | C03 | Exact contiguous same-file/side range matching added separately from legacy Anchor. All 13 anchor tests pass; full context disambiguates repeated lines, while mixed/disjoint/headerless/renamed/ambiguous cases fail closed. |
-| C05 | IN PROGRESS | C01, C04, F04 | Exact assembled patch mapping, version-3 imported conversation/grouped review queue and digest-approved delivery are tested with scoped server comparison reads. Source/quote/diff identity is revalidated; changed pins cause zero POSTs, response loss replays the same key, and legacy effects cannot silently change authorship. Queue 35/client 21 tests pass; CLI/orchestration/full workflow acceptance remain. |
+| C05 | IN PROGRESS | C01, C04, F04 | Exact assembled patch mapping, version-3 imported conversation/review/thread-reply queue and digest-approved CLI delivery are tested. Exact parent quotes bind accepted comment IDs and body hashes, including nested replies; missing/ambiguous parents remain unresolved. Source/quote/diff identity is revalidated; changed pins/targets cause zero POSTs, response loss replays the same key, and legacy effects cannot silently change authorship. Queue 38/client 21 tests pass; isolated full workflow acceptance remains. |
 
 ## Forgejo Extension
 
@@ -599,3 +599,35 @@ Bring them into scope only through an explicit decision.
 - C05 still needs automatic email-to-existing-inline-thread reply queueing and
   isolated full workflow acceptance; S02/S03 add bounded discovery/coordinator.
 - Commit subject: `feat: publish immutable participant-authored revision PRs`.
+
+### 2026-10-30: C05 Exact Imported Inline Thread Replies
+
+- Added a bounded retained-effect lookup, including completed effects, so quoted
+  responses can identify the accepted inline comment without creating a new
+  root review. An explicit parent Message-ID and one exact complete parent
+  remark are required. Missing acceptance and duplicate text remain unresolved
+  in the separately retained full-message conversation. No subject/fuzzy match
+  or runtime LLM is used.
+- New `IMPORT_REPLY` effects have deterministic per-remark identities and retain
+  parent source/effect/operation/position evidence. Scoped lookup supplies root
+  or nested reply comment IDs. Approval re-extracts both emails, verifies the
+  same revision thread, source hashes/type, exact text, operation and target ID,
+  and binds the parent body SHA-256. `deliver-imports --kind reply` uses its own
+  reviewed digest and the existing same-key uncertainty handling.
+- Forgejo now requires `parent_body_sha256` for reply imports and rejects an
+  edited parent. Eligibility checks precede the hash check so private drafts
+  remain invalid targets without exposing content-integrity information.
+  Mandatory API field and generated Swagger were updated in the uncommitted
+  parent worktree; no parent commit or live migration was performed.
+- Focused queue/CLI tests: 38 passed. Full Python: 335 run, 334 passed, only the
+  live-server test skipped in 15.095 seconds; both real pinned-b4 tests ran.
+  All six isolated import API cases passed in 7.616 seconds. Formatting,
+  editor diagnostics and structured generated reply-schema assertions passed.
+- Initial validation exhausted root disk via regenerable Go build cache. Only
+  that cache was cleared; subsequent Go tools use `GOCACHE` under `/tmp`.
+  The disk-full run left the disposable integration database unable to reset
+  fixtures; recreating only that generated database restored the test. The
+  running instance and its database/configuration were untouched.
+- C05 remains in progress only for isolated whole-workflow acceptance. Discovery,
+  coordinator, chronology/provenance and unattended policy tasks remain open.
+- Commit subject: `feat: route exact email replies into imported inline threads`.

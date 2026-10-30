@@ -9,7 +9,7 @@ Scoped import authorization and non-login participant profiles are implemented
 and tested in the separate Forgejo worktree. The first atomic conversation
 import and lookup endpoints, non-voting review/range imports and threaded
 replies are also tested. Participant-authored PR creation with pinned refs is
-tested as well. Imported conversation/review queue and approved outbox delivery
+tested as well. Imported conversation/review/reply queue and approved outbox delivery
 and publication are available as Python APIs and explicit CLI commands;
 unattended discovery/coordinator setup remains pending.
 Native exact multiline
@@ -123,6 +123,14 @@ it verifies reassembly and exact historical patch diffs before adding effects.
 The delivery command above is read-only and prints its plan/digest. After
 reviewing it, supply paired `--write --approve DIGEST` for that exact batch.
 Use `--kind conversation` to plan complete-message imports independently.
+Use `--kind reply` for responses to existing imported inline comments. Queue
+the parent email's review first and deliver it before queueing its responses.
+A response must quote exactly one complete retained parent remark and have one
+explicit parent Message-ID (`In-Reply-To`, or the final `References` entry).
+Nested responses use the accepted parent reply's comment ID. Missing acceptance
+or ambiguous text stays unresolved in the full-message conversation; it never
+becomes an unrelated new review. Delivery binds the parent body hash, so a
+locally edited parent is not silently reused.
 Uncertain earlier writes need a newly reviewed `--retry-uncertain` plan.
 
 ## Develop And Test
