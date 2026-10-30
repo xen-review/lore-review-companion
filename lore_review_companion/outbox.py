@@ -186,7 +186,8 @@ def _assert_import_payload(
         parents = source.in_reply_to or source.references[-1:]
         if (
             not isinstance(evidence, dict)
-            or evidence.get("parser") != "quote-blocks-v1"
+            or evidence.get("parser")
+            not in ("quote-blocks-v1", "quote-blocks-reply-excerpt-v1")
             or evidence.get("source_sha256") != source.sha256
             or len(parents) != 1
             or evidence.get("parent_message_id") != parents[0]
@@ -237,8 +238,15 @@ def _assert_import_payload(
             or position >= len(comments)
             or remark is None
             or (
+                evidence["parser"] == "quote-blocks-reply-excerpt-v1"
+                and remark.quote_depth != 1
+            )
+            or (
                 not quoted_parent_matches(
-                    remark.quote, parent_remarks[position]["text"], body_format
+                    remark.quote,
+                    parent_remarks[position]["text"],
+                    body_format,
+                    allow_excerpt=evidence["parser"] == "quote-blocks-reply-excerpt-v1",
                 )
                 or request.get("body")
                 != imported_mail_text(
@@ -371,6 +379,61 @@ def _assert_import_payload(
             )
 
 
+def accepted_inline_targets(ledger, client, destination, parent, thread):
+    targets = []
+    for effect in ledger.comment_effects(parent.message_id, destination):
+        if effect.event_type not in ("IMPORT_REVIEW", "IMPORT_REPLY"):
+            continue
+        if effect.payload.get("thread") != thread:
+            raise PublicationConflict(
+                "Imported parent belongs to a different revision thread"
+            )
+        request = effect.payload.get("request", {})
+        remote = client.lookup_operation(request.get("operation_key"))
+        if remote is None:
+            continue
+        expected_type = (
+            "review" if effect.event_type == "IMPORT_REVIEW" else "review-reply"
+        )
+        if (
+            remote.get("message_sha256") != parent.sha256
+            or remote.get("message_id") != parent.message_id
+            or remote.get("type") != expected_type
+        ):
+            raise PublicationConflict(
+                "Imported parent lookup does not match retained mail evidence"
+            )
+        if effect.event_type == "IMPORT_REVIEW":
+            parent_remarks = effect.payload.get("evidence", {}).get("remarks", [])
+            identifiers = remote.get("code_comment_ids", [])
+            comments = request.get("comments", [])
+        else:
+            parent_remarks = [effect.payload.get("evidence", {}).get("remark", {})]
+            identifiers = [remote.get("comment_id")]
+            comments = [request]
+        if len(parent_remarks) != len(identifiers) or len(comments) != len(identifiers):
+            raise PublicationConflict(
+                "Imported parent has no complete inline identifier mapping"
+            )
+        for position, (parent_remark, identifier, comment) in enumerate(
+            zip(parent_remarks, identifiers, comments, strict=True)
+        ):
+            if type(identifier) is not int or identifier <= 0:
+                raise PublicationConflict(
+                    "Imported parent returned an invalid inline identifier"
+                )
+            targets.append(
+                (
+                    parent_remark.get("text"),
+                    identifier,
+                    comment.get("body"),
+                    effect,
+                    position,
+                )
+            )
+    return targets
+
+
 def plan_import_delivery(
     ledger: Ledger,
     client: ForgeImportClient,
@@ -456,6 +519,33 @@ def plan_import_delivery(
                 raise PublicationConflict(
                     "Imported reply target no longer matches the accepted parent operation"
                 )
+            if evidence["parser"] == "quote-blocks-reply-excerpt-v1":
+                targets = accepted_inline_targets(
+                    ledger,
+                    client,
+                    destination,
+                    parent_source,
+                    delivery.payload["thread"],
+                )
+                matching = [
+                    target
+                    for target in targets
+                    if quoted_parent_matches(
+                        tuple(evidence["remark"]["quote"]),
+                        target[0],
+                        delivery.payload.get("body_format"),
+                        allow_excerpt=True,
+                    )
+                ]
+                if (
+                    len(matching) != 1
+                    or matching[0][1] != delivery.payload["request"]["parent_id"]
+                    or matching[0][3].effect_key != evidence["parent_effect_key"]
+                    or matching[0][4] != position
+                ):
+                    raise PublicationConflict(
+                        "Imported reply excerpt no longer uniquely matches an accepted inline parent"
+                    )
         if event_type == "IMPORT_REVIEW":
             if (
                 supported_limit

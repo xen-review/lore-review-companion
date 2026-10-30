@@ -87,6 +87,51 @@ class MailPresentationTests(unittest.TestCase):
             )
         )
 
+    def test_quoted_parent_excerpt_ignores_only_optional_whitespace(self):
+        parent = "First line.\nSecond line.\u00a0\nThird line.\n\nFourth line."
+        for body_format in ("mail-text-v2", "mail-text-v3"):
+            with self.subTest(body_format=body_format):
+                self.assertTrue(
+                    quoted_parent_matches(
+                        ("", " First line. ", "Second line."),
+                        parent,
+                        body_format,
+                        allow_excerpt=True,
+                    )
+                )
+                self.assertTrue(
+                    quoted_parent_matches(
+                        ("Third line.", "", "Fourth line."),
+                        parent,
+                        body_format,
+                        allow_excerpt=True,
+                    )
+                )
+                self.assertFalse(
+                    quoted_parent_matches(
+                        ("First line.", "Third line."),
+                        parent,
+                        body_format,
+                        allow_excerpt=True,
+                    )
+                )
+                self.assertFalse(
+                    quoted_parent_matches(
+                        ("", "  "), parent, body_format, allow_excerpt=True
+                    )
+                )
+                self.assertFalse(
+                    quoted_parent_matches(
+                        ("Changed line.",), parent, body_format, allow_excerpt=True
+                    )
+                )
+                self.assertFalse(
+                    quoted_parent_matches(("First line.",), parent, body_format)
+                )
+        self.assertFalse(
+            quoted_parent_matches(("First line.",), parent, "mail-text-v1")
+        )
+
     def test_submission_trailer_not_prose_or_patch_content(self):
         source = "Cover prose.\n\n xen/arm.c | 14 +\n xen/x.c   | 2 +-\n 2 files changed, 15 insertions(+), 1 deletion(-)\n create mode 100644 xen/arm.c\n\n-- \n2.53.8\n"
         self.assertEqual(submission_text(source), "Cover prose.")

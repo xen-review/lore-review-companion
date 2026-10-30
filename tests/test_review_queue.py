@@ -476,6 +476,127 @@ class ReviewQueueTests(unittest.TestCase):
                 patch_diffs={},
             )
 
+    def test_imported_inline_reply_excerpts_use_immediate_parent_only(self):
+        client = ForgeImportClient(
+            self.api,
+            "xen-project",
+            "xen",
+            source_url="https://lore.kernel.org/xen-devel/",
+        )
+        parent = parse_message(
+            b"From: Reviewer <reviewer@example.test>\nMessage-ID: <parent-excerpts@example.test>\nSubject: Re: patch\n"
+            b"In-Reply-To: <patch@example.test>\n\n"
+            b"> --- a/src/sample.c\n> +++ b/src/sample.c\n> +new_call();\n"
+            b"First line of review.\nSecond line of review.\nLast line of review.\n\n"
+            b"> +duplicate();\nAnother parent remark.\nA final sentence.\n"
+        )
+        commits = (PatchCommit("patch@example.test", "b" * 40, "a" * 40),)
+        snapshot = {
+            "head_commit": "a" * 40,
+            "base_commit": "b" * 40,
+            "merge_base": "b" * 40,
+            "before_commit": "b" * 40,
+            "after_commit": "a" * 40,
+            "diff": PATCH,
+            "diff_sha256": hashlib.sha256(PATCH.encode()).hexdigest(),
+        }
+        with (
+            patch.object(client, "comparison", return_value=snapshot),
+            patch.object(
+                client,
+                "capabilities",
+                return_value={"max_inline_lines": 50, "operations": ["review"]},
+            ),
+        ):
+            queued = queue_imported_reply(
+                self.ledger,
+                client,
+                7,
+                replace(self.match, message=parent),
+                patch_commits=commits,
+                patch_diffs={"patch@example.test": PATCH},
+            )
+        self.assertEqual(queued.inline_count, 2)
+        followup = parse_message(
+            b"From: Second Reviewer <second@example.test>\nMessage-ID: <reply-excerpts@example.test>\nSubject: Re: patch\n"
+            b"In-Reply-To: <parent-excerpts@example.test>\n\n"
+            b">> +new_call();\n> First line of review. \n> Second line of review.\nFirst reply.\n\n"
+            b"> Last line of review.\nSecond reply.\n\n"
+            b">> Another parent remark.\nThis quotes an older level.\n"
+        )
+        remote = {
+            "type": "review",
+            "comment_id": 20,
+            "message_id": parent.message_id,
+            "message_sha256": parent.sha256,
+            "code_comment_ids": [30, 31],
+        }
+        with patch.object(client, "lookup_operation", return_value=remote):
+            result = queue_imported_reply(
+                self.ledger,
+                client,
+                7,
+                replace(self.match, message=followup),
+                patch_commits=commits,
+                patch_diffs={"patch@example.test": PATCH},
+            )
+            original = self.ledger.pending()
+            queue_imported_reply(
+                self.ledger,
+                client,
+                7,
+                replace(self.match, message=followup),
+                patch_commits=commits,
+                patch_diffs={"patch@example.test": PATCH},
+            )
+        self.assertEqual(self.ledger.pending(), original)
+        self.assertEqual((result.inline_count, result.unresolved_count), (2, 1))
+        replies = [item for item in original if item.event_type == "IMPORT_REPLY"]
+        self.assertEqual(
+            [
+                (item.payload["request"]["parent_id"], item.payload["request"]["body"])
+                for item in replies
+            ],
+            [(30, "First reply."), (30, "Second reply.")],
+        )
+        for item in replies:
+            self.assertEqual(
+                item.payload["evidence"]["parser"], "quote-blocks-reply-excerpt-v1"
+            )
+            _assert_import_payload(self.ledger, item, source_url=client.source_url)
+
+        destination = self.api.base_url + client.repository_path + "#7"
+        parent_effect = next(
+            effect
+            for effect in self.ledger.comment_effects(parent.message_id, destination)
+            if effect.event_type == "IMPORT_REVIEW"
+        )
+        later_effect = json.loads(json.dumps(parent_effect.payload))
+        later_effect["request"]["operation_key"] = "f" * 64
+        self.ledger.enqueue(
+            parent.message_id,
+            "IMPORT_REVIEW",
+            destination,
+            "later-review",
+            later_effect,
+        )
+        with (
+            patch.object(client, "lookup_operation", return_value=remote),
+            patch.object(
+                client,
+                "capabilities",
+                return_value={
+                    "repository_id": 1,
+                    "importer_id": 5,
+                    "importer_login": "mirror-bot",
+                    "operations": ["review-reply"],
+                    "max_inline_lines": 50,
+                },
+            ),
+        ):
+            with self.assertRaisesRegex(PublicationConflict, "uniquely match"):
+                plan_import_delivery(self.ledger, client, 7, "IMPORT_REPLY")
+
     def test_imported_inline_replies_keep_ambiguous_and_unaccepted_targets_unresolved(
         self,
     ):
@@ -485,7 +606,7 @@ class ReviewQueueTests(unittest.TestCase):
             "xen",
             source_url="https://lore.kernel.org/xen-devel/",
         )
-        quote = b"> --- a/src/sample.c\n> +++ b/src/sample.c\n> +new_call();\n> +duplicate();\nSame remark.\n\n"
+        quote = b"> --- a/src/sample.c\n> +++ b/src/sample.c\n> +new_call();\n> +duplicate();\nSame remark.\nMore context.\n\n"
         parent = parse_message(
             b"From: Reviewer <reviewer@example.test>\nMessage-ID: <parent@example.test>\nSubject: Re: patch\n"
             b"In-Reply-To: <patch@example.test>\n\n" + quote + quote

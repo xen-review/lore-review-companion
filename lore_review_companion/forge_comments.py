@@ -180,8 +180,21 @@ def reply_prose(text: str) -> str:
 
 
 def quoted_parent_matches(
-    quoted: tuple[str, ...], parent: str, body_format: str | None
+    quoted: tuple[str, ...],
+    parent: str,
+    body_format: str | None,
+    *,
+    allow_excerpt: bool = False,
 ) -> bool:
+    if body_format in ("mail-text-v2", "mail-text-v3") and allow_excerpt:
+        quote_lines = tuple(line.strip() for line in quoted if line.strip())
+        parent_lines = tuple(
+            line.strip() for line in parent.splitlines() if line.strip()
+        )
+        return bool(quote_lines) and any(
+            parent_lines[position : position + len(quote_lines)] == quote_lines
+            for position in range(len(parent_lines) - len(quote_lines) + 1)
+        )
     if body_format in ("mail-text-v2", "mail-text-v3"):
         return tuple(line for line in quoted if line.strip()) == tuple(
             line for line in parent.splitlines() if line.strip()

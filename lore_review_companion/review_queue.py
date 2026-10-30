@@ -40,7 +40,7 @@ from lore_review_companion.ledger import (
     PublicationConflict,
 )
 from lore_review_companion.mail_parser import ParsedMessage, extract_quoted_remarks
-from lore_review_companion.outbox import comment_destination
+from lore_review_companion.outbox import accepted_inline_targets, comment_destination
 from lore_review_companion.preflight import PatchCommit, prepare_patch_mailbox
 from lore_review_companion.series import discover_series
 from lore_review_companion.threads import ThreadMatch, match_thread_replies
@@ -617,69 +617,30 @@ def _queue_imported_inline_replies(
     conversation,
     body_format,
 ):
-    targets = []
-    for effect in ledger.comment_effects(parent.message_id, destination):
-        if effect.event_type not in ("IMPORT_REVIEW", "IMPORT_REPLY"):
-            continue
-        if effect.payload.get("thread") != thread:
-            raise PublicationConflict(
-                "Imported parent belongs to a different revision thread"
-            )
-        request = effect.payload.get("request", {})
-        remote = client.lookup_operation(request.get("operation_key"))
-        if remote is None:
-            continue
-        expected_type = (
-            "review" if effect.event_type == "IMPORT_REVIEW" else "review-reply"
-        )
-        if (
-            remote.get("message_sha256") != parent.sha256
-            or remote.get("message_id") != parent.message_id
-            or remote.get("type") != expected_type
-        ):
-            raise PublicationConflict(
-                "Imported parent lookup does not match retained mail evidence"
-            )
-        if effect.event_type == "IMPORT_REVIEW":
-            parent_remarks = effect.payload.get("evidence", {}).get("remarks", [])
-            identifiers = remote.get("code_comment_ids", [])
-            comments = request.get("comments", [])
-        else:
-            parent_remarks = [effect.payload.get("evidence", {}).get("remark", {})]
-            identifiers = [remote.get("comment_id")]
-            comments = [request]
-        if len(parent_remarks) != len(identifiers) or len(comments) != len(identifiers):
-            raise PublicationConflict(
-                "Imported parent has no complete inline identifier mapping"
-            )
-        for position, (parent_remark, identifier, comment) in enumerate(
-            zip(parent_remarks, identifiers, comments, strict=True)
-        ):
-            if type(identifier) is not int or identifier <= 0:
-                raise PublicationConflict(
-                    "Imported parent returned an invalid inline identifier"
-                )
-            targets.append(
-                (
-                    parent_remark.get("text"),
-                    identifier,
-                    comment.get("body"),
-                    effect,
-                    position,
-                )
-            )
+    targets = accepted_inline_targets(ledger, client, destination, parent, thread)
     queued = 0
     for position, remark in enumerate(remarks):
+        if remark.quote_depth != 1:
+            continue
         candidates = [
             target
             for target in targets
-            if quoted_parent_matches(remark.quote, target[0], body_format)
+            if quoted_parent_matches(
+                remark.quote, target[0], body_format, allow_excerpt=True
+            )
         ]
         if len(candidates) != 1:
             continue
-        _, identifier, parent_body, parent_effect, parent_position = candidates[0]
+        parent_text, identifier, parent_body, parent_effect, parent_position = (
+            candidates[0]
+        )
         if not isinstance(parent_body, str):
             raise PublicationConflict("Imported parent has no retained comment body")
+        parser = (
+            "quote-blocks-v1"
+            if quoted_parent_matches(remark.quote, parent_text, body_format)
+            else "quote-blocks-reply-excerpt-v1"
+        )
         serialized = json.dumps(asdict(remark), sort_keys=True, separators=(",", ":"))
         effect_key = f"imported-reply-v1:{position}:{hashlib.sha256(serialized.encode()).hexdigest()}"
         operation_key = hashlib.sha256(
@@ -695,7 +656,7 @@ def _queue_imported_inline_replies(
                 "thread": thread,
                 **({"body_format": body_format} if body_format is not None else {}),
                 "evidence": {
-                    "parser": "quote-blocks-v1",
+                    "parser": parser,
                     "source_sha256": message.sha256,
                     "remark": asdict(remark),
                     "parent_message_id": parent.message_id,
