@@ -22,8 +22,9 @@ No automatic pushes. Forgejo changes belong to the separate parent repository.
 - C03 `DONE`: decoded mail now preserves quoted blocks and following remarks;
   exact range resolution (C04) is also verified. Versioned delivery is next.
 - C05 `IN PROGRESS`: native quote-to-range queue, evidence preview, approval,
-  delivery and replay are verified. Per-patch imported-author live integration
-  still depends on F04; no runtime b4 parser is needed for native replies.
+  delivery and replay are verified, including imported-author per-patch effects.
+  CLI/orchestration and isolated whole-workflow acceptance remain. No runtime
+  b4 parser is needed for native replies.
 - C02 `DONE`: exact local b4/liblore sources are installed and fingerprinted;
   real offline assembly and read-only draft checks passed.
 - F01 `DONE`: explicit import scopes, repository/source grants, authorization
@@ -42,7 +43,7 @@ No automatic pushes. Forgejo changes belong to the separate parent repository.
   stable inline IDs and no draft consumption or notifications. Companion
   per-patch publication/outbox wiring remains under C05, S01 and S03.
 - Historical sample publications remain background evidence only; the current
-  baseline is 325 tests, with only the live-server acceptance test skipped
+  baseline is 328 tests, with only the live-server acceptance test skipped
   when the pinned real-b4 opt-ins are enabled.
 
 ## Discovery
@@ -75,7 +76,7 @@ installed versions, historical commits and current tests are B01, not assumed.
 | C02 | DONE | B04 | Verified b4 0.17.dev0/liblore 0.10.1 combined source fingerprint; same-interpreter offline assembly pins revision, disables trailers/partial rerolls and checks ordered patch content/count. 12 focused tests pass including real local b4. |
 | C03 | DONE | B04 | Added deterministic quoted-block extraction with depth/headers/source offsets, remarks and conservative signature/trailer boundaries. 13 mail-parser tests pass, including nested/trimmed and MIME/CRLF cases. Full message remains canonical. |
 | C04 | DONE | C03 | Exact contiguous same-file/side range matching added separately from legacy Anchor. All 13 anchor tests pass; full context disambiguates repeated lines, while mixed/disjoint/headerless/renamed/ambiguous cases fail closed. |
-| C05 | IN PROGRESS | C01, C04; F04 for per-patch live integration | Native parse-to-API range pipeline passes 34 queue and 30 publisher tests, including response-loss/replay, source hashes, comparison snapshots, capability-bound approval and legacy migration refusal. Per-patch imported-author acceptance remains F04. |
+| C05 | IN PROGRESS | C01, C04, F04 | Exact assembled patch mapping, version-3 imported conversation/grouped review queue and digest-approved delivery are tested with scoped server comparison reads. Source/quote/diff identity is revalidated; changed pins cause zero POSTs, response loss replays the same key, and legacy effects cannot silently change authorship. Queue 35/client 21 tests pass; CLI/orchestration/full workflow acceptance remain. |
 
 ## Forgejo Extension
 
@@ -510,3 +511,38 @@ Bring them into scope only through an explicit decision.
 - F04 server primitives are complete. C05/S01/S03 now wire per-patch source
   plans and publication to these endpoints; F05/F06 add source chronology/UI.
 - Commit subject: `feat: add pinned participant-authored PR import client`.
+
+### 2026-10-30: C05 Imported Per-Patch Queue And Delivery
+
+- `PreparedMailbox.patch_commits` maps ordered original patch Message-IDs to
+  an exact single-parent Git chain reaching the recorded immutable head. Wrong
+  count, duplicate membership or nonlinear chains fail closed; legacy preflight
+  results/digests are unchanged.
+- Added separate `IMPORT_CONVERSATION` and `IMPORT_REVIEW` events with payload
+  version 3, source identity/time and retained patch/quote/diff evidence. Exact
+  matches group into a fresh non-voting review; the complete reply is retained
+  separately. Legacy effects, including completed effects, cannot silently
+  switch into imported authorship, nor vice versa.
+- Imported delivery has its own digest-approved planner/write path. It reruns
+  quote extraction/range resolution against retained mail and exact diff, checks
+  source/patch hashes and original sender, then verifies current server pins.
+  It never adds tool attribution or falls back to ordinary comment APIs.
+  Uncertain sends require explicit same-key retry approval.
+- Added import-only comparison and exact patch-parent diff reads, behind the
+  existing grant/scope/permission gate and actual PR comparison. No broad repo
+  or user scope is needed. Diff bytes are UTF-8, SHA-256 checked and capped at
+  8 MiB, including bulk-copy writes. Private drafts are not read.
+- Tests cover an earlier patch behind a later PR head, non-cumulative matching,
+  stable queue replay, scoped reads, changed server pins with zero POSTs,
+  response-loss reconciliation, sender tampering, bad hashes and migration
+  refusal. A fixture mapping conflict and indentation error were repaired and
+  the same focused checks reran.
+- Python: 328 run, 327 passed, only live-server skipped in 13.989 seconds (real
+  pinned-b4 ran). Focused preflight 23, queue 35 and client 21 pass. Full affected
+  Go packages and six import API cases passed (7.558 seconds). Formatting,
+  diagnostics and comparison Swagger assertions passed; unrelated old schema
+  warnings remain. Live instance untouched.
+- These are callable Python boundaries, not yet the supported CLI workflow.
+  C05/S01/S03 still need publication/queue CLI wiring and isolated full workflow
+  acceptance. No legacy payloads, IDs or approvals were auto-migrated.
+- Commit subject: `feat: queue and deliver exact imported patch reviews`.

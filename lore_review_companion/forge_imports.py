@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -36,7 +37,9 @@ class ForgeImportClient:
         ):
             raise ValueError("A repository and credential-free HTTPS source inbox are required")
         self.api = api
-        self.path = f"repos/{quote(owner, safe='')}/{quote(repo, safe='')}/review-imports"
+        self.owner, self.repo = owner, repo
+        self.repository_path = f"repos/{quote(owner, safe='')}/{quote(repo, safe='')}"
+        self.path = f"{self.repository_path}/review-imports"
         self.source_url = source_url
         self.write_enabled = write_enabled
 
@@ -77,6 +80,26 @@ class ForgeImportClient:
             or result.get("operation_key") != operation_key
         ):
             raise ValueError("Mismatched imported-operation lookup response")
+        return result
+
+    def comparison(self, pull_index: int, *, after_commit: str | None = None) -> dict[str, Any]:
+        if not _positive_id(pull_index) or (after_commit is not None and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", after_commit) is None):
+            raise ValueError("A positive PR index and full patch commit are required")
+        self.capabilities()
+        suffix = "comparison" if after_commit is None else f"patches/{after_commit}"
+        result = self.api.request_json(f"{self.path}/pulls/{pull_index}/{suffix}")
+        if not isinstance(result, dict) or any(
+            not isinstance(result.get(field), str) or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", result[field]) is None
+            for field in ("head_commit", "base_commit", "merge_base")
+        ):
+            raise ValueError("Forgejo returned an invalid imported PR comparison")
+        if after_commit is not None and (
+            result.get("after_commit") != after_commit or not isinstance(result.get("before_commit"), str)
+            or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", result["before_commit"]) is None
+            or not isinstance(result.get("diff"), str)
+            or hashlib.sha256(result["diff"].encode("utf-8")).hexdigest() != result.get("diff_sha256")
+        ):
+            raise ValueError("Forgejo returned an unverified exact patch comparison")
         return result
 
     def import_conversation(self, pull_index: int, payload: Mapping[str, Any]) -> ImportDeliveryResult:

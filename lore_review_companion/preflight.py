@@ -22,6 +22,13 @@ class PreflightResult:
     patch_count: int
 
 
+@dataclass(frozen=True)
+class PatchCommit:
+    message_id: str
+    before_commit: str
+    after_commit: str
+
+
 def _run_git(
     environment: Mapping[str, str],
     timeout: float,
@@ -59,6 +66,30 @@ class PreparedMailbox:
     result: PreflightResult
     environment: Mapping[str, str] = field(repr=False)
     timeout: float = 120
+
+    def patch_commits(self, message_ids: tuple[str, ...]) -> tuple[PatchCommit, ...]:
+        if (
+            not message_ids or len(message_ids) != self.result.patch_count
+            or any(not message_id for message_id in message_ids) or len(set(message_ids)) != len(message_ids)
+        ):
+            raise GitPreflightError("One unique source Message-ID is required per assembled patch")
+        output = self.run_git(
+            "Inspect assembled patch chain", "--no-replace-objects", "rev-list", "--reverse", "--parents",
+            "--no-abbrev-commit", f"{self.result.base_commit}..{self.result.head_commit}",
+        )
+        rows = [line.split() for line in output.splitlines()]
+        if len(rows) != len(message_ids):
+            raise GitPreflightError("Assembled commit count differs from source patch membership")
+        comparisons = []
+        parent = self.result.base_commit
+        for message_id, row in zip(message_ids, rows, strict=True):
+            if len(row) != 2 or row[1] != parent:
+                raise GitPreflightError("Assembled patches must form one exact single-parent chain")
+            comparisons.append(PatchCommit(message_id, parent, row[0]))
+            parent = row[0]
+        if parent != self.result.head_commit:
+            raise GitPreflightError("Assembled patch chain does not reach the pinned head")
+        return tuple(comparisons)
 
     def run_git(
         self, stage: str, *arguments: str, input_bytes: bytes | None = None,

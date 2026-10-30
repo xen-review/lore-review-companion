@@ -9,13 +9,16 @@ import re
 from dataclasses import asdict, dataclass, replace
 from contextlib import nullcontext
 
-from lore_review_companion.anchor import Anchor, RangeAnchor
+from lore_review_companion.anchor import Anchor, DiffIndex, RangeAnchor
 from lore_review_companion.forge_api import ForgeAPIError, authenticated_user
 from lore_review_companion.forge_comments import (
     DeliveryResult, DeliveryUncertainError, ForgeCommentPublisher, with_tool_attribution,
+    quote_untrusted_text,
 )
+from lore_review_companion.forge_imports import ForgeImportClient
 from lore_review_companion.forge_pulls import _series_marker
 from lore_review_companion.ledger import Delivery, DeliveryStateConflict, Ledger, MessageConflictError, PublicationConflict
+from lore_review_companion.mail_parser import extract_quoted_remarks
 from lore_review_companion.threads import match_thread_replies
 
 
@@ -24,6 +27,153 @@ class CommentBatchSummary:
     delivered: int = 0
     planned: int = 0
     failed: int = 0
+
+
+@dataclass(frozen=True)
+class ImportDeliveryPlan:
+    destination: str
+    source_url: str
+    repository_id: int
+    actor: str
+    actor_id: int
+    event_type: str
+    max_inline_lines: int
+    retry_uncertain: bool
+    deliveries: tuple[Delivery, ...]
+
+    def approval_digest(self) -> str:
+        value = json.dumps(asdict(self), sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(value).hexdigest()
+
+
+def _assert_import_payload(ledger: Ledger, delivery: Delivery) -> None:
+    payload = delivery.payload
+    request = payload.get("request")
+    source = ledger.messages_by_id((delivery.message_id,))[0]
+    if (
+        type(payload.get("payload_version")) is not int or payload["payload_version"] != 3
+        or not isinstance(request, dict) or request.get("message_id") != delivery.message_id
+        or request.get("message_sha256") != source.sha256 or not source.from_address
+        or request.get("address") != source.from_address or request.get("name") != (source.from_name or "")
+        or request.get("source_time") != (source.time_estimate.timestamp if source.time_estimate else None)
+        or request.get("source_time_basis") != ("unverified" if source.time_estimate else "unknown")
+    ):
+        raise PublicationConflict("Imported delivery lacks matching raw-mail identity evidence")
+    marker = "imported-full-message-v1" if delivery.event_type == "IMPORT_CONVERSATION" else "imported-review-v1"
+    expected_key = hashlib.sha256(f"{delivery.message_id}\0{marker}".encode()).hexdigest()
+    if request.get("operation_key") != expected_key:
+        raise PublicationConflict("Imported operation key does not match the retained source message")
+    if delivery.event_type == "IMPORT_CONVERSATION":
+        if request.get("body") != quote_untrusted_text(source.body_text):
+            raise PublicationConflict("Imported conversation differs from the retained complete message")
+        return
+    evidence, comments = payload.get("evidence"), request.get("comments")
+    if (
+        not isinstance(evidence, dict) or evidence.get("parser") != "quote-blocks-v1"
+        or evidence.get("source_sha256") != source.sha256
+        or not isinstance(evidence.get("patch_diff"), str) or len(evidence["patch_diff"]) > 8 * 1024 * 1024
+        or hashlib.sha256(evidence["patch_diff"].encode()).hexdigest() != evidence.get("patch_diff_sha256")
+        or not isinstance(evidence.get("remarks"), list) or not isinstance(comments, list)
+        or not comments or len(evidence["remarks"]) != len(comments)
+        or request.get("body") != (source.subject or "Mail review")
+        or type(payload.get("max_inline_lines")) is not int or not 1 <= payload["max_inline_lines"] <= 1000
+    ):
+        raise PublicationConflict("Imported review lacks exact patch/quote evidence")
+    patch = ledger.messages_by_id((evidence.get("patch_message_id"),))[0]
+    if (
+        patch.sha256 != evidence.get("patch_source_sha256") or patch.kind != "patch"
+        or evidence.get("patch_message_id") != payload.get("thread", {}).get("patch_message_id")
+    ):
+        raise PublicationConflict("Imported review patch source changed")
+    index = DiffIndex(evidence["patch_diff"])
+    remarks = extract_quoted_remarks(source.body_text)
+    for retained, comment in zip(evidence["remarks"], comments, strict=True):
+        remark = next((item for item in remarks if json.loads(json.dumps(asdict(item))) == retained), None)
+        anchor = index.resolve_quote(remark, max_lines=payload["max_inline_lines"]) if remark is not None else None
+        if (
+            anchor is None or not isinstance(comment, dict)
+            or any(type(comment.get(field)) is not int for field in ("old_position", "new_position", "extra_lines_count"))
+            or any(comment.get(field) != value for field, value in {
+            "path": anchor.path, "old_position": anchor.old_position, "new_position": anchor.new_position,
+            "extra_lines_count": anchor.extra_lines_count, "body": quote_untrusted_text(remark.text),
+            }.items())
+        ):
+            raise PublicationConflict("Imported range no longer resolves exactly from the retained source")
+        if any(not isinstance(comment.get(field), str) or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", comment[field]) is None
+               for field in ("before_commit", "after_commit")):
+            raise PublicationConflict("Imported review requires full exact patch comparison commits")
+
+
+def plan_import_delivery(
+    ledger: Ledger, client: ForgeImportClient, pull_index: int, event_type: str, *,
+    limit: int = 100, retry_uncertain: bool = False,
+) -> ImportDeliveryPlan:
+    if event_type not in ("IMPORT_CONVERSATION", "IMPORT_REVIEW"):
+        raise ValueError("Unsupported imported event type")
+    capabilities = client.capabilities()
+    operation = "conversation" if event_type == "IMPORT_CONVERSATION" else "review"
+    if operation not in capabilities["operations"]:
+        raise ValueError("Imported operation is not enabled by repository capabilities")
+    supported_limit = capabilities.get("max_inline_lines")
+    if type(supported_limit) is not int or supported_limit < 0:
+        raise ValueError("Repository review range capability is invalid")
+    destination = comment_destination(client, pull_index)
+    ledger.assert_publication_sources(client.api.base_url + client.repository_path, pull_index)
+    deliveries = tuple(ledger.pending(limit, destination=destination, event_type=event_type))
+    ledger.assert_unconflicted(tuple(delivery.message_id for delivery in deliveries))
+    _assert_thread_sources(ledger, client, pull_index, deliveries)
+    for delivery in deliveries:
+        _assert_import_payload(ledger, delivery)
+        if event_type == "IMPORT_REVIEW":
+            if supported_limit and delivery.payload["max_inline_lines"] > supported_limit:
+                raise ValueError("Queued ranges exceed the current repository capability")
+            thread, request = delivery.payload["thread"], delivery.payload["request"]
+            publication = ledger.publication(client.api.base_url + client.repository_path, thread["series_key"], thread["revision"])
+            if request.get("head_commit") != publication.head_commit:
+                raise PublicationConflict("Imported review head differs from its recorded publication")
+            if any(not isinstance(request.get(field), str) or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", request[field]) is None
+                   for field in ("head_commit", "base_commit", "merge_base")):
+                raise PublicationConflict("Imported review requires a fully pinned PR comparison")
+            for after_commit in {comment["after_commit"] for comment in request["comments"]}:
+                snapshot = client.comparison(pull_index, after_commit=after_commit)
+                if any(snapshot[field] != request[field] for field in ("head_commit", "base_commit", "merge_base")):
+                    raise PublicationConflict("Imported review comparison changed before approval")
+                if snapshot.get("diff_sha256") != delivery.payload["evidence"]["patch_diff_sha256"] or any(
+                    comment["before_commit"] != snapshot["before_commit"] for comment in request["comments"] if comment["after_commit"] == after_commit
+                ):
+                    raise PublicationConflict("Imported exact patch comparison changed before approval")
+    return ImportDeliveryPlan(destination, client.source_url, capabilities["repository_id"], capabilities["importer_login"],
+                              capabilities["importer_id"], event_type, supported_limit, retry_uncertain, deliveries)
+
+
+def deliver_approved_imports(
+    ledger: Ledger, client: ForgeImportClient, pull_index: int, event_type: str, *,
+    approved_digest: str, limit: int = 100, retry_uncertain: bool = False,
+) -> CommentBatchSummary:
+    if not client.write_enabled or re.fullmatch(r"[0-9a-f]{64}", approved_digest or "") is None:
+        raise ValueError("Imported delivery requires write opt-in and a reviewed approval digest")
+    delivered = failed = 0
+    with ledger.worker_lock():
+        plan = plan_import_delivery(ledger, client, pull_index, event_type, limit=limit, retry_uncertain=retry_uncertain)
+        if not hmac.compare_digest(plan.approval_digest(), approved_digest):
+            raise ValueError("Approval digest does not match the current import plan")
+        for delivery in plan.deliveries:
+            if delivery.write_state in ("sending", "uncertain") and not retry_uncertain:
+                ledger.record_error(delivery.id, "Earlier import acceptance is unconfirmed; review idempotent retry first")
+                failed += 1
+                continue
+            ledger.begin_delivery(delivery.id, retry_uncertain=retry_uncertain)
+            try:
+                method = client.import_conversation if event_type == "IMPORT_CONVERSATION" else client.import_review
+                result = method(pull_index, delivery.payload["request"])
+                if result.planned:
+                    raise DeliveryUncertainError("Imported delivery was not confirmed")
+                ledger.mark_delivered(delivery.id)
+                delivered += 1
+            except (ForgeAPIError, DeliveryUncertainError, ValueError) as error:
+                ledger.mark_delivery_uncertain(delivery.id, str(error))
+                failed += 1
+    return CommentBatchSummary(delivered=delivered, failed=failed)
 
 
 @dataclass(frozen=True)

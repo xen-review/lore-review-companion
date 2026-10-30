@@ -9,9 +9,11 @@ Scoped import authorization and non-login participant profiles are implemented
 and tested in the separate Forgejo worktree. The first atomic conversation
 import and lookup endpoints, non-voting review/range imports and threaded
 replies are also tested. Participant-authored PR creation with pinned refs is
-tested as well; CLI/outbox integration remains pending. Native exact multiline
+tested as well. Imported conversation/review queue and approved outbox delivery
+are available as Python APIs; supported CLI/orchestration remains pending.
+Native exact multiline
 quote matching and versioned range delivery are implemented and tested locally;
-per-patch imported-author server acceptance remains pending. Read [PLAN.md](PLAN.md) and [LEDGER.md](LEDGER.md)
+whole-workflow acceptance remains pending. Read [PLAN.md](PLAN.md) and [LEDGER.md](LEDGER.md)
 for scope, current results, and next steps.
 
 ## Install
@@ -70,8 +72,10 @@ The new `ForgeImportClient` uses only the dedicated review-import API. It checks
 the configured source and repository capabilities before writes, is read-only
 unless explicitly enabled, and replays the identical operation after an
 uncertain response. Repository-selected import tokens do not need `read:user`:
-capabilities provide the integration identity. This client is not yet wired
-into the legacy publication commands; no existing effects are auto-migrated.
+capabilities provide the integration identity. Legacy publication commands do
+not use this client, and no existing effects are auto-migrated. Imported queue
+and delivery use distinct version-3 effects with exact patch-parent diff
+evidence and independent reviewed approval digests.
 
 New `queue-comments` operations use native quote blocks unless `--b4-python`
 explicitly selects legacy extraction. Range queueing and delivery require an

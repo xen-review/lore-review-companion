@@ -2417,6 +2417,14 @@ class Ledger:
             )
             return any(json.loads(row[0]).get("payload_version", 1) != 2 for row in rows)
 
+    def comment_effect_types(self, message_id: str, destination: str) -> frozenset[str]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT DISTINCT event_type FROM outbox WHERE message_id = ? AND destination = ?",
+                (_normalize_message_id(message_id), destination),
+            )
+            return frozenset(row[0] for row in rows)
+
     def pending(
         self, limit: int = 100, *, destination: str | None = None, event_type: str | None = None,
         after_id: int = 0, delivery_ids: tuple[int, ...] | None = None,

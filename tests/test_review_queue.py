@@ -1,4 +1,5 @@
 import json
+import hashlib
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -6,19 +7,22 @@ from io import StringIO
 from pathlib import Path
 from dataclasses import replace
 from unittest.mock import patch
+from urllib.error import URLError
 
 from lore_review_companion.b4_adapter import B4ReviewError, DraftSnapshot, LocalDraft, QuotedComment
 from lore_review_companion.cli import main
 from lore_review_companion.forge_api import ForgeAPI
 from lore_review_companion.forge_comments import ForgeCommentPublisher
+from lore_review_companion.forge_imports import ForgeImportClient
 from lore_review_companion.forge_pulls import _series_marker
 from lore_review_companion.ledger import DeliveryStateConflict, Ledger, MessageConflictError, PublicationConflict, WorkerBusyError
 from lore_review_companion.mail_parser import parse_message
-from lore_review_companion.outbox import deliver_approved_comments, migrate_legacy_deliveries, plan_comment_delivery, plan_legacy_migration
-from lore_review_companion.review_queue import queue_archive_replies, queue_b4_drafts, queue_thread_replies, queue_thread_reply
+from lore_review_companion.outbox import deliver_approved_comments, deliver_approved_imports, migrate_legacy_deliveries, plan_comment_delivery, plan_import_delivery, plan_legacy_migration
+from lore_review_companion.preflight import PatchCommit
+from lore_review_companion.review_queue import queue_archive_replies, queue_b4_drafts, queue_imported_reply, queue_thread_replies, queue_thread_reply
 from lore_review_companion.series import discover_series
 from test_anchor import PATCH
-from test_forge_comments import CommentTransport
+from test_forge_comments import CommentTransport, FakeResponse
 from test_series import message
 from lore_review_companion.threads import match_thread_replies
 
@@ -83,6 +87,109 @@ class ReviewQueueTests(unittest.TestCase):
         queue_thread_reply(self.ledger, publisher, 7, match)
         self.assertEqual([item.event_type for item in self.ledger.pending()], ["ISSUE_COMMENT"])
         self.assertEqual(len(self.transport.reviews), 1)
+
+    def test_imported_queue_uses_exact_first_patch_not_cumulative_diff(self):
+        self.ledger = Ledger(Path(self.tempdir.name) / "imported-ledger.sqlite3")
+        first = message("first@example.test", "[PATCH 1/2] xen: first")
+        second = parse_message(
+            b"From: Author <author@example.test>\nMessage-ID: <second@example.test>\n"
+            b"Subject: [PATCH 2/2] xen: second\nIn-Reply-To: <first@example.test>\n\nSecond patch\n"
+        )
+        revision, = discover_series((first, second))
+        self.assertTrue(revision.complete)
+        for source in revision.messages:
+            self.ledger.record_parsed_message(source)
+        self.ledger.record_series_revision(revision)
+        destination = self.api.base_url + self.publisher.repository_path
+        key = destination, revision.series_key, revision.revision
+        self.ledger.begin_publication(*key, "digest", "b" * 40, "lore/imported", "a" * 40)
+        self.ledger.transition_publication(*key, expected=("prepared",), status="complete", pull_index=7)
+        reply = parse_message(
+            b"From: Reviewer <reviewer@example.test>\nMessage-ID: <imported@example.test>\n"
+            b"Subject: Re: first\nIn-Reply-To: <first@example.test>\n\n"
+            b"> --- a/src/sample.c\n> +++ b/src/sample.c\n"
+            b"> +new_call();\n> +duplicate();\nPlease change both lines.\n"
+        )
+        match, = match_thread_replies((*revision.messages, reply), (revision,)).matched
+        client = ForgeImportClient(self.api, "xen-project", "xen", source_url="https://lore.kernel.org/xen-devel/")
+        commits = (
+            PatchCommit(first.message_id, "b" * 40, "c" * 40), PatchCommit(second.message_id, "c" * 40, "a" * 40),
+        )
+        self.transport.diff = b"cumulative diff is intentionally not used for anchoring"
+        snapshot = {
+            "head_commit": "a" * 40, "base_commit": "b" * 40, "merge_base": "b" * 40,
+            "before_commit": "b" * 40, "after_commit": "c" * 40,
+            "diff": PATCH, "diff_sha256": hashlib.sha256(PATCH.encode()).hexdigest(),
+        }
+        with (
+            patch.object(client, "capabilities", return_value={"max_inline_lines": 50, "operations": ["conversation", "review"]}),
+            patch.object(client, "comparison", return_value=snapshot),
+        ):
+            result = queue_imported_reply(self.ledger, client, 7, match, patch_commits=commits, patch_diffs={first.message_id: PATCH})
+            before = self.ledger.pending()
+            queue_imported_reply(self.ledger, client, 7, match, patch_commits=commits, patch_diffs={first.message_id: PATCH})
+        self.assertEqual(self.ledger.pending(), before)
+        self.assertEqual((result.inline_count, result.unresolved_count), (1, 0))
+        self.assertEqual([item.event_type for item in before], ["IMPORT_CONVERSATION", "IMPORT_REVIEW"])
+        request = before[1].payload["request"]
+        self.assertEqual(request["head_commit"], "a" * 40)
+        self.assertEqual(request["comments"][0]["before_commit"], "b" * 40)
+        self.assertEqual(request["comments"][0]["after_commit"], "c" * 40)
+        self.assertEqual(request["comments"][0]["extra_lines_count"], 1)
+        self.assertEqual(before[1].payload["evidence"]["patch_source_sha256"], first.sha256)
+        original_transport = self.api.transport
+        capabilities = {
+            "version": 1, "repository_id": 1, "importer_id": 5, "importer_login": "mirror-bot",
+            "source_url": client.source_url, "operations": ["conversation", "review"], "max_inline_lines": 50,
+        }
+        accepted, posts = {}, []
+
+        def transport(request, timeout):
+            if request.full_url.endswith("/review-imports/capabilities"):
+                return FakeResponse(200, capabilities)
+            if "/review-imports/pulls/7/patches/" in request.full_url:
+                return FakeResponse(200, snapshot)
+            if request.get_method() == "POST" and "/review-imports/" in request.full_url:
+                posts.append(request)
+                sent = json.loads(request.data)
+                if not accepted:
+                    accepted.update({
+                        "id": 10, "repository_id": 1, "importer_id": 5, "participant_id": 6,
+                        "comment_id": 20, "review_id": 21, "code_comment_ids": [30], "type": "review",
+                        "operation_key": sent["operation_key"], "message_id": sent["message_id"],
+                        "message_sha256": sent["message_sha256"],
+                        "source_url": client.source_url + sent["message_id"] + "/",
+                    })
+                    raise URLError("response lost after accepted review")
+                return FakeResponse(200, accepted)
+            return original_transport(request, timeout)
+
+        self.api.transport = transport
+        writer = ForgeImportClient(self.api, client.owner, client.repo, source_url=client.source_url, write_enabled=True)
+        plan = plan_import_delivery(self.ledger, writer, 7, "IMPORT_REVIEW")
+        snapshot["base_commit"] = "d" * 40
+        with self.assertRaisesRegex(PublicationConflict, "changed before approval"):
+            deliver_approved_imports(self.ledger, writer, 7, "IMPORT_REVIEW", approved_digest=plan.approval_digest())
+        self.assertEqual(posts, [])
+        snapshot["base_commit"] = "b" * 40
+        result = deliver_approved_imports(self.ledger, writer, 7, "IMPORT_REVIEW", approved_digest=plan.approval_digest())
+        self.assertEqual((result.delivered, result.failed), (1, 0))
+        self.assertEqual(len(posts), 2)
+        self.assertEqual(json.loads(posts[0].data), json.loads(posts[1].data))
+        self.assertEqual([item.event_type for item in self.ledger.pending()], ["IMPORT_CONVERSATION"])
+        self.assertEqual(accepted["code_comment_ids"], [30])
+        conversation = self.ledger.pending()[0]
+        altered = json.loads(json.dumps(conversation.payload))
+        altered["request"]["address"] = "someone-else@example.test"
+        with self.ledger._connection() as connection:
+            connection.execute("UPDATE outbox SET payload = ? WHERE id = ?", (json.dumps(altered), conversation.id))
+        with self.assertRaisesRegex(PublicationConflict, "identity evidence"):
+            plan_import_delivery(self.ledger, writer, 7, "IMPORT_CONVERSATION")
+        self.assertEqual(len(posts), 2)
+        with self.assertRaisesRegex(DeliveryStateConflict, "migration"):
+            queue_thread_reply(self.ledger, self.publisher, 7, match)
+        with self.assertRaisesRegex(ValueError, "membership"):
+            queue_imported_reply(self.ledger, client, 7, match, patch_commits=commits[::-1], patch_diffs={})
 
     def test_cli_native_queue_does_not_require_b4_and_passes_range_limit(self):
         arguments = [

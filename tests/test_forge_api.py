@@ -1,4 +1,5 @@
 import json
+import hashlib
 import io
 import os
 import tempfile
@@ -222,6 +223,33 @@ class GiteaAPITests(unittest.TestCase):
                 client.import_review(2, payload)
         with self.assertRaisesRegex(ValueError, "not supported"):
             client.import_conversation(2, {"operation_key": "conversation:1"})
+
+    def test_import_comparison_reads_verify_exact_parent_and_diff_hash(self):
+        capabilities = {
+            "version": 1, "repository_id": 1, "importer_id": 2, "importer_login": "review-companion",
+            "source_url": "https://lore.kernel.org/xen-devel/", "operations": ["review"],
+        }
+        comparison = {
+            "head_commit": "a" * 40, "base_commit": "b" * 40, "merge_base": "b" * 40,
+            "before_commit": "b" * 40, "after_commit": "c" * 40, "diff": "exact patch\n",
+            "diff_sha256": hashlib.sha256(b"exact patch\n").hexdigest(),
+        }
+        requests = []
+
+        def transport(request, _timeout):
+            requests.append(request)
+            return FakeResponse(200, json.dumps(capabilities if request.full_url.endswith("/capabilities") else comparison).encode())
+
+        client = ForgeImportClient(ForgeAPI("https://forge.test/api/v1/", transport=transport), "owner", "repo",
+                                   source_url=capabilities["source_url"])
+        self.assertEqual(client.comparison(2, after_commit="c" * 40), comparison)
+        comparison["diff_sha256"] = "d" * 64
+        with self.assertRaisesRegex(ValueError, "exact patch"):
+            client.comparison(2, after_commit="c" * 40)
+        comparison["head_commit"] = True
+        with self.assertRaisesRegex(ValueError, "invalid imported PR"):
+            client.comparison(2)
+        self.assertTrue(all("/review-imports/" in request.full_url for request in requests))
 
     @patch("lore_review_companion.forge_api.build_opener")
     def test_default_transport_passes_timeout_by_keyword(self, build_opener):

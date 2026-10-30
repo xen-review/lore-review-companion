@@ -7,6 +7,7 @@ import binascii
 import hashlib
 import json
 from dataclasses import asdict, dataclass
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Iterable
 from urllib.parse import quote, urlsplit
@@ -15,9 +16,11 @@ from lore_review_companion.anchor import DiffIndex
 from lore_review_companion.b4_adapter import B4ReviewError, extract_quoted_comments, read_local_review_drafts
 from lore_review_companion.forge_api import ForgeAPIError
 from lore_review_companion.forge_comments import ForgeCommentPublisher, StaleAnchorError, quote_untrusted_text
-from lore_review_companion.ledger import Ledger
+from lore_review_companion.forge_imports import ForgeImportClient
+from lore_review_companion.ledger import DeliveryStateConflict, Ledger, Publication
 from lore_review_companion.mail_parser import ParsedMessage, extract_quoted_remarks
 from lore_review_companion.outbox import comment_destination
+from lore_review_companion.preflight import PatchCommit
 from lore_review_companion.series import discover_series
 from lore_review_companion.threads import ThreadMatch, match_thread_replies
 
@@ -122,6 +125,15 @@ def _queue_thread_reply(
     ledger: Ledger, publisher: ForgeCommentPublisher, pull_index: int, match: ThreadMatch, *,
     b4_python: str | None, inbox_url: str,
 ) -> ReplyQueueSummary:
+    publication = _verified_reply_publication(ledger, publisher, pull_index, match, inbox_url=inbox_url)
+    return _queue_verified_thread_reply(
+        ledger, publisher, pull_index, match, publication.head_commit, b4_python=b4_python, inbox_url=inbox_url,
+    )
+
+
+def _verified_reply_publication(
+    ledger: Ledger, publisher: ForgeCommentPublisher | ForgeImportClient, pull_index: int, match: ThreadMatch, *, inbox_url: str,
+) -> Publication:
     message = match.message
     if message.kind != "reply" or not message.message_id:
         raise ValueError("A reply with a valid Message-ID is required")
@@ -145,9 +157,102 @@ def _queue_thread_reply(
     current_matches = match_thread_replies((*recorded.messages, *related), (recorded,))
     if match not in current_matches.matched:
         raise ValueError("Reply thread ancestry changed; inspect before queueing")
-    return _queue_verified_thread_reply(
-        ledger, publisher, pull_index, match, publication.head_commit, b4_python=b4_python, inbox_url=inbox_url,
-    )
+    return publication
+
+
+def queue_imported_reply(
+    ledger: Ledger, client: ForgeImportClient, pull_index: int, match: ThreadMatch, *,
+    patch_commits: tuple[PatchCommit, ...], patch_diffs: Mapping[str, str], max_inline_lines: int = 50,
+) -> ReplyQueueSummary:
+    if type(max_inline_lines) is not int or not 1 <= max_inline_lines <= 1000:
+        raise ValueError("A bounded inline line limit is required")
+    with ledger.worker_lock():
+        publication = _verified_reply_publication(ledger, client, pull_index, match, inbox_url=client.source_url)
+        destination = comment_destination(client, pull_index)
+        message = match.message
+        if ledger.comment_effect_types(message.message_id, destination) & {"ISSUE_COMMENT", "INLINE_COMMENT"}:
+            raise DeliveryStateConflict("Legacy effects exist; imported authorship requires a separate reviewed migration")
+        recorded = ledger.series_revision(match.series_key, match.revision)
+        members = sorted((member for member in recorded.messages if member.kind == "patch"), key=lambda member: member.patch_index or 0)
+        if tuple(item.message_id for item in patch_commits) != tuple(member.message_id for member in members):
+            raise ValueError("Patch commit mapping does not match the recorded series membership")
+        parent = publication.base_commit
+        for item in patch_commits:
+            if item.before_commit != parent:
+                raise ValueError("Patch commit mapping is not one exact parent chain")
+            parent = item.after_commit
+        if parent != publication.head_commit:
+            raise ValueError("Patch commit mapping does not reach the recorded publication head")
+        if not message.from_address:
+            raise ValueError("Imported replies require a retained source email identity")
+        estimate = message.time_estimate
+        common = {
+            "message_id": message.message_id, "message_sha256": message.sha256,
+            "address": message.from_address, "name": message.from_name or "",
+            "source_time": estimate.timestamp if estimate else None,
+            "source_time_basis": "unverified" if estimate else "unknown",
+        }
+        thread = {"series_key": match.series_key, "revision": match.revision, "patch_message_id": match.patch_message_id}
+        identity = hashlib.sha256(f"{message.message_id}\0imported-full-message-v1".encode()).hexdigest()
+        conversation = ledger.enqueue(message.message_id, "IMPORT_CONVERSATION", destination, "imported-full-message-v1", {
+            "payload_version": 3, "thread": thread,
+            "request": {**common, "operation_key": identity, "body": quote_untrusted_text(message.body_text)},
+        })
+        remarks = extract_quoted_remarks(message.body_text)
+        if not remarks or match.patch_message_id is None:
+            return ReplyQueueSummary(conversation, 0, 0)
+        patch = next((item for item in patch_commits if item.message_id == match.patch_message_id), None)
+        diff = patch_diffs.get(match.patch_message_id)
+        if patch is None or not isinstance(diff, str):
+            return ReplyQueueSummary(conversation, 0, len(remarks), "Exact patch comparison is unavailable")
+        capabilities = client.capabilities()
+        supported_limit = capabilities.get("max_inline_lines")
+        if (
+            type(supported_limit) is not int or supported_limit < 0
+            or (supported_limit > 0 and max_inline_lines > supported_limit)
+            or "review" not in capabilities["operations"]
+        ):
+            return ReplyQueueSummary(conversation, 0, len(remarks), "Requested review range capability is unavailable")
+        try:
+            snapshot = client.comparison(pull_index, after_commit=patch.after_commit)
+            if (
+                snapshot["head_commit"] != publication.head_commit or snapshot["before_commit"] != patch.before_commit
+                or snapshot["diff"] != diff
+            ):
+                raise StaleAnchorError("Exact server patch comparison differs from the recorded commit mapping")
+            comparison = tuple(snapshot[field] for field in ("head_commit", "base_commit", "merge_base"))
+        except (ForgeAPIError, StaleAnchorError, ValueError) as error:
+            return ReplyQueueSummary(conversation, 0, len(remarks), str(error))
+        index = DiffIndex(diff)
+        comments, evidence = [], []
+        for remark in remarks:
+            anchor = index.resolve_quote(remark, max_lines=max_inline_lines)
+            if anchor is None or not remark.text.strip():
+                continue
+            comments.append({
+                "path": anchor.path, "body": quote_untrusted_text(remark.text),
+                "before_commit": patch.before_commit, "after_commit": patch.after_commit,
+                "old_position": anchor.old_position, "new_position": anchor.new_position,
+                "extra_lines_count": anchor.extra_lines_count,
+            })
+            evidence.append(asdict(remark))
+        if comments:
+            identity = hashlib.sha256(f"{message.message_id}\0imported-review-v1".encode()).hexdigest()
+            ledger.enqueue(message.message_id, "IMPORT_REVIEW", destination, "imported-review-v1", {
+                "payload_version": 3, "thread": thread, "max_inline_lines": max_inline_lines,
+                "evidence": {
+                    "parser": "quote-blocks-v1", "source_sha256": message.sha256,
+                    "patch_message_id": patch.message_id,
+                    "patch_source_sha256": next(member.sha256 for member in members if member.message_id == patch.message_id),
+                    "patch_diff": diff, "patch_diff_sha256": hashlib.sha256(diff.encode("utf-8")).hexdigest(), "remarks": evidence,
+                },
+                "request": {
+                    **common, "operation_key": identity, "body": message.subject or "Mail review",
+                    "head_commit": comparison[0], "base_commit": comparison[1], "merge_base": comparison[2],
+                    "comments": comments,
+                },
+            })
+        return ReplyQueueSummary(conversation, len(comments), len(remarks) - len(comments))
 
 
 def _queue_verified_thread_reply(
@@ -159,6 +264,8 @@ def _queue_verified_thread_reply(
     if not message_id:
         raise ValueError("A reply with a valid Message-ID is required")
     destination = comment_destination(publisher, pull_index)
+    if ledger.comment_effect_types(message_id, destination) & {"IMPORT_CONVERSATION", "IMPORT_REVIEW", "IMPORT_REPLY"}:
+        raise DeliveryStateConflict("Imported effects exist; legacy delivery requires a separate reviewed migration")
     thread = {"series_key": match.series_key, "revision": match.revision, "patch_message_id": match.patch_message_id}
     source_url = f"{inbox_url.rstrip('/')}/{quote(message_id, safe='@')}/"
     sender = " ".join(part for part in (message.from_name, message.from_address) if part) or "unknown"

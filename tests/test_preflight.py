@@ -101,6 +101,21 @@ class PreflightTests(unittest.TestCase):
             self.assertEqual(prepared.run_git("Inspect", "rev-parse", "HEAD"), prepared.result.head_commit)
         self.assertFalse(repository.exists())
 
+    def test_maps_ordered_patch_messages_to_exact_linear_commits(self):
+        with prepare_patch_mailbox(self.repository, self.base, self.mailbox) as prepared:
+            mapping = prepared.patch_commits(("first@example.test", "second@example.test"))
+            self.assertEqual(mapping[0].before_commit, self.base)
+            self.assertEqual(mapping[1].before_commit, mapping[0].after_commit)
+            self.assertEqual(mapping[1].after_commit, prepared.result.head_commit)
+            self.assertNotEqual(mapping[0].after_commit, prepared.result.head_commit)
+            self.assertEqual(tuple(item.message_id for item in mapping), ("first@example.test", "second@example.test"))
+            for members in ((), ("first@example.test",), ("same@example.test", "same@example.test")):
+                with self.subTest(members=members), self.assertRaises(GitPreflightError):
+                    prepared.patch_commits(members)
+            with patch.object(type(prepared), "run_git", return_value=f"{prepared.result.head_commit} {self.base} other-parent"):
+                with self.assertRaises(GitPreflightError):
+                    prepared.patch_commits(("first@example.test", "second@example.test"))
+
     def test_revision_branch_dry_run_create_and_replay(self):
         remote = self.create_remote()
         arguments = {
