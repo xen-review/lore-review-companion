@@ -132,13 +132,23 @@ files, source snapshots and nested repositories are not part of these commits.
 
 ## Remark-Level Threading Follow-up
 
-These phases are planned, not implemented. Detailed boundaries are in
+The first storage foundation is implemented but not deployed; all user-facing
+threading phases remain incomplete. Detailed boundaries are in
 [PLAN.md](PLAN.md#planned-remark-level-discussion-trees).
+
+- Forgejo `e761990cb0` adds an indexed `discussion_parent_id` column, separate
+  from cross-reference metadata, with a schema migration. `3d4dc710ba` rejects
+  missing, cross-PR, cyclic and over-depth parent chains at creation. Focused
+  SQLite model and existing-table migration tests pass. Both commits are pushed;
+  neither is deployed. The migration does not yet backfill old inline replies.
+- No normal-user reply API, import extension, tree UI, companion mapping,
+  deletion policy, browser verification or new production PR is implemented by
+  these commits. Do not treat the stored field as a completed threading feature.
 
 | Phase | Status | Dependency | Completion evidence |
 | --- | --- | --- | --- |
 | T01: tree contract | TODO | None | Define normal/inline parent types, chronology, deletion, nesting limits, permissions and migration behavior. |
-| T02: Forgejo parent model and user API | TODO | T01 | Persist parent edges, safely backfill imported inline parents without confusing cross-references, and test normal-user permissions and invalid/cyclic targets. |
+| T02: Forgejo parent model and user API | IN PROGRESS | T01 | Persist parent edges, safely backfill imported inline parents without confusing cross-references, and test normal-user permissions and invalid/cyclic targets. |
 | T03: scoped import API | TODO | T02 | Support non-inline and nested parents with capability negotiation, source provenance, parent-content checks, conflict handling and replay. |
 | T04: tree presentation | TODO | T02 | Show nested reply trees and per-comment controls in timeline and inline views; verify desktop/mobile, accessibility, ordering and permalinks. |
 | T05: remark-level companion | TODO | T03, T04 | Map each unique quoted parent across inline and non-inline remarks; verify separate stable effects, complete-mail fallback, ambiguity, replay and real-server/browser behavior. |
