@@ -7,7 +7,7 @@ from __future__ import annotations
 import ast
 import re
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Iterable
 
 from lore_review_companion.mail_parser import QuotedRemark
@@ -63,6 +63,7 @@ class DiffIndex:
         self._ranges: dict[tuple[str, str, int], list[tuple[str, int]]] = defaultdict(
             list
         )
+        self._hunk_headers: dict[int, str] = {}
         old_path = ""
         new_path = ""
         old_line = 0
@@ -83,6 +84,7 @@ class DiffIndex:
                 new_line = int(hunk.group(2))
                 in_hunk = True
                 hunk_index += 1
+                self._hunk_headers[hunk_index] = line
                 continue
 
             if not in_hunk:
@@ -181,6 +183,55 @@ class DiffIndex:
                     )
                 )
         return next(iter(candidates)) if len(candidates) == 1 else None
+
+    def resolve_segmented_quote(
+        self, remark: QuotedRemark, *, max_lines: int = 50
+    ) -> RangeAnchor | None:
+        segments: list[tuple[str | None, list[str]]] = [(None, [])]
+        for line in remark.quote:
+            if _HUNK_RE.match(line):
+                if any(
+                    not item.startswith(("diff --git ", "index ", "--- ", "+++ "))
+                    for item in segments[-1][1]
+                ):
+                    segments.append((line, []))
+                else:
+                    segments[-1] = (line, segments[-1][1])
+                continue
+            segments[-1][1].append(line)
+        if not segments[-1][1] or len(segments) < 2:
+            return None
+        paths = {
+            _header_path(header, header[:4])
+            for header in (*remark.headers, *remark.quote)
+            if header.startswith(("--- ", "+++ "))
+        } - {""}
+        if len(paths) != 1:
+            return None
+        last_hunk = 0
+        last_anchor = None
+        for header, segment in segments:
+            anchor = self.resolve_quote(
+                replace(remark, quote=tuple(segment)), max_lines=max_lines
+            )
+            if anchor is None:
+                return None
+            side = "old" if anchor.old_position else "new"
+            start = anchor.old_position or anchor.new_position
+            hunks = [
+                number
+                for (path, candidate_side, number), lines in self._ranges.items()
+                if path == anchor.path
+                and candidate_side == side
+                and number > last_hunk
+                and (header is None or self._hunk_headers[number] == header)
+                and any(position == start for _, position in lines)
+            ]
+            if len(hunks) != 1:
+                return None
+            last_hunk = hunks[0]
+            last_anchor = anchor
+        return last_anchor
 
     def resolve(self, comment: dict[str, object]) -> Anchor | None:
         """Return a unique exact match, using b4's line hint only to disambiguate."""

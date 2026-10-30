@@ -142,6 +142,46 @@ class DiffIndexTests(unittest.TestCase):
                 (remark,) = extract_quoted_remarks(body)
                 self.assertIsNone(self.index.resolve_quote(remark))
 
+    def test_review_quote_uses_exact_final_hunk_after_validating_earlier_hunks(self):
+        index = DiffIndex(
+            "diff --git a/x b/x\n--- a/x\n+++ b/x\n"
+            "@@ -1,1 +1,2 @@\n context\n+first();\n"
+            "@@ -9,1 +10,3 @@\n later\n+log_start();\n+log_finish();\n"
+        )
+        (remark,) = extract_quoted_remarks(
+            "> --- a/x\n> +++ b/x\n>  context\n> +first();\n"
+            "> @@ -9,1 +10,3 @@\n>  later\n> +log_start();\n"
+            "> +log_finish();\nThe log is too verbose.\n"
+        )
+        anchor = index.resolve_segmented_quote(remark)
+        self.assertEqual(
+            (anchor.path, anchor.new_position, anchor.extra_lines_count), ("x", 10, 2)
+        )
+        self.assertIsNone(index.resolve_quote(remark))
+        changed = remark.__class__(
+            tuple(line.replace("+first();", "+unrelated();") for line in remark.quote),
+            remark.headers,
+            remark.text,
+            remark.quote_depth,
+            remark.quote_start,
+            remark.remark_start,
+            remark.remark_end,
+        )
+        self.assertIsNone(index.resolve_segmented_quote(changed))
+        wrong_hunk = remark.__class__(
+            tuple(
+                line.replace("@@ -9,1 +10,3 @@", "@@ -8,1 +9,3 @@")
+                for line in remark.quote
+            ),
+            remark.headers,
+            remark.text,
+            remark.quote_depth,
+            remark.quote_start,
+            remark.remark_start,
+            remark.remark_end,
+        )
+        self.assertIsNone(index.resolve_segmented_quote(wrong_hunk))
+
     def test_range_context_only_defaults_to_right_and_renames_fail_closed(self):
         (remark,) = extract_quoted_remarks(
             "> --- a/src/sample.c\n> +++ b/src/sample.c\n>  duplicate();\n>  tail();\nRemark\n",
