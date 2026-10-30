@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote
 
-from lore_review_companion.anchor import Anchor
+from lore_review_companion.anchor import Anchor, RangeAnchor
 from lore_review_companion.forge_api import ForgeAPI, ForgeAPIError
 
 
@@ -64,10 +64,12 @@ def _with_marker(body: str, marker: str) -> str:
 class ForgeCommentPublisher:
     def __init__(
         self, api: ForgeAPI, owner: str, repo: str, *, write_enabled: bool = False,
-        allow_inline_writes: bool = False,
+        allow_inline_writes: bool = False, max_inline_lines: int = 1,
     ):
         if not owner or not repo:
             raise ValueError("owner and repository must be non-empty")
+        if not isinstance(max_inline_lines, int) or isinstance(max_inline_lines, bool) or max_inline_lines < 1:
+            raise ValueError("The configured inline line limit must be positive")
         self.api = api
         self.owner = owner
         self.repo = repo
@@ -76,6 +78,7 @@ class ForgeCommentPublisher:
         )
         self.write_enabled = write_enabled
         self.allow_inline_writes = allow_inline_writes
+        self.max_inline_lines = max_inline_lines
 
     def ensure_issue_comment(
         self,
@@ -127,6 +130,8 @@ class ForgeCommentPublisher:
         effect_key: str,
         body: str,
         head_commit: str,
+        base_commit: str | None = None,
+        merge_base: str | None = None,
     ) -> DeliveryResult:
         if (
             not isinstance(anchor.path, str) or not anchor.path
@@ -138,6 +143,16 @@ class ForgeCommentPublisher:
             raise ValueError("inline anchor must identify exactly one positive diff position")
         if not isinstance(head_commit, str) or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", head_commit):
             raise ValueError("inline comment requires the full reviewed head commit")
+        if isinstance(anchor, RangeAnchor) and (
+            not isinstance(anchor.extra_lines_count, int) or isinstance(anchor.extra_lines_count, bool)
+            or not 0 <= anchor.extra_lines_count < self.max_inline_lines
+        ):
+            raise ValueError("inline range exceeds the configured line limit")
+        if (base_commit is None) != (merge_base is None) or any(
+            not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit)
+            for commit in (base_commit, merge_base) if commit is not None
+        ):
+            raise ValueError("inline comparison requires full base and merge-base commits")
         marker = _marker(source_message_id, effect_key)
         path = f"{self.repository_path}/pulls/{self._pull_index(pull_index)}"
         existing, matching_review = self._find_inline_comment(path, marker)
@@ -151,6 +166,10 @@ class ForgeCommentPublisher:
         head = pull.get("head") if isinstance(pull, dict) else None
         if not isinstance(head, dict) or head.get("sha") != head_commit:
             raise StaleAnchorError("Pull request head differs from the reviewed commit")
+        if base_commit is not None:
+            base = pull.get("base")
+            if not isinstance(base, dict) or base.get("sha") != base_commit or pull.get("merge_base") != merge_base:
+                raise StaleAnchorError("Pull request base or merge base differs from the reviewed comparison")
 
         payload = {
             "event": "COMMENT",
@@ -165,6 +184,8 @@ class ForgeCommentPublisher:
                 }
             ],
         }
+        if isinstance(anchor, RangeAnchor):
+            payload["comments"][0]["extra_lines_count"] = anchor.extra_lines_count
         if not self.write_enabled:
             return DeliveryResult({"path": f"{path}/reviews", **payload}, created=False, planned=True)
         if not self.allow_inline_writes:

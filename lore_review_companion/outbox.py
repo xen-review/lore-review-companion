@@ -9,7 +9,7 @@ import re
 from dataclasses import asdict, dataclass, replace
 from contextlib import nullcontext
 
-from lore_review_companion.anchor import Anchor
+from lore_review_companion.anchor import Anchor, RangeAnchor
 from lore_review_companion.forge_api import ForgeAPIError, authenticated_user
 from lore_review_companion.forge_comments import (
     DeliveryResult, DeliveryUncertainError, ForgeCommentPublisher, with_tool_attribution,
@@ -35,9 +35,13 @@ class CommentDeliveryPlan:
     allow_inline_writes: bool
     retry_uncertain: bool
     deliveries: tuple[Delivery, ...]
+    max_inline_lines: int = 1
 
     def approval_digest(self) -> str:
-        value = json.dumps(asdict(self), sort_keys=True, separators=(",", ":")).encode("utf-8")
+        data = asdict(self)
+        if not any(delivery.payload.get("payload_version") == 2 for delivery in self.deliveries):
+            data.pop("max_inline_lines")
+        value = json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(value).hexdigest()
 
 
@@ -184,13 +188,29 @@ def _publish_comment(
     body = delivery.payload.get("body")
     if not isinstance(body, str) or not body.strip():
         raise ValueError("queued comment body must be a non-empty string")
+    version = delivery.payload.get("payload_version", 1)
+    if not isinstance(version, int) or isinstance(version, bool) or version not in (1, 2):
+        raise ValueError("Unsupported comment payload version")
     arguments = {"source_message_id": delivery.message_id, "effect_key": delivery.effect_key, "body": body}
     if delivery.event_type == "ISSUE_COMMENT":
         return publisher.ensure_issue_comment(pull_index, **arguments)
+    if delivery.event_type != "INLINE_COMMENT":
+        raise ValueError("Unsupported comment event type")
     anchor_data = delivery.payload.get("anchor")
     head_commit = delivery.payload.get("head_commit")
-    if not isinstance(anchor_data, dict) or set(anchor_data) != {"path", "old_position", "new_position"}:
+    fields = {"path", "old_position", "new_position"}
+    if version == 2:
+        fields.add("extra_lines_count")
+    if not isinstance(anchor_data, dict) or set(anchor_data) != fields:
         raise ValueError("queued inline comment must have one complete anchor")
+    if version == 2:
+        if not isinstance(delivery.payload.get("base_commit"), str) or not isinstance(delivery.payload.get("merge_base"), str):
+            raise ValueError("Versioned ranges require the complete reviewed comparison")
+        return publisher.ensure_inline_comment(
+            pull_index, RangeAnchor(**anchor_data), head_commit=head_commit,
+            base_commit=delivery.payload.get("base_commit"), merge_base=delivery.payload.get("merge_base"),
+            **arguments,
+        )
     anchor = Anchor(**anchor_data)
     return publisher.ensure_inline_comment(pull_index, anchor, head_commit=head_commit, **arguments)
 
@@ -203,6 +223,16 @@ def _assert_thread_sources(
     sources = []
     publications = ledger.publications_for_pull(destination, pull_index)
     for delivery in deliveries:
+        if delivery.payload.get("payload_version") == 2:
+            evidence = delivery.payload.get("evidence")
+            source = ledger.messages_by_id((delivery.message_id,))[0]
+            if (
+                not isinstance(evidence, dict) or evidence.get("parser") != "quote-blocks-v1"
+                or evidence.get("source_sha256") != source.sha256
+                or not isinstance(evidence.get("quote"), list)
+                or not evidence["quote"] or any(not isinstance(line, str) for line in evidence["quote"])
+            ):
+                raise PublicationConflict("Queued range lacks matching source and parser evidence")
         thread = delivery.payload.get("thread")
         if thread is None:
             if publications and ledger.messages_by_id((delivery.message_id,))[0].kind == "reply":
@@ -249,7 +279,9 @@ def _deliver_comments(
         if selected is None and pending:
             actor = authenticated_user(publisher.api)
             pending = tuple(_attributed_delivery(delivery, actor.login) for delivery in pending)
-        preview = ForgeCommentPublisher(publisher.api, publisher.owner, publisher.repo)
+        preview = ForgeCommentPublisher(
+            publisher.api, publisher.owner, publisher.repo, max_inline_lines=publisher.max_inline_lines,
+        )
         for delivery in pending:
             try:
                 ledger.assert_unconflicted((delivery.message_id,))
@@ -318,6 +350,7 @@ def plan_comment_delivery(
     deliveries = tuple(_attributed_delivery(delivery, actor.login) for delivery in deliveries)
     return CommentDeliveryPlan(
         destination, actor.login, actor.user_id, event_type, publisher.allow_inline_writes, retry_uncertain, deliveries,
+        publisher.max_inline_lines,
     )
 
 

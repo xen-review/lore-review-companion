@@ -1,14 +1,16 @@
+import hashlib
 import json
 import tempfile
 import unittest
+from dataclasses import asdict
 from pathlib import Path
 from urllib.error import URLError
 from unittest.mock import patch
 
-from lore_review_companion.anchor import Anchor
+from lore_review_companion.anchor import Anchor, RangeAnchor
 from lore_review_companion.forge_api import ForgeAPI, ForgeAPIError
 from lore_review_companion.forge_comments import DeliveryUncertainError, ForgeCommentPublisher, InlineWritesDisabledError, StaleAnchorError
-from lore_review_companion.ledger import ArchiveSafetyBlocked, Ledger, MessageConflictError, WorkerBusyError
+from lore_review_companion.ledger import ArchiveSafetyBlocked, Ledger, MessageConflictError, PublicationConflict, WorkerBusyError
 from lore_review_companion.outbox import (
     comment_destination, deliver_approved_comments, deliver_inline_comments,
     deliver_issue_comments, plan_comment_delivery,
@@ -87,6 +89,7 @@ class CommentTransport:
                     "path": comment["path"],
                     "position": comment["new_position"],
                     "original_position": comment["old_position"],
+                    "extra_lines_count": comment.get("extra_lines_count", 0),
                 }
                 for comment in payload["comments"]
             ]
@@ -212,6 +215,36 @@ class ForgeCommentPublisherTests(unittest.TestCase):
             [request.get_method() for request in self.transport.requests].count("POST"),
             1,
         )
+
+    def test_inline_ranges_require_explicit_capability_and_keep_comparison(self):
+        arguments = {
+            "source_message_id": "range@example.test", "effect_key": "range", "body": "Both lines.",
+            "head_commit": self.transport.head_commit, "base_commit": "b" * 40, "merge_base": "b" * 40,
+        }
+        anchor = RangeAnchor("x.c", 0, 42, 1)
+        with self.assertRaisesRegex(ValueError, "line limit"):
+            self.publisher.ensure_inline_comment(7, anchor, **arguments)
+        publisher = ForgeCommentPublisher(
+            self.api, "xen-project", "xen", write_enabled=True, allow_inline_writes=True, max_inline_lines=50,
+        )
+        with self.assertRaisesRegex(StaleAnchorError, "base or merge base"):
+            publisher.ensure_inline_comment(7, anchor, **{**arguments, "merge_base": "c" * 40})
+        self.assertFalse(any(request.get_method() == "POST" for request in self.transport.requests))
+        self.assertTrue(publisher.ensure_inline_comment(7, anchor, **arguments).created)
+        payload = json.loads(next(request.data for request in self.transport.requests if request.get_method() == "POST"))
+        self.assertEqual(payload["comments"][0]["extra_lines_count"], 1)
+        self.assertFalse(publisher.ensure_inline_comment(7, anchor, **arguments).created)
+        self.assertEqual(len(self.transport.reviews), 1)
+
+    def test_invalid_ranges_are_rejected_without_writes(self):
+        arguments = {
+            "source_message_id": "range@example.test", "effect_key": "range", "body": "Review",
+            "head_commit": self.transport.head_commit,
+        }
+        for count in (-1, True, 50):
+            with self.subTest(count=count), self.assertRaises(ValueError):
+                self.publisher.ensure_inline_comment(7, RangeAnchor("x.c", 0, 3, count), **arguments)
+        self.assertFalse(any(request.get_method() == "POST" for request in self.transport.requests))
 
     def test_inline_reconciliation_requires_submitted_comment_review(self):
         arguments = {
@@ -526,6 +559,59 @@ class ForgeCommentPublisherTests(unittest.TestCase):
                     ledger, self.publisher, 7, "INLINE_COMMENT", approved_digest=plan.approval_digest(),
                     retry_uncertain=True,
                 )
+
+    def test_legacy_approval_digest_does_not_gain_range_fields(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = Ledger(Path(directory) / "ledger.sqlite3")
+            plan = plan_comment_delivery(ledger, self.publisher, 7, "INLINE_COMMENT")
+            legacy = asdict(plan)
+            legacy.pop("max_inline_lines")
+            expected = hashlib.sha256(json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+            self.assertEqual(plan.approval_digest(), expected)
+
+    def test_versioned_range_approval_binds_capability_and_source_hash(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = Ledger(Path(directory) / "ledger.sqlite3")
+            raw = b"Message-ID: <range@example.test>\n\nRaw mail\n"
+            ledger.record_message("range@example.test", raw)
+            publisher = ForgeCommentPublisher(
+                self.api, "xen-project", "xen", write_enabled=True,
+                allow_inline_writes=True, max_inline_lines=50,
+            )
+            payload = {
+                "payload_version": 2, "body": "Both lines.", "head_commit": self.transport.head_commit,
+                "base_commit": "b" * 40, "merge_base": "b" * 40,
+                "anchor": {"path": "x.c", "old_position": 0, "new_position": 42, "extra_lines_count": 1},
+                "evidence": {"parser": "quote-blocks-v1", "source_sha256": hashlib.sha256(raw).hexdigest(),
+                             "quote": ["+first", "+second"]},
+            }
+            ledger.enqueue("range@example.test", "INLINE_COMMENT", comment_destination(publisher, 7), "range", payload)
+            plan = plan_comment_delivery(ledger, publisher, 7, "INLINE_COMMENT")
+            with ledger._connection() as connection:
+                invalid = {**payload, "evidence": {**payload["evidence"], "source_sha256": "0" * 64}}
+                connection.execute("UPDATE outbox SET payload = ?", (json.dumps(invalid),))
+            with self.assertRaisesRegex(PublicationConflict, "source and parser evidence"):
+                plan_comment_delivery(ledger, publisher, 7, "INLINE_COMMENT")
+            with ledger._connection() as connection:
+                connection.execute("UPDATE outbox SET payload = ?", (json.dumps(payload),))
+            publisher.max_inline_lines = 2
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                deliver_approved_comments(ledger, publisher, 7, "INLINE_COMMENT", approved_digest=plan.approval_digest())
+            publisher.max_inline_lines = 50
+            self.assertEqual(deliver_approved_comments(
+                ledger, publisher, 7, "INLINE_COMMENT", approved_digest=plan.approval_digest(),
+            ).delivered, 1)
+            self.assertEqual(ledger.pending(), [])
+
+    def test_unknown_payload_version_never_writes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = Ledger(Path(directory) / "ledger.sqlite3")
+            ledger.record_message("reply@example.test", b"raw")
+            ledger.enqueue("reply@example.test", "ISSUE_COMMENT", comment_destination(self.publisher, 7), "full", {
+                "body": "review", "payload_version": 999,
+            })
+            self.assertEqual(deliver_issue_comments(ledger, self.publisher, 7).failed, 1)
+            self.assertFalse(any(request.get_method() == "POST" for request in self.transport.requests))
 
     def test_conflict_detected_after_queueing_blocks_delivery(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -21,6 +21,8 @@ No automatic pushes. Forgejo changes belong to the separate parent repository.
   payloads survive reopening unchanged. Versioned range payloads follow.
 - C03 `DONE`: decoded mail now preserves quoted blocks and following remarks;
   exact range resolution (C04) is also verified. Versioned delivery is next.
+- C05 `IN PROGRESS`: version-2 range delivery validates source hashes and
+  complete comparison snapshots, with explicitly configured range limits.
 - Historical sample publications remain background evidence only; the current
   baseline is 295 synthetic tests, with 3 explicitly reported skips.
 
@@ -54,7 +56,7 @@ installed versions, historical commits and current tests are B01, not assumed.
 | C02 | TODO | B04 | Pin one b4 runtime/entrypoint; explicit offline revision assembly without added trailers or partial rerolls. Verify membership/counts; no network, user-checkout mutation, or private draft publication. |
 | C03 | DONE | B04 | Added deterministic quoted-block extraction with depth/headers/source offsets, remarks and conservative signature/trailer boundaries. 13 mail-parser tests pass, including nested/trimmed and MIME/CRLF cases. Full message remains canonical. |
 | C04 | DONE | C03 | Exact contiguous same-file/side range matching added separately from legacy Anchor. All 13 anchor tests pass; full context disambiguates repeated lines, while mixed/disjoint/headerless/renamed/ambiguous cases fail closed. |
-| C05 | TODO | C01, C02, C04; F04 for live integration | Propagate ranges/evidence through queues, previews, approvals and API. Synthetic parse-to-fake-API tests cover replay, stale snapshots, multiple followups and uncertain writes with stable source-effect keys. |
+| C05 | IN PROGRESS | C01, C02, C04; F04 for live integration | Publisher/outbox support version-2 ranges, source hashes, base/merge-base snapshots and approval-bound limits. 30 publisher and 31 legacy queue tests pass; native extraction-to-delivery integration follows. |
 
 ## Forgejo Extension
 
@@ -275,3 +277,19 @@ Bring them into scope only through an explicit decision.
   never recorded in source/docs/commands. Before a restart, identify the exact
   checkout/configuration because multiple gitea processes exist.
 - Commit subject: `feat: resolve exact multiline review quote ranges`.
+
+### 2026-10-30: C01/C05 Versioned Range Delivery
+
+- Added explicit range capability limits to the existing publisher. Legacy
+  single-line requests omit range fields; ranges send `extra_lines_count` and
+  require an explicitly configured limit. Base and merge-base are rechecked
+  alongside head before a new versioned write.
+- Outbox version 2 requires a complete range/comparison and matching retained
+  source hash/parser evidence. Unknown versions are rejected. Legacy payloads
+  remain unchanged; their approval digest deliberately omits the new range
+  capability field. Version-2 digests include it so capability changes require
+  a fresh approval.
+- Focused checks: 30 publisher tests and 31 legacy queue tests passed, with
+  synthetic transports and live opt-ins disabled. Tests cover range replay,
+  source-hash mismatch, stale base, limits and legacy digest compatibility.
+- Commit subject: `feat: deliver versioned ranges with approval-bound evidence`.
