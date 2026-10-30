@@ -18,7 +18,8 @@ and publication are available as Python APIs and explicit CLI commands;
 bounded read-only coordination and explicitly authorized unattended rounds are available.
 Native exact multiline quote matching and versioned range delivery pass the
 isolated real-Forgejo/b4 workflow, including V1/V2, late replies and bounded
-worker replay. Production rollout is tracked separately. Read the
+worker replay. Initial real Xen PRs and reviews are published, and the bounded
+production worker runs under a separately authorized expiring policy. Read the
 [implementation plan](docs/design/PLAN.md) and [task ledger](docs/design/LEDGER.md)
 for scope, current results, and next steps.
 
@@ -260,7 +261,13 @@ automatically approved. A crash between queueing and enrollment can leave new
 effects needing explicit manual approval; it cannot silently adopt old work.
 Later rounds revisit unresolved thread matches after parents become accepted.
 
-Failures create a private `worker.sqlite3.incident` latch and return nonzero.
+Read-only Git preflight failures for new revisions are reported as per-series
+blockers; no publication intent or remote write is made for them. Other ready
+revisions can proceed without changing the trusted base or guessing an anchor.
+Failures involving a retained publication, source integrity, authorization or
+uncertain writes still stop the round.
+
+Stopping failures create a private `worker.sqlite3.incident` latch and return nonzero.
 Subsequent timer rounds stop before doing work. Inspect the ledger and original
 exception first; resolve uncertainty with explicit same-operation replay, or
 authorize bounded same-key retry in policy. Never create a new operation key to
@@ -348,7 +355,7 @@ FORGEJO_REVIEW_IMPORT_COMPANION_PYTHON="$PWD/lore-review-companion/.venv/bin/pyt
 
 This wrapper creates private fixture-only tokens and disables mail/SSH in the
 disposable instance. Do not set `LORE_FORGEJO_IMPORT_FIXTURE` to production data.
-The verified local suite is 349 tests: 347 pass and two server opt-ins skip
+The verified local suite is 350 tests: 348 pass and two server opt-ins skip
 when real b4 is enabled. Hosted offline CI also passes Python 3.11/3.12/3.13.
 
 Runtime modules live in `lore_review_companion/`; tests live in `tests/`.

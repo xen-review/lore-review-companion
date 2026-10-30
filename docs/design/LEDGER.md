@@ -67,14 +67,16 @@ files, source snapshots and nested repositories are not part of these commits.
   bounded worker rounds. Review-only settings and identity are rechecked; only
   worker-enrolled effects deliver, scheduling is durable and failures latch.
 - Historical sample publications remain background evidence only; the current
-  baseline is 348 tests, 346 passing with two server opt-ins skipped when real
+  baseline is 350 tests, 348 passing with two server opt-ins skipped when real
   pinned b4 is enabled. The separate real-Forgejo workflow and hosted Python
   3.11/3.12/3.13 matrix pass. V01/V02, technical R01 and license adoption L01
-  are complete; P01-P05 separately track production rollout.
+  are complete; P01-P08 separately record production rollout and initial population.
 - Production Forgejo is now built, backed up, migrated and healthy under its
-  enabled user service. Companion runtime and disabled scheduler/policy are
-  installed. The operator reports completing the mandatory password change;
-  token access and the remaining activation gates still need re-verification.
+  enabled user service. Four real Xen revision PRs are published with eleven
+  complete-message conversations and two imported reviews containing three exact
+  inline remarks. Original review prose has only a lore source footnote added.
+  The bounded worker timer is enabled under a policy expiring 2026-11-06;
+  live restart/replay, grant revocation and review-only safety checks pass.
 - The operator moved these design documents under `docs/design/`, removed
   obsolete source-context files and renamed the environment prefix to
   `LORE_FORGE_`. Current license and migration guidance are in
@@ -134,7 +136,7 @@ revision state here; do not stage them into a companion commit.
 | S01 | DONE | B04, C02, F04 | `sync-imported-series` uses one PR and paired immutable base/head refs per revision, pinned source/patch maps and prior-revision links. V2 leaves V1 unchanged; source-thread checks retain late replies on their recorded revision. Repeated writes reconcile the same operation/refs. Tests cover upstream movement, two revisions and approved uncertain retry; full live workflow remains V01. |
 | S02 | DONE | B04, C01 | `discover-nntp --lookback-hours` exposes a bounded 1-8760-hour initial window (148 default), fixed per durable source checkpoint. 42 NNTP tests cover restart/deduplication, older-parent recursion/repair, selected retries, unavailable items retained pending, bounded thread discovery and byte/disk/group-history guards. No verified receipt-time or full thread coverage is claimed. |
 | S03 | DONE | C05, S01, S02, F04 | Bounded `plan-sync` previews discovery/recovery, exact publication/preflight and all three imported delivery kinds using a private SQLite backup. Original ledger and remote refs/content stay unchanged; no write flags or blanket approval. Tests cover fixed resource bounds, snapshot isolation, retained-mail/no-NNTP state, missing/incomplete/ambiguous/unknown-base/preflight/pending-publication blockers and independent child plans. |
-| S04 | DONE | S03, F05, F06 | Explicit private expiring local policy and admin-owned server unattended grant bind repo/importer/source identities, trusted base, rules and budgets. Review-only Actions/hooks/secrets/merge/update/head-edit settings are checked at grant and on unattended writes. Bounded worker rounds rotate durable work, preserve separate Git/API credentials, enroll only newly queued effects with fingerprints and latch failures. Tests cover revocation/identity drift/strict policy schema/manual-effect exclusion/replay/state isolation; sanitized user-level templates are not installed. Whole-workflow acceptance remains V01. |
+| S04 | DONE | S03, F05, F06 | Explicit private expiring local policy and admin-owned server unattended grant bind repo/importer/source identities, trusted base, rules and budgets. Review-only Actions/hooks/secrets/merge/update/head-edit settings are checked at grant and on unattended writes. Bounded worker rounds rotate durable work, preserve separate Git/API credentials, enroll only newly queued effects with fingerprints and latch failures. Tests cover revocation/identity drift/strict policy schema/manual-effect exclusion/replay/state isolation; sanitized user-level templates are supplied, with production activation separately recorded in P04/P05. Whole-workflow acceptance is V01. |
 
 ## Acceptance And Handoff
 
@@ -158,11 +160,11 @@ post historical pending effects implicitly, or use a production DB for tests.
 | P01 | DONE | V02 | Exact process/work path/SQLite/storage/health verified without exposing secrets. Preserved the running cff8e8831a executable before stopping only its PID. Private cold config/data/repository archive restored into a mode-0700 scratch directory; SQLite integrity is ok. Rollback requires complete pre-migration snapshot plus old binary, not a binary downgrade. |
 | P02 | DONE | P01 | Built sqlite/sqlite_unlock_notify candidate 09401fd3c6 with temporary cache and bounded Go memory. Started the exact work/config paths under enabled forgejo-review.service. All three review migrations are present; loopback/public health and embedded API version pass. User lingering is enabled. No shared SSH configuration was changed. |
 | P03 | DONE | P02 | Password gate cleared and both selected-repository credentials verified. Effective access was stale after Owner-team removal; supported collaborator read/write updates recalculated it. Importer push=true/admin=false. Disabled merge/rebase/update/manual/head-edit methods; source-bound Xen lore unattended grant and numeric identities verified. Temporary administrative bootstrap revoked in finally, with no credential values exposed. |
-| P04 | IN PROGRESS | P03, R01 | Production runtime and pinned b4/liblore already pass pip/fingerprint checks; independent assembly clone prepared. Install the tested original-text build, retain bounded real source threads, preview exact publication and enable only the reviewed expiring policy. Worker/timer remain disabled until an inspected bounded round succeeds. |
-| P05 | BLOCKED | P04 | User worker/timer installed and all three units pass systemd-analyze verification against actual paths. Worker timer remains disabled/inactive; do not enable before a successful inspected round. Linger is enabled and server alone runs under systemd. Production restart/replay/revocation/monitoring gates remain pending the account gate and P04; isolated equivalents already pass. |
-| P06 | DONE | C05 | New imported conversation/range/reply bodies use original source prose plus a lore footnote; headers contain the footnote alone. mail-text-v1 is explicit and source-bound; untagged old effects retain exact request bytes and approval/replay identity. All 39 queue tests and actual isolated API/Git/b4/worker acceptance pass, including multiline ranges, nested replies and old-payload requeue. Full suite: 349 run, 347 pass, two deliberate server skips, 15.203s. |
-| P07 | TODO | P03, P04, P06 | Populate xen-review/xen with an initial bounded set of actual Xen series PRs and retained reviews/comments. Select complete unambiguous source threads and verified bases; preview before writes, preserve immutable refs and actual participant authorship, and record real URLs plus unsupported/unresolved cases. Never invent comments or force fuzzy anchors. |
-| P08 | TODO | P07 | Inspect real PR cover/timeline/files views and ordinary APIs for original reviewer text, lore footnotes, authorship and ranges on desktop/mobile. Verify replay creates no duplicates, upstream refs remain unchanged and no notifications/hooks fire. Complete scheduler/monitoring handoff or record a concrete blocker. |
+| P04 | DONE | P03, R01 | Installed companion 2e12fb9 with pinned b4/liblore; exact source fingerprint and pip checks pass. Retained real NNTP mail, reviewed immutable publication/delivery digests and enabled the seven-day repository/source-bound policy. Two bounded no-refresh worker rounds and the hardened systemd source-refresh round succeed without duplicate writes. |
+| P05 | DONE | P04 | Actual grant revocation rejects the worker's first capabilities GET with 403, no writes and an incident latch. Explicit regrant and inspected incident recovery pass; temporary admin tokens are verified absent. Enabled the ten-minute user timer only after the successful service round. Its first invocation skips nonapplicable nested-VMX preflight, publishes ready kexec v3 and exits successfully. Paired private ledger/worker snapshots pass SQLite integrity; monitoring/stop/expiry handoff is below. |
+| P06 | DONE | C05 | New imported conversation/range/reply bodies use original source prose plus a lore footnote; headers contain the footnote alone. mail-text-v1 is explicit and source-bound; untagged old effects retain exact request bytes and approval/replay identity. All 39 queue tests and actual isolated API/Git/b4/worker acceptance pass, including multiline ranges, nested replies and old-payload requeue. Full suite: 350 run, 348 pass, two deliberate server skips, 14.993s. |
+| P07 | DONE | P03, P04, P06 | Published the three digest-approved actual Xen revisions below, eleven original-message conversations and two reviews with three exact inline remarks. The timer also published ready kexec v3 as PR 4. Actual participant authorship and immutable verified bases are retained. Unsupported bases and ambiguous or missing inline parents stay unresolved, not force-matched. |
+| P08 | DONE | P07 | Real public cover/timeline/files views and ordinary APIs show original prose, clickable lore footnotes, unverified participant/source chronology and exact historical ranges. Desktop 1440x1000 and mobile 390x844 show no page overflow. Same-publication replay returns PRs 1/2/3 unchanged; requeue leaves no old effects pending. Initial master refs and notification/hook counts are unchanged. Active scheduler, paired backup and recovery/monitoring handoff are recorded below. |
 
 ### Deployment State And Resume
 
@@ -173,17 +175,29 @@ post historical pending effects implicitly, or use a production DB for tests.
   `gitea.previous` and `instance.tar.gz`. Keep these together; the archive
   contains credentials and must never enter Git. This is local rollback
   protection, not an off-host disaster-recovery backup.
-- Runtime: `~/.local/share/lore-review-companion/.venv`; protected credentials
-  and disabled policy in `~/.config/lore-review-companion/`; independent source
-  clone in `~/.local/state/lore-review-companion/xen.git`. No operational mail
-  ledger or worker scheduling DB exists yet. Trusted base is the retained mirror
-  master commit, not a guessed patch base. Policy expires seven days after
-  preparation and must be reviewed again before enablement.
-- The operator reports completing `review-companion`'s mandatory password
-  change through the normal Forgejo flow. Next verify both private tokens, configure
-  review-only settings/source-bound grant, plan, run one bounded round and
-  only then enable the timer. Do not send credentials to the assistant or
-  relax any remaining security gate.
+- Runtime: `~/.local/share/lore-review-companion/.venv`, installed from companion
+  `2e12fb9`; protected separate credentials and enabled policy in
+  `~/.config/lore-review-companion/`; independent source clone in
+  `~/.local/state/lore-review-companion/xen.git`. The operational mail ledger
+  and scheduling DB are `mail.sqlite3` and `worker.sqlite3` in that state directory.
+  Policy digest is `ef5f5199c21a620c886432ff13e7ddf9aeec82af51fddecdbca253ad38853824`;
+  expiry is `2026-11-06T15:21:05.869451+00:00`. Budgets are 32 messages and two
+  revisions per round; same-key uncertain retry remains disabled. Review expiry
+  and disk space before renewing; do not extend expiry silently.
+- The mandatory password change is complete. Importer 4 (`review-companion`)
+  has selected-repository write access, not administration; repository 2 is
+  `xen-review/xen`. The source-bound unattended grant and review-only settings
+  remain mandatory. No shared SSH files were changed or credentials exposed.
+- Trusted base is `e4956d5e6bdcb7e2e9abfa4474b2dc1160c51a45`, the verified
+  source/review master tip at initial publication, not a guessed patch base.
+  The 148-hour NNTP bootstrap discovered 411 IDs. At the inspected timer round,
+  320 messages were retained, with no conflicts or source incidents, four complete
+  publications and thirteen completed outbox effects, none pending/uncertain.
+- Additional checkpoints: `backups/20261030-pre-initial-import/` contains a
+  verified online Forgejo DB snapshot plus master refs. Paired companion snapshots
+  in `backups/20261030-published-153351/` were taken under the worker lock and
+  both pass integrity checks. These are private local recovery material, not
+  an off-host backup; do not commit them or restore only one companion database.
 - GPL-2.0-or-later adoption is complete; see the root COPYING and contribution
   terms. No package release was published. Review third-party source provenance
   and licensing whenever adding external material.
@@ -192,6 +206,85 @@ post historical pending effects implicitly, or use a production DB for tests.
   enabling source ingestion. The initial Swagger process was killed under
   memory pressure; GOGC=25/GOMEMLIMIT=512MiB/GOMAXPROCS=2 succeeded. Existing
   unrelated generator/locale warnings remain documented limitations.
+
+### Initial Xen Publications And Limits
+
+| PR | Revision | Retained Imported Discussion |
+| --- | --- | --- |
+| [1](https://review-forge.be.free.or.at/xen-review/xen/pulls/1) | vPCI/MSI-X v1, three patches | Eight complete conversations; Andrew Cooper review, one exact inline range. |
+| [2](https://review-forge.be.free.or.at/xen-review/xen/pulls/2) | RISC-V boot/MMU v9, one explicitly numbered patch | Two complete conversations, including a later retained author reply; no exact inline parent/range accepted. |
+| [3](https://review-forge.be.free.or.at/xen-review/xen/pulls/3) | ARM64 suspend-to-RAM v13, fourteen patches | One complete conversation; Jan Beulich review, two exact inline ranges. |
+| [4](https://review-forge.be.free.or.at/xen-review/xen/pulls/4) | x86/kexec Secure Boot v3, seven patches | First timer-published revision; no retained replies at publication. |
+
+PR heads 1/2/3 are respectively `6a3dc50eaf4e6e9198e801fda0ea15b0ee7a8af9`,
+`1eb50ff61ce3e453376652c301b935a06a48b1b0` and
+`52179dad54769f4409ffcc07bf24998b66b08350`. Replaying each approved publication
+returns the same PR and head. A later normal review request by the operator on
+PR 3 is not an imported review and is left untouched.
+
+Review bodies were checked against the original prose and source footnote;
+timeline and files views retain historical multiline context, not a nearest
+cumulative-head anchor. The first queue pass left four quoted remarks unresolved.
+After one later RISC-V reply, the queue reports one unresolved remark on PR 1
+and six on PR 2, including a missing exact accepted inline parent. Their complete
+messages remain visible; none is converted into a guessed inline reply.
+
+Known source limits remain explicit: unnumbered single patches currently have
+unknown series size and remain incomplete; recursive recovery is bounded, not
+full-history coverage. RISC-V v8 and nested-VMX v1 do not apply to the trusted
+base and remain unpublished. Cross-posted non-Xen patches are not made applicable
+by changing the base. Read-only Git preflight blockers for new revisions are
+diagnostics, while source conflicts, membership drift, authorization failures,
+retained-publication failures and uncertain writes still stop and latch.
+
+The original-prose change is commit `dfb103b`. Real retained mail exposed CRLF
+transport and standard in-body patch authors moved into headers by b4; `5b55475`
+normalizes those representations while retaining exact title/effective-author/diff
+membership and rejecting mutated diff content (13 adapter tests pass).
+Commit `2e12fb9` reports only new read-only Git preflight failures as per-series
+blockers; all 31 lifecycle/worker tests pass. The full 350-test source suite
+passes with two deliberate server skips. All three commits were pushed normally,
+without rewriting history, before their builds were installed.
+
+Final live payload assertions match original bodies, participant names, parsed
+source-time instants, signed-side commits, exact sole-parent comparisons and all
+multiline range fields. Ordinary API timestamps can use local offsets, so compare
+parsed instants, not serialized strings. `original_commit_id` is the ordinary
+comment's old-ref field, not a promised patch parent; the scoped exact comparison
+verifies the parent. Notification and hook-task counts remain zero after PR 4.
+
+### Scheduler Handoff
+
+`lore-review-companion.timer` is enabled and active, with a ten-minute inactive
+interval and up to one minute of jitter. `forgejo-review.service` is enabled;
+user lingering is enabled. The worker is a bounded oneshot, not a resident daemon.
+An inactive worker after exit status zero is normal. Check the actual result,
+journal, timer, source backlog and available disk:
+
+```sh
+systemctl --user show lore-review-companion.service -p Result -p ExecMainStatus
+systemctl --user list-timers --all --no-pager lore-review-companion.timer
+journalctl --user -u lore-review-companion.service --no-pager -n 30
+df -h / /tmp
+~/.local/share/lore-review-companion/.venv/bin/lore-review-companion list-nntp-queue \
+  --ledger ~/.local/state/lore-review-companion/mail.sqlite3 --limit 12
+```
+
+To suspend future rounds, disable the timer and revoke the repository/source
+import grant through the administrator API:
+
+```sh
+systemctl --user disable --now lore-review-companion.timer
+```
+
+Let any active round finish before taking paired
+backups or changing policy. Preserve incident/publication/outbox evidence; after
+inspection, clear only a known induced/resolved incident marker. A policy digest
+change requires reviewed scheduling-state reset, never deletion of the mail
+ledger. Review-only settings, a fixed trusted base, separate private tokens and
+the expiry gate remain required after restarts. Monitor root space closely
+(approximately 2.5 GiB free at handoff); long-term archival capacity and off-host
+backup provisioning are operational follow-up, not claims of completed coverage.
 
 ## Verification Rules
 
