@@ -744,7 +744,7 @@ class Ledger:
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         _create_private_file(self.path)
         with self._connection() as connection:
-            connection.executescript(_SCHEMA)
+            connection.executescript("BEGIN IMMEDIATE;\n" + _SCHEMA)
             versions = connection.execute(
                 "SELECT version FROM schema_version"
             ).fetchall()

@@ -1,6 +1,6 @@
 # Implementation Ledger
 
-Updated: 2026-10-29. Design and boundaries: [PLAN.md](PLAN.md).
+Updated: 2026-10-30. Design and boundaries: [PLAN.md](PLAN.md).
 
 Statuses: `TODO`, `IN PROGRESS`, `DONE`, `BLOCKED`, `DEFERRED`. `DONE` requires
 recorded verification, not just code. Each completed companion topic gets a
@@ -17,8 +17,8 @@ No automatic pushes. Forgejo changes belong to the separate parent repository.
   Focused publisher and neighboring queue tests passed.
 - B04 `DONE`: neutral adapters, package layout, console/module entry points,
   install documentation and offline CI configuration are verified locally.
-- Next implementation slice: C01's versioned payload/migration contracts;
-  C02 must configure and pin b4 before real assembly/extraction acceptance.
+- C01 `IN PROGRESS`: schema setup is transactional; legacy schema 18/21/22
+  payloads survive reopening unchanged. Versioned range payloads follow.
 - Historical sample publications remain background evidence only; the current
   baseline is 295 synthetic tests, with 3 explicitly reported skips.
 
@@ -48,7 +48,7 @@ installed versions, historical commits and current tests are B01, not assumed.
 
 | ID | Status | Depends On | Step And Acceptance Gate |
 | --- | --- | --- | --- |
-| C01 | TODO | B04 | Versioned range/parser/time/import payloads and migrations. Synthetic schema 18/21/22 upgrades, rollback/reopen and non-mutating previews preserve completed effects and approval contracts. |
+| C01 | IN PROGRESS | B04 | Atomic schema setup and schema 18/21/22 payload preservation tested (43 ledger tests pass). Versioned range/parser/import payload contracts remain. |
 | C02 | TODO | B04 | Pin one b4 runtime/entrypoint; explicit offline revision assembly without added trailers or partial rerolls. Verify membership/counts; no network, user-checkout mutation, or private draft publication. |
 | C03 | TODO | B04 | Preserve complete quote blocks, depth, source offsets and remarks. Cover nested/trimmed quotes, MIME/CRLF, blank lines, preambles, signatures/trailers and multiple comments without losing text. |
 | C04 | TODO | C03 | Resolve exact contiguous file/side ranges using pinned patch comparisons. Full context disambiguates repeated last lines; ambiguous/mixed/disjoint cases fail closed and configured range limits apply. |
@@ -225,3 +225,22 @@ Bring them into scope only through an explicit decision.
   Fresh scoped Forgejo imports and a final distribution license remain future
   tasks, explicitly noted in the README rather than claimed implemented.
 - Commit subject: `build: package standalone lore review companion`.
+
+### 2026-10-30: C01 Atomic Schema Setup
+
+- Resumed at `e1e795e`; package outbox has no tracked changes. An untracked
+  legacy test at repository root is operator-owned and left untouched.
+- Schema initialization now begins an explicit SQLite transaction before the
+  DDL script. Previously executescript could commit new tables even when later
+  version validation failed. Tests prove failure rollback and future-version
+  rejection without residual tables or a changed version.
+- Synthetic schema 18/21/22 reopen tests retain exact pending deliveries,
+  payloads and IDs, including read-only access. No database schema bump or
+  legacy payload rewrite is needed for additive JSON contract work.
+- Immediate check against current source: 43 ledger tests passed, with live
+  opt-ins unset. Operational ledgers were not opened or migrated.
+- Deployment supplied by operator: `https://review-forge.be.free.or.at`, source
+  mirror `xen-project/xen` (8-hour upstream sync), review fork `xen-review/xen`.
+  Fork ownership is available to the operator's integration identity, but the
+  running companion will use scoped write access rather than Owners/admin.
+- Commit subject: `fix: roll back failed ledger schema initialization`.

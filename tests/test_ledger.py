@@ -5,7 +5,9 @@ import unittest
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
+from lore_review_companion import ledger as ledger_module
 from lore_review_companion.ingest import ingest_mbox
 from lore_review_companion.ledger import SCHEMA_VERSION, ArchiveCheckpointConflict, ArchiveSafetyBlocked, DeliveryStateConflict, Ledger, MessageConflictError, PublicationConflict, WorkerBusyError
 from lore_review_companion.mail_parser import parse_message
@@ -72,6 +74,54 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(read_only.status().messages, 1)
         with self.assertRaises(sqlite3.OperationalError):
             read_only.record_unmatched_message(b"unkeyed", ("missing ID",))
+
+    def test_schema_upgrade_preserves_queued_payload_and_delivery_identity(self):
+        for version in (18, 21, 22):
+            with self.subTest(version=version):
+                path = Path(self.tempdir.name) / f"replay-{version}.sqlite3"
+                ledger = Ledger(path)
+                ledger.record_message("review@example.test", b"original")
+                ledger.enqueue("review@example.test", "INLINE_COMMENT", "destination", "effect", {
+                    "body": "review", "head_commit": "a" * 40,
+                    "anchor": {"path": "x.c", "old_position": 0, "new_position": 3},
+                })
+                before = ledger.pending()
+                with ledger._connection() as connection:
+                    connection.execute("UPDATE schema_version SET version = ?", (version,))
+                reopened = Ledger(path)
+                self.assertEqual(reopened.pending(), before)
+                self.assertEqual(Ledger(path, read_only=True).pending(), before)
+
+    def test_schema_setup_failure_rolls_back_tables_and_version(self):
+        with self.ledger._connection() as connection:
+            connection.execute("UPDATE schema_version SET version = 18")
+        broken_schema = ledger_module._SCHEMA + (
+            "\nCREATE TABLE migration_probe (id INTEGER);\nSELECT * FROM missing_migration_table;"
+        )
+        with patch.object(ledger_module, "_SCHEMA", broken_schema):
+            with self.assertRaises(sqlite3.OperationalError):
+                Ledger(self.ledger.path)
+        with closing(self.ledger._connect()) as connection:
+            self.assertEqual(connection.execute("SELECT version FROM schema_version").fetchone()[0], 18)
+            self.assertIsNone(connection.execute(
+                "SELECT name FROM sqlite_master WHERE name = 'migration_probe'",
+            ).fetchone())
+        self.assertEqual(Ledger(self.ledger.path).status().messages, 1)
+
+    def test_unsupported_schema_does_not_create_or_modify_tables(self):
+        path = Path(self.tempdir.name) / "future.sqlite3"
+        with sqlite3.connect(path) as connection:
+            connection.executescript(
+                "CREATE TABLE schema_version (version INTEGER NOT NULL);"
+                "INSERT INTO schema_version VALUES (999);"
+            )
+        with self.assertRaisesRegex(RuntimeError, "Unsupported ledger schema"):
+            Ledger(path)
+        with sqlite3.connect(path) as connection:
+            self.assertEqual(connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall(), [
+                ("schema_version",),
+            ])
+            self.assertEqual(connection.execute("SELECT version FROM schema_version").fetchone()[0], 999)
 
     def test_nntp_bootstrap_freezes_148_hours_in_utc_across_restarts(self):
         source = "nntps://nntp.lore.kernel.org/org.xenproject.lists.xen-devel"
