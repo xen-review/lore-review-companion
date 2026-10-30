@@ -5,10 +5,54 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+
+from lore_review_companion.mail_parser import parse_mbox
+from lore_review_companion.series import discover_series
+
+PINNED_B4_SOURCE = "3b5a059e8544da3166d1a40fc68986110a55defe9c25ac128ac106ef4021679e"
+PINNED_B4_VERSIONS = {"b4": "0.17.dev0", "liblore": "0.10.1"}
+
+_RUNTIME_PROBE = """
+import hashlib
+import importlib.metadata
+import importlib.util
+import json
+from pathlib import Path
+
+digest = hashlib.sha256()
+versions = {}
+paths = {}
+for name in ('b4', 'liblore'):
+    root = Path(importlib.util.find_spec(name).origin).parent
+    versions[name] = importlib.metadata.version(name)
+    paths[name] = str(root)
+    for source in sorted(root.rglob('*.py')):
+        digest.update((name + '/' + source.relative_to(root).as_posix() + '\\0').encode())
+        digest.update(hashlib.sha256(source.read_bytes()).digest())
+print(json.dumps({'versions': versions, 'source_sha256': digest.hexdigest(), 'module_paths': paths}))
+"""
+
+
+def inspect_b4_runtime(python_executable: str, *, timeout: float = 30) -> dict:
+    """Reject private-runtime drift before assembly or legacy review parsing."""
+    try:
+        result = subprocess.run(
+            [python_executable, "-I", "-c", _RUNTIME_PROBE], check=True,
+            capture_output=True, text=True, timeout=timeout,
+            env={"PATH": os.environ.get("PATH", os.defpath)}, stdin=subprocess.DEVNULL,
+        )
+        runtime = json.loads(result.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        raise B4AssemblyError("Cannot inspect the configured b4 interpreter; install the pinned runtime") from error
+    if not isinstance(runtime, dict) or runtime.get("versions") != PINNED_B4_VERSIONS or runtime.get("source_sha256") != PINNED_B4_SOURCE:
+        raise B4AssemblyError("Unsupported b4/liblore runtime fingerprint; install the reviewed source pins")
+    return runtime
 
 
 class B4AssemblyError(RuntimeError):
@@ -17,6 +61,13 @@ class B4AssemblyError(RuntimeError):
 
 class B4ReviewError(RuntimeError):
     """The installed b4 review parser is unavailable or incompatible."""
+
+
+def _check_review_runtime(python_executable: str, timeout: float) -> None:
+    try:
+        inspect_b4_runtime(python_executable, timeout=timeout)
+    except B4AssemblyError as error:
+        raise B4ReviewError(str(error)) from error
 
 
 @dataclass(frozen=True)
@@ -109,6 +160,7 @@ def read_local_review_drafts(
         raise ValueError("An explicit reviewer email is required")
     if not python_executable:
         raise ValueError("The b4 Python executable is required")
+    _check_review_runtime(python_executable, timeout)
     with tempfile.TemporaryDirectory(prefix="lore-gitea-drafts-") as temp_dir:
         environment = {
             "PATH": os.environ.get("PATH", os.defpath), "HOME": temp_dir,
@@ -189,6 +241,7 @@ def extract_quoted_comments(
     """Run b4's version-checked quoted-reply parser in an isolated interpreter."""
     if not isinstance(body, str) or not python_executable:
         raise ValueError("A reply body and b4 Python executable are required")
+    _check_review_runtime(python_executable, timeout)
     with tempfile.TemporaryDirectory(prefix="lore-gitea-review-") as temp_dir:
         environment = {
             "PATH": os.environ.get("PATH", os.defpath),
@@ -228,21 +281,50 @@ def extract_quoted_comments(
 def assemble_local_series(
     mailbox_path: Path,
     *,
-    executable: str = "b4",
+    executable: str | None = None,
+    python_executable: str | None = None,
+    revision: int | None = None,
     timeout: float = 120,
 ) -> AssemblyResult:
     """Assemble one local mbox series; never apply it to a Git worktree."""
     mailbox_path = mailbox_path.resolve(strict=True)
     if not mailbox_path.is_file():
         raise ValueError(f"Expected an mbox file: {mailbox_path}")
+    messages = parse_mbox(mailbox_path)
+    candidates = discover_series(messages)
+    if len(candidates) != 1 or not candidates[0].complete or candidates[0].conflicts:
+        raise B4AssemblyError("Assembly requires exactly one complete, unambiguous source revision")
+    selected = candidates[0]
+    if revision is not None and (not isinstance(revision, int) or isinstance(revision, bool) or revision != selected.revision):
+        raise B4AssemblyError("Requested revision does not match the complete source mailbox")
+    interpreter = python_executable or sys.executable
+    if executable is not None:
+        located = shutil.which(executable)
+        if located is None:
+            raise B4AssemblyError("Configured b4 executable does not exist")
+        with Path(located).open("r", encoding="utf-8") as entrypoint:
+            shebang = entrypoint.readline(4096).strip()
+        if not shebang.startswith("#!/") or len(shebang[2:].split()) != 1:
+            raise B4AssemblyError("Configured b4 executable must use an explicit Python interpreter")
+        interpreter = shebang[2:]
+        if python_executable is not None and os.path.abspath(interpreter) != os.path.abspath(python_executable):
+            raise B4AssemblyError("b4 executable and configured interpreter differ")
+    inspect_b4_runtime(interpreter, timeout=timeout)
 
     with tempfile.TemporaryDirectory(prefix="lore-gitea-b4-") as output_dir:
         command = [
-            executable,
+            interpreter,
+            "-I",
+            "-c",
+            "from b4.command import cmd; cmd()",
             "--offline-mode",
+            "--no-stdin",
             "am",
             "--use-local-mbox",
             str(mailbox_path),
+            "--use-version", str(selected.revision),
+            "--no-add-trailers",
+            "--no-partial-reroll",
             "--no-cover",
             "--outdir",
             output_dir,
@@ -276,6 +358,20 @@ def assemble_local_series(
             raise B4AssemblyError(
                 f"Expected one assembled patch mailbox, found {len(outputs)}"
             )
+        source_patches = tuple(sorted(
+            (message for message in messages if message.kind == "patch"), key=lambda message: message.patch_index or 1,
+        ))
+        output_patches = parse_mbox(outputs[0])
+
+        def patch_identity(message) -> tuple[str, str | None, str]:
+            _, separator, diff = message.body_text.partition("diff --git ")
+            diff = diff.split("\n-- \n", 1)[0].rstrip()
+            return message.subject_title, message.from_address, separator + diff
+
+        if len(output_patches) != selected.expected_patch_count or tuple(
+            patch_identity(message) for message in output_patches
+        ) != tuple(patch_identity(message) for message in source_patches):
+            raise B4AssemblyError("Assembled mailbox does not match the selected patch membership")
         return AssemblyResult(
             patch_mailbox=outputs[0].read_bytes(),
             stdout=completed.stdout,

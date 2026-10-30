@@ -11,8 +11,8 @@ No automatic pushes. Forgejo changes belong to the separate parent repository.
 
 - DOC-01 `DONE`: the implementation plan and this living ledger form the first
   commit, before implementation import. The user supplied an empty repository.
-- B01 `DONE`: current source/history/tool inventory and offline baseline recorded
-  below. B02 imported the unchanged source; installed b4 is still unavailable.
+- B01 `DONE`: source/history/tool baseline recorded below. The initial absence
+  of b4 was resolved under C02 with an isolated, fingerprint-verified runtime.
 - B03 `DONE`: unsafe inline delivery no longer becomes a conversation write.
   Focused publisher and neighboring queue tests passed.
 - B04 `DONE`: neutral adapters, package layout, console/module entry points,
@@ -24,6 +24,8 @@ No automatic pushes. Forgejo changes belong to the separate parent repository.
 - C05 `IN PROGRESS`: native quote-to-range queue, evidence preview, approval,
   delivery and replay are verified. Per-patch imported-author live integration
   still depends on F04; no runtime b4 parser is needed for native replies.
+- C02 `DONE`: exact local b4/liblore sources are installed and fingerprinted;
+  real offline assembly and read-only draft checks passed.
 - Historical sample publications remain background evidence only; the current
   baseline is 317 tests, with 3 explicitly reported integration skips.
 
@@ -54,7 +56,7 @@ installed versions, historical commits and current tests are B01, not assumed.
 | ID | Status | Depends On | Step And Acceptance Gate |
 | --- | --- | --- | --- |
 | C01 | DONE | B04 | Atomic schema setup, rollback, read-only reopen and schema 18/21/22 payload preservation tested. Version-2 ranges preserve source/parser/time/comparison evidence; legacy approval digests unchanged. Future server import mappings belong to F03/F04. |
-| C02 | TODO | B04 | Pin one b4 runtime/entrypoint; explicit offline revision assembly without added trailers or partial rerolls. Verify membership/counts; no network, user-checkout mutation, or private draft publication. |
+| C02 | DONE | B04 | Verified b4 0.17.dev0/liblore 0.10.1 combined source fingerprint; same-interpreter offline assembly pins revision, disables trailers/partial rerolls and checks ordered patch content/count. 12 focused tests pass including real local b4. |
 | C03 | DONE | B04 | Added deterministic quoted-block extraction with depth/headers/source offsets, remarks and conservative signature/trailer boundaries. 13 mail-parser tests pass, including nested/trimmed and MIME/CRLF cases. Full message remains canonical. |
 | C04 | DONE | C03 | Exact contiguous same-file/side range matching added separately from legacy Anchor. All 13 anchor tests pass; full context disambiguates repeated lines, while mixed/disjoint/headerless/renamed/ambiguous cases fail closed. |
 | C05 | IN PROGRESS | C01, C04; F04 for per-patch live integration | Native parse-to-API range pipeline passes 34 queue and 30 publisher tests, including response-loss/replay, source hashes, comparison snapshots, capability-bound approval and legacy migration refusal. Per-patch imported-author acceptance remains F04. |
@@ -315,3 +317,25 @@ Bring them into scope only through an explicit decision.
 - The native path is independent of b4's review parser. b4 pinning is still
   required for patch assembly (C02), not for deterministic quote matching.
 - Commit subject: `feat: queue native multiline reviews with replay-safe evidence`.
+
+### 2026-10-30: C02 Pinned Offline b4 Runtime
+
+- Installed reviewed local b4/liblore sources into the ignored `.venv`, not
+  globally. `requirements-b4.txt` records exact source commits and observed
+  dependency pins. Combined Python-code SHA-256 is
+  `3b5a059e8544da3166d1a40fc68986110a55defe9c25ac128ac106ef4021679e`.
+- Assembly and private legacy adapters verify the fingerprint and versions,
+  not just a development version string. `check-b4-runtime` prints module
+  paths/versions/hash without retrieving mail. Same interpreter executes b4
+  with isolated config, closed stdin, offline mode, explicit revision, no
+  collected trailers and no partial-reroll reconstruction.
+- Input must contain one complete revision; output must retain expected patch
+  count, order, author/title and diff content. The publication pipeline now
+  explicitly passes its selected revision. No user checkout or draft refs are
+  changed by assembly.
+- Full offline suite with local real-b4 opt-in: 319 run, 318 passed, only the
+  live-server test skipped. Fixed the new preflight CLI's dictionary output
+  formatting and added coverage; immediate rerun: all 12 focused b4 tests pass
+  and the actual runtime-preflight command succeeds. The real subprocess test
+  explicitly imports current source rather than an older installed wheel.
+- Commit subject: `feat: pin and validate offline b4 assembly runtime`.

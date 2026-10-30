@@ -23,9 +23,19 @@ python3 -m venv .venv
 The package installs the NNTP compatibility dependency on Python 3.13 or later.
 b4 is an external runtime for patch assembly and the optional legacy quoted-
 reply adapter; native reply matching does not need b4. It is not automatically
-installed here. Pinning and validating
-one supported b4 installation is tracked under C02. Installing an arbitrary b4
-version is not sufficient for its private alpha review interfaces.
+installed here. Install the reviewed source/dependency pins into the same
+environment and check them before assembly:
+
+```sh
+.venv/bin/python -m pip install -r requirements-b4.txt
+.venv/bin/python -m lore_review_companion check-b4-runtime
+```
+
+The adapter verifies versions and the combined Python source fingerprint of b4
+and liblore, including module paths in the diagnostic output. Assembly uses the
+verified interpreter rather than an unrelated `b4` on PATH. Pin updates require
+an explicit adapter review and tests; a development version string alone is not
+a compatible runtime. The optional legacy parser/draft reader uses the same pin.
 
 The CLI also supports module execution:
 

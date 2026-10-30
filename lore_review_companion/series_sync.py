@@ -164,7 +164,7 @@ def sync_series_revision(
             box.flush()
         finally:
             box.close()
-        assembly = assemble_local_series(Path(temp_dir) / "series.mbox")
+        assembly = assemble_local_series(Path(temp_dir) / "series.mbox", revision=revision.revision)
         with prepare_patch_mailbox(repository, base_ref, assembly.patch_mailbox) as prepared:
             branch_arguments = {
                 "target_branch": target_branch,

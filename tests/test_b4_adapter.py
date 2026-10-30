@@ -4,12 +4,16 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
 from lore_review_companion.b4_adapter import (
-    B4AssemblyError, B4ReviewError, assemble_local_series, extract_quoted_comments, read_local_review_drafts,
+    B4AssemblyError, B4ReviewError, PINNED_B4_SOURCE, PINNED_B4_VERSIONS,
+    assemble_local_series, extract_quoted_comments, inspect_b4_runtime, read_local_review_drafts,
 )
+from lore_review_companion.cli import main
 
 
 class AssembleLocalSeriesTests(unittest.TestCase):
@@ -17,45 +21,86 @@ class AssembleLocalSeriesTests(unittest.TestCase):
         self.tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(self.tempdir.cleanup)
         self.mailbox = Path(self.tempdir.name) / "series.mbox"
-        self.mailbox.write_bytes(b"From: patch author\n\npatch\n")
+        self.mailbox.write_bytes(
+            b"From: Author <author@example.test>\nMessage-ID: <patch@example.test>\n"
+            b"Subject: [PATCH 1/1] change\n\npatch\n"
+        )
 
+    @patch("lore_review_companion.b4_adapter.inspect_b4_runtime")
     @patch("lore_review_companion.b4_adapter.subprocess.run")
-    def test_runs_b4_offline_and_returns_generated_mailbox(self, run):
+    def test_runs_b4_offline_and_returns_generated_mailbox(self, run, inspect):
         def fake_run(command, **kwargs):
             output_dir = Path(command[command.index("--outdir") + 1])
-            (output_dir / "lore_review_companion.series.mbx").write_bytes(b"assembled patches")
+            (output_dir / "series.mbx").write_bytes(self.mailbox.read_bytes())
             return subprocess.CompletedProcess(command, 0, "summary", "")
 
         run.side_effect = fake_run
         result = assemble_local_series(self.mailbox)
 
         command = run.call_args.args[0]
-        self.assertEqual(command[:3], ["b4", "--offline-mode", "am"])
+        self.assertEqual(command[:3], [sys.executable, "-I", "-c"])
+        inspect.assert_called_once_with(sys.executable, timeout=120)
+        self.assertIn("--offline-mode", command)
+        self.assertIn("--no-stdin", command)
+        self.assertIn("--no-add-trailers", command)
+        self.assertIn("--no-partial-reroll", command)
+        self.assertEqual(command[command.index("--use-version") + 1], "1")
         self.assertIn("--use-local-mbox", command)
         self.assertIn(str(self.mailbox), command)
         self.assertIn("--no-cover", command)
-        self.assertEqual(result.patch_mailbox, b"assembled patches")
+        self.assertEqual(result.patch_mailbox, self.mailbox.read_bytes())
         self.assertEqual(result.stdout, "summary")
         self.assertEqual(run.call_args.kwargs["cwd"], command[command.index("--outdir") + 1])
         self.assertNotIn("LORE_GITEA_TOKEN", run.call_args.kwargs["env"])
         self.assertEqual(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
 
+    @patch("lore_review_companion.b4_adapter.inspect_b4_runtime")
     @patch("lore_review_companion.b4_adapter.subprocess.run")
-    def test_reports_b4_failure(self, run):
+    def test_reports_b4_failure(self, run, _inspect):
         run.return_value = subprocess.CompletedProcess(
             [], 1, "", "could not parse thread"
         )
         with self.assertRaisesRegex(B4AssemblyError, "could not parse thread"):
             assemble_local_series(self.mailbox)
 
+    @patch("lore_review_companion.b4_adapter.inspect_b4_runtime")
     @patch("lore_review_companion.b4_adapter.subprocess.run")
-    def test_rejects_missing_assembly_output(self, run):
+    def test_rejects_missing_assembly_output(self, run, _inspect):
         run.return_value = subprocess.CompletedProcess([], 0, "", "")
         with self.assertRaisesRegex(B4AssemblyError, "found 0"):
             assemble_local_series(self.mailbox)
 
     @patch("lore_review_companion.b4_adapter.subprocess.run")
-    def test_extracts_validated_comments_in_isolated_interpreter(self, run):
+    def test_runtime_pin_rejects_source_drift_and_keeps_module_evidence(self, run):
+        runtime = {"versions": PINNED_B4_VERSIONS, "source_sha256": PINNED_B4_SOURCE, "module_paths": {}}
+        run.return_value = subprocess.CompletedProcess([], 0, json.dumps(runtime), "")
+        self.assertEqual(inspect_b4_runtime(sys.executable), runtime)
+        run.return_value = subprocess.CompletedProcess([], 0, json.dumps({**runtime, "source_sha256": "0" * 64}), "")
+        with self.assertRaisesRegex(B4AssemblyError, "fingerprint"):
+            inspect_b4_runtime(sys.executable)
+
+    def test_cli_reports_runtime_preflight_as_json(self):
+        runtime = {"versions": PINNED_B4_VERSIONS, "source_sha256": PINNED_B4_SOURCE}
+        with (
+            patch("lore_review_companion.cli.inspect_b4_runtime", return_value=runtime) as inspect,
+            redirect_stdout(StringIO()) as output,
+        ):
+            self.assertEqual(main(["check-b4-runtime", "--python", sys.executable]), 0)
+        self.assertEqual(json.loads(output.getvalue()), runtime)
+        inspect.assert_called_once_with(sys.executable)
+
+    @patch("lore_review_companion.b4_adapter.inspect_b4_runtime")
+    def test_incomplete_or_wrong_revision_never_invokes_runtime(self, inspect):
+        with self.assertRaisesRegex(B4AssemblyError, "Requested revision"):
+            assemble_local_series(self.mailbox, revision=2)
+        self.mailbox.write_bytes(self.mailbox.read_bytes().replace(b"1/1", b"1/2"))
+        with self.assertRaisesRegex(B4AssemblyError, "complete"):
+            assemble_local_series(self.mailbox)
+        inspect.assert_not_called()
+
+    @patch("lore_review_companion.b4_adapter.inspect_b4_runtime")
+    @patch("lore_review_companion.b4_adapter.subprocess.run")
+    def test_extracts_validated_comments_in_isolated_interpreter(self, run, inspect):
         run.return_value = subprocess.CompletedProcess(
             [], 0, '[{"path":"x.c","line":3,"text":"Review","content":"+new"}]', "",
         )
@@ -64,9 +109,11 @@ class AssembleLocalSeriesTests(unittest.TestCase):
         self.assertEqual(run.call_args.args[0][:2], ["/venv/bin/python", "-c"])
         self.assertEqual(run.call_args.kwargs["input"], '"quoted reply"')
         self.assertNotIn("LORE_GITEA_TOKEN", run.call_args.kwargs["env"])
+        inspect.assert_called_once_with("/venv/bin/python", timeout=30)
 
+    @patch("lore_review_companion.b4_adapter.inspect_b4_runtime")
     @patch("lore_review_companion.b4_adapter.subprocess.run")
-    def test_rejects_incompatible_parser_and_invalid_output(self, run):
+    def test_rejects_incompatible_parser_and_invalid_output(self, run, _inspect):
         run.return_value = subprocess.CompletedProcess([], 1, "", "Unsupported b4 review version")
         with self.assertRaisesRegex(B4ReviewError, "Unsupported"):
             extract_quoted_comments("reply", python_executable="python")
@@ -74,8 +121,9 @@ class AssembleLocalSeriesTests(unittest.TestCase):
         with self.assertRaisesRegex(B4ReviewError, "invalid comment"):
             extract_quoted_comments("reply", python_executable="python")
 
+    @patch("lore_review_companion.b4_adapter.inspect_b4_runtime")
     @patch("lore_review_companion.b4_adapter.subprocess.run")
-    def test_reads_only_pinned_local_review_drafts(self, run):
+    def test_reads_only_pinned_local_review_drafts(self, run, _inspect):
         commit = "a" * 40
 
         def fake_run(command, **kwargs):
@@ -102,8 +150,9 @@ class AssembleLocalSeriesTests(unittest.TestCase):
         self.assertEqual(reader[-2:], [commit, "reviewer@example.test"])
         self.assertNotIn("LORE_GITEA_TOKEN", run.call_args.kwargs["env"])
 
+    @patch("lore_review_companion.b4_adapter.inspect_b4_runtime")
     @patch("lore_review_companion.b4_adapter.subprocess.run")
-    def test_rejects_invalid_or_oversized_review_drafts(self, run):
+    def test_rejects_invalid_or_oversized_review_drafts(self, run, _inspect):
         run.side_effect = [
             subprocess.CompletedProcess([], 0, "branch", ""),
             subprocess.CompletedProcess([], 0, "a" * 40, ""),
@@ -122,6 +171,7 @@ class AssembleLocalSeriesTests(unittest.TestCase):
         environment = {
             "PATH": os.environ.get("PATH", os.defpath), "HOME": self.tempdir.name,
             "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+            "PYTHONPATH": str(Path(__file__).parent.parent),
         }
 
         def git(*args):

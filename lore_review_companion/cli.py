@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from urllib.parse import quote
 
-from lore_review_companion.b4_adapter import B4AssemblyError, B4ReviewError, read_local_review_drafts
+from lore_review_companion.b4_adapter import B4AssemblyError, B4ReviewError, inspect_b4_runtime, read_local_review_drafts
 from lore_review_companion.git_branches import GitHttpCredentials, RevisionBranchError, UpstreamEvidence, inspect_upstream_history, plan_staging_sync
 from lore_review_companion.forge_api import ForgeAPI, ForgeAPIError, authenticated_user, read_private_token
 from lore_review_companion.forge_comments import DeliveryUncertainError, ForgeCommentPublisher
@@ -126,6 +126,8 @@ class SeriesDiscovery:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="lore-review-companion", description="Local lore-to-Forgejo review operations")
     commands = parser.add_subparsers(dest="command", required=True)
+    runtime = commands.add_parser("check-b4-runtime", help="Verify reviewed b4/liblore source pins without retrieving mail")
+    runtime.add_argument("--python", default=sys.executable, help="Interpreter used for assembly and legacy parsing")
     epochs = commands.add_parser("discover-epochs", help="List manifest or operator-specified public-inbox epochs")
     epochs.add_argument("--inbox-url", default="https://lore.kernel.org/xen-devel/")
     epoch_source = epochs.add_mutually_exclusive_group()
@@ -436,7 +438,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        if args.command == "discover-epochs":
+        if args.command == "check-b4-runtime":
+            print(json.dumps(inspect_b4_runtime(args.python), sort_keys=True))
+            return 0
+        elif args.command == "discover-epochs":
             if args.epoch is not None:
                 result = public_inbox_epochs(args.inbox_url, tuple(args.epoch))
             else:
