@@ -204,6 +204,21 @@ ordinary PR comments have no equivalent per-comment reply control. Import code
 stores an inline parent in `RefCommentID`, a field also used by cross-reference
 events. Do not treat that field alone as a general discussion-parent relation.
 
+The parent relation is immutable for a posted remark and points to a single
+comment in the same PR. A root has parent ID zero. New chains are bounded to
+100 ancestors and reject missing targets, cycles and non-comment events. A
+deleted parent leaves its ID intact: its descendants remain visible beneath an
+explicit missing-parent placeholder, without inventing a different relationship.
+Editing a parent preserves the edge but an import planned against the old body
+must fail its content-hash check. Siblings render in source chronology with a
+stable comment-ID tie-breaker; imported provenance continues to distinguish
+source time from actual import time. User replies require the same permissions,
+lock and archive restrictions as ordinary PR comments; imported replies also
+require the source-scoped grant and parent ownership. Ordinary and inline
+threads must support branching, per-comment controls, stable permalinks and
+keyboard navigation, with bounded indentation on narrow screens. Existing flat
+comments and links remain valid.
+
 1. Specify a PR comment tree covering ordinary comments, inline comments and
   replies to replies. Establish stable parent identity, source chronology,
   deletion/edit behavior, bounded depth, cycle prevention, permissions and
