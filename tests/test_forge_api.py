@@ -175,7 +175,7 @@ class GiteaAPITests(unittest.TestCase):
     def test_import_only_client_keeps_review_and_reply_operations_explicit(self):
         capabilities = {
             "version": 1, "repository_id": 1, "importer_id": 2, "importer_login": "review-companion",
-            "source_url": "https://lore.kernel.org/xen-devel/", "operations": ["review", "review-reply"],
+            "source_url": "https://lore.kernel.org/xen-devel/", "operations": ["review", "review-reply", "pull"],
         }
         requests = []
         inline_ids = [30, 31]
@@ -186,12 +186,15 @@ class GiteaAPITests(unittest.TestCase):
                 return FakeResponse(200, json.dumps(capabilities).encode())
             sent = json.loads(request.data)
             is_reply = request.full_url.endswith("/replies")
+            is_pull = request.full_url.endswith("/review-imports/pulls")
             return FakeResponse(200, json.dumps({
                 "id": 10, "repository_id": 1, "importer_id": 2, "participant_id": 3,
                 "comment_id": 20, "review_id": 21, "code_comment_ids": [] if is_reply else inline_ids,
-                "type": "review-reply" if is_reply else "review", "operation_key": sent["operation_key"],
+                "type": "pull" if is_pull else "review-reply" if is_reply else "review", "operation_key": sent["operation_key"],
                 "message_id": sent["message_id"], "message_sha256": sent["message_sha256"],
                 "source_url": capabilities["source_url"] + sent["message_id"] + "/",
+                "pull_index": 7, "issue_id": 40,
+                **{field: sent.get(field) for field in ("head_commit", "base_commit", "head_branch", "base_branch")},
             }).encode())
 
         client = ForgeImportClient(ForgeAPI("https://forge.test/api/v1/", transport=transport), "owner", "repo",
@@ -206,6 +209,13 @@ class GiteaAPITests(unittest.TestCase):
         self.assertEqual(client.import_reply(2, reply).remote_object["review_id"], 21)
         self.assertTrue(requests[1].full_url.endswith("/pulls/2/reviews"))
         self.assertTrue(requests[3].full_url.endswith("/pulls/2/replies"))
+        pull = {
+            "operation_key": "series:1", "message_id": "cover@example.test", "message_sha256": "c" * 64,
+            "head_branch": "lore-review/v1-head", "base_branch": "lore-review/v1-base",
+            "head_commit": "a" * 40, "base_commit": "b" * 40,
+        }
+        self.assertEqual(client.import_pull(pull).remote_object["pull_index"], 7)
+        self.assertTrue(requests[-1].full_url.endswith("/review-imports/pulls"))
         for invalid in ([True, 31], [30, 30], [30]):
             inline_ids = invalid
             with self.subTest(identifiers=invalid), self.assertRaises(DeliveryUncertainError):

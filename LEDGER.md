@@ -37,9 +37,10 @@ No automatic pushes. Forgejo changes belong to the separate parent repository.
   operation lookup are tested on existing PRs. The companion has an opt-in
   import-only client with same-key replay, capability checks and no fallback;
   CLI/outbox wiring follows with F04 and S03.
-- F04 `IN PROGRESS`: imported COMMENT reviews and threaded replies are tested
-  with exact historical patch-parent ranges, stable inline IDs and no draft
-  consumption. Participant-authored PR creation and publication wiring remain.
+- F04 `DONE`: participant-authored PRs, fresh COMMENT reviews and threaded
+  replies are tested with pinned refs, exact historical patch-parent ranges,
+  stable inline IDs and no draft consumption or notifications. Companion
+  per-patch publication/outbox wiring remains under C05, S01 and S03.
 - Historical sample publications remain background evidence only; the current
   baseline is 325 tests, with only the live-server acceptance test skipped
   when the pinned real-b4 opt-ins are enabled.
@@ -86,7 +87,7 @@ revision state here; do not stage them into a companion commit.
 | F01 | DONE | B01 | Opt-in import scopes (not implied by legacy all), source-bound repository grants, current token-reduced code/PR write checks and owner-bound/transfer revocation implemented. Scope/model tests and authorization/real-transfer API tests pass. Object/author checks follow with F03/F04 operations. |
 | F02 | DONE | F01 | Atomic repository/source participant registry, deterministic collision-safe names, inactive/restricted/passwordless private-email profiles. Replay revalidates safety flags; shared authentication, sessions, OAuth/linking, reset, tokens/SSH/GPG, password/email changes, Sudo, activation/admin edits and inactive cleanup are guarded. Rollback, collision, affected-package and isolated API tests pass. |
 | F03 | DONE | F01, F02 | Existing-PR conversation import and scoped operation lookup preserve mapped author, importer, source time/hash and atomic operation keys. Replay keeps IDs; changed payload/target/local content or reused Message-ID with different bytes/author conflicts. No notifications, mentions or cross-reference actions. Opt-in companion client rechecks capabilities, safely replays uncertain POSTs and never uses ordinary mutation APIs. |
-| F04 | IN PROGRESS | F03 | Fresh non-voting COMMENT reviews and same-source replies are implemented and tested, with actual pinned comparisons, exact historical patch parents, old/new multiline ranges and no draft theft. Scoped client methods preserve uncertain-write behavior and validate root IDs. Participant-authored immutable PRs and companion publication wiring remain; no ordinary before-commit API extension was necessary. |
+| F04 | DONE | F03 | Participant-authored PRs retain pinned branches/commits, use CAS-only pull refs and reject duplicate revision-message claims. Fresh non-voting reviews/replies validate exact historical patch parents and old/new ranges without draft theft or notifications. Scoped clients preserve uncertain replay and validate returned IDs/pins. Real-Git API cases pass; per-patch companion wiring is C05/S01/S03. No ordinary before-commit API extension was necessary. |
 | F05 | TODO | F03, F04 | Restricted original timestamp initialization/correction with audited actual import/edit time and source quality. Validate UTC/unknown/invalid times; no duplicate notifications or silent reauthoring of legacy content. |
 | F06 | TODO | F03, F04, F05 | API and web render both participant and importer, lore link and source chronology/quality. Reuse existing UI; no forged identity verification or layout regressions. |
 
@@ -473,3 +474,39 @@ Bring them into scope only through an explicit decision.
 - This is not all of F04: participant-authored PRs and companion per-patch
   integration remain next. Parent Forgejo changes are still uncommitted.
 - Commit subject: `feat: add scoped imported review and reply clients`.
+
+### 2026-10-30: F04 Participant-Authored PR Substep
+
+- Added a canonical imported-PR model entry point that preserves ordinary
+  issue/PR defaults and suppresses cross-references only for imports. Dedicated
+  import service reuses the atomic grant/source/participant/operation boundary;
+  there is no session impersonation, notification/mention/code-owner delivery,
+  automation dispatch, label/assignee mutation or remote fetch.
+- New POST `review-imports/pulls` accepts already-published same-repository
+  branches with full commit pins and an ancestor base. It creates a participant-
+  authored PR with maintainer edits disabled, canonical counters and a CAS-only
+  pull ref. Provenance retains pins/index; replay validates them and later new
+  imports refuse a moved branch. One source revision message cannot claim a
+  second PR through another operation key.
+- Ref creation cannot overwrite an existing ref. Error cleanup uses an expected
+  commit; a real-Git collision test proves the old ref survives and SQL records
+  roll back. Git refs and SQL are not one atomic storage system: a process crash
+  between ref creation and SQL commit may leave a ref collision requiring
+  visible operator recovery, never automatic overwrite. S04/R01 must document
+  and supervise that incident path.
+- The collision test exposed a real F02 nested-transaction defect: successful
+  existing-participant lookup omitted `Commit` before deferred `Close`, which
+  rolls back a reused Forgejo transaction. Fixed it and added a caller-rollback
+  regression. The previously failing collision test now leaves no issue,
+  message or provenance residue. A stale fixture-base assumption and one test
+  import were also corrected, then the same focused checks reran.
+- Added the companion's explicit PR method and strict result pin/index checks.
+  No legacy publication command or persisted effect was silently switched.
+- Verification: full `models/issues`, `models/user`, `services/issue` and
+  `services/pull` passed. All six isolated import API cases passed in 7.460
+  seconds. Python: 325 run, 324 passed, only live-server skipped (13.654 seconds;
+  real pinned-b4 checks ran). Formatting, editor diagnostics and generated
+  PR schema/response assertions passed. No live migration/restart/content writes.
+- F04 server primitives are complete. C05/S01/S03 now wire per-patch source
+  plans and publication to these endpoints; F05/F06 add source chronology/UI.
+- Commit subject: `feat: add pinned participant-authored PR import client`.

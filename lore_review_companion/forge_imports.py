@@ -88,12 +88,15 @@ class ForgeImportClient:
     def import_reply(self, pull_index: int, payload: Mapping[str, Any]) -> ImportDeliveryResult:
         return self._import(pull_index, payload, "review-reply", "replies")
 
-    def _import(self, pull_index: int, payload: Mapping[str, Any], operation: str, route: str) -> ImportDeliveryResult:
-        if not _positive_id(pull_index):
+    def import_pull(self, payload: Mapping[str, Any]) -> ImportDeliveryResult:
+        return self._import(None, payload, "pull", "pulls")
+
+    def _import(self, pull_index: int | None, payload: Mapping[str, Any], operation: str, route: str) -> ImportDeliveryResult:
+        if operation != "pull" and not _positive_id(pull_index):
             raise ValueError("A positive pull request index is required")
         operation_key = self._operation_key(payload.get("operation_key"))
         payload = dict(payload)
-        path = f"{self.path}/pulls/{pull_index}/{route}"
+        path = f"{self.path}/pulls" if operation == "pull" else f"{self.path}/pulls/{pull_index}/{route}"
         for attempt in range(2):
             try:
                 capabilities = self.capabilities()
@@ -115,7 +118,8 @@ class ForgeImportClient:
                 raise
             if (
                 not isinstance(result, dict) or not _positive_id(result.get("id"))
-                or not _positive_id(result.get("comment_id")) or not _positive_id(result.get("participant_id"))
+                or (operation != "pull" and not _positive_id(result.get("comment_id")))
+                or not _positive_id(result.get("participant_id"))
                 or not _positive_id(result.get("repository_id")) or not _positive_id(result.get("importer_id"))
                 or result.get("repository_id") != capabilities["repository_id"]
                 or result.get("importer_id") != capabilities["importer_id"]
@@ -126,6 +130,13 @@ class ForgeImportClient:
                 or unquote(result["source_url"]) != self.source_url + str(payload.get("message_id")) + "/"
             ):
                 raise DeliveryUncertainError("Forgejo returned an unconfirmed imported operation")
+            if operation == "pull" and (
+                not _positive_id(result.get("pull_index")) or not _positive_id(result.get("issue_id"))
+                or any(result.get(field) != payload.get(field) for field in (
+                    "head_commit", "base_commit", "head_branch", "base_branch",
+                ))
+            ):
+                raise DeliveryUncertainError("Forgejo returned an unconfirmed imported PR comparison")
             if operation in ("review", "review-reply") and not _positive_id(result.get("review_id")):
                 raise DeliveryUncertainError("Forgejo returned an unconfirmed imported review")
             if operation == "review":
