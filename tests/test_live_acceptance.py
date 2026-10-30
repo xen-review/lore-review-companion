@@ -705,7 +705,11 @@ class ImportedWorkflowAcceptanceTests(unittest.TestCase):
             git("clone", "--", remote, str(checkout))
             base = configuration["base_commit"]
             git("-C", str(checkout), "checkout", "-B", "acceptance-patches", base)
-            (checkout / "review-fixture.c").write_text("new 1\nnew 2\nnew 3\n")
+            (checkout / "review-fixture.c").write_text(
+                "new 1\nnew 2\nnew 3\ncontext 4\ncontext 5\ncontext 6\n"
+                "context 7\ncontext 8\ncontext 9\ncontext 10\ncontext 11\n"
+                "context 12\ncontext 13\nnew tail\n"
+            )
             git("-C", str(checkout), "add", ".")
             git("-C", str(checkout), "commit", "-qm", "First acceptance patch")
             (checkout / "second-fixture.txt").write_text("second patch\n")
@@ -972,6 +976,82 @@ class ImportedWorkflowAcceptanceTests(unittest.TestCase):
                 ).deliveries,
                 (),
             )
+            exact_patch = reader.comparison(
+                pull_index, after_commit=published.plan.patch_commits[0].after_commit
+            )["diff"]
+            hunk_headers = [
+                line for line in exact_patch.splitlines() if line.startswith("@@ ")
+            ]
+            self.assertEqual(len(hunk_headers), 2)
+            segmented = parse_message(
+                (
+                    "From: Reviewer <reviewer@example.test>\nMessage-ID: <acceptance-segmented@example.test>\nSubject: Re: first\n"
+                    f"In-Reply-To: <{first_patch.message_id}>\n\n"
+                    "> --- a/review-fixture.c\n> +++ b/review-fixture.c\n> +new 3\n"
+                    f"> {hunk_headers[1]}\n> +new tail\nPlease adjust the tail.\n"
+                ).encode()
+            )
+            ledger.record_parsed_message(segmented)
+            queued = queue_imported_replies(
+                ledger,
+                reader,
+                pull_index,
+                revision.series_key,
+                revision.revision,
+                checkout,
+                (segmented,),
+            )
+            self.assertEqual((queued.inline_count, queued.unresolved_count), (1, 0))
+            plan = plan_import_delivery(ledger, writer, pull_index, "IMPORT_REVIEW")
+            self.assertEqual(len(plan.deliveries), 1)
+            self.assertEqual(
+                plan.deliveries[0].payload["request"]["comments"][0]["body"],
+                "Please adjust the tail.",
+            )
+            self.assertEqual(
+                plan.deliveries[0].payload["request"]["comments"][0]["new_position"], 14
+            )
+            self.assertEqual(
+                plan.deliveries[0].payload["request"]["comments"][0][
+                    "extra_lines_count"
+                ],
+                0,
+            )
+            self.assertEqual(
+                deliver_approved_imports(
+                    ledger,
+                    writer,
+                    pull_index,
+                    "IMPORT_REVIEW",
+                    approved_digest=plan.approval_digest(),
+                ).delivered,
+                1,
+            )
+            segment_result = reader.lookup_operation(
+                plan.deliveries[0].payload["request"]["operation_key"]
+            )
+            segment_comments = ordinary.request_json(
+                f"{reviews_path}/{segment_result['review_id']}/comments"
+            )
+            self.assertEqual(
+                [comment["body"] for comment in segment_comments],
+                ["Please adjust the tail."],
+            )
+            queue_imported_replies(
+                ledger,
+                reader,
+                pull_index,
+                revision.series_key,
+                revision.revision,
+                checkout,
+                (segmented,),
+            )
+            self.assertEqual(
+                plan_import_delivery(
+                    ledger, writer, pull_index, "IMPORT_REVIEW"
+                ).deliveries,
+                (),
+            )
             original_pull = ordinary.request_json(
                 f"repos/{owner}/{repo}/pulls/{pull_index}"
             )
@@ -1111,7 +1191,7 @@ class ImportedWorkflowAcceptanceTests(unittest.TestCase):
             with self.assertRaises(ForgeAPIError) as conflict:
                 writer.import_review(pull_index, conflicting)
             self.assertEqual(conflict.exception.status, 409)
-            self.assertEqual(len(ordinary.request_json(reviews_path)), 2)
+            self.assertEqual(len(ordinary.request_json(reviews_path)), 3)
             manual_pending = {effect.id for effect in ledger.pending()}
             worker_message = parse_message(
                 (
