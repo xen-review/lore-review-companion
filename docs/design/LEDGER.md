@@ -15,6 +15,54 @@ files, source snapshots and nested repositories are not part of these commits.
 
 ## Current Iteration
 
+- Presentation follow-up is deployed: Forgejo `f83fc8258a` (including audited
+  correction `1adc8ba36a` and source-free inline-review binding `62a85160f3`),
+  companion `ff82557` (cover/title `b3dfff9`, build/header/v3 bodies `eb8104a`).
+  Workflow instruction `c379733` requires immediate verified-part commits and
+  pushes. Every part was committed/pushed normally; no history was rewritten.
+- PR 4 now reads `Kevin Lampis: x86/kexec: Secure Boot support [v3]`, with source
+  prose only. Scoped `cover-prose-v3` correction retained original payload hash,
+  author, creation/edit timestamps and refs; same-key correction and original
+  publication replay pass. One presentation audit exists; no blanket rewrite.
+- New reviewed submission: https://review-forge.be.free.or.at/xen-review/xen/pulls/5
+  is Baptiste Le Duc's RISC-V v10, seed
+  `1793192679.8631fc262581453bbf619ec5b2062170.1a1829cd6d5000f79f@vates.tech`,
+  one patch, head `5b728bae014663b68af643d3f067fffd66963a1e` on the fixed base.
+  Imported six real reply emails, Andrew Cooper's six exact inline remarks and
+  three exact native replies. Ten quote blocks remain unresolved for inline
+  placement; full conversation/raw mail retain them. No guessed anchors.
+- Actual public PR 5 desktop/mobile DOM and screenshots verify submitter/revision
+  title, no generated cover shortlog/diffstat/revision line, no body footnotes,
+  linked `xen-devel` provenance and the actual posting build
+  `ff825577a64f/fix-remove-validated-b4-cover-tails-including-base-metadata`.
+  Relative time renders correctly. Requested 1440x1000 and 390x844 viewports
+  (browser zoom yields 1152/312 CSS-pixel widths) have no page/footer overflow or
+  title/metadata overlap. Older unknown posting builds were not invented.
+- Original PR 4/5 publication replays and requeue are idempotent. Ledger has five
+  complete publications and 23 complete effects, none pending/uncertain. Server
+  has 28 import records, one presentation audit, zero notifications/hook tasks.
+  Both repository master refs remain `e4956d5e6bdcb7e2e9abfa4474b2dc1160c51a45`.
+- Validation: exact companion commit passes 361 tests, 359 pass/two explicit
+  server skips; scoped Forgejo import integration passes, and disposable real
+  Git/b4/server workflow passes in 20.007s after the empty-summary binding fix.
+  Display cleanup regression and migration registration/order checks pass.
+  Generated Swagger correction body/schema was checked with a JSON parser.
+  Source archive and wheel carry identical true build stamps; clean wheel has
+  no dirty suffix. New migrations and public/loopback health pass in production.
+- Paired private rollback checkpoints `backups/20261030-1adc8ba36a/` and
+  `backups/20261030-reviewed-pr5/` retain database/companion snapshots, old
+  executable, config and reflinked repository storage; the latter includes the
+  tested companion wheel. They are on-host, not off-host disaster recovery.
+  The preexisting NNTP 430 incident remains latched, pending mail retained;
+  timer is enabled but healthy unattended ingestion is not claimed.
+- Operator edits to mail-parser typing and series formatting, plus untracked
+  `prek.toml`, remain unstaged. Scoped formatter checks pass; a global format
+  check reports the concurrent series-formatting edit. Latest `uv check --no-sync`
+  reports 458 diagnostics in the concurrent worktree, still a failing type gate,
+  not a claimed improvement over the historical 564 baseline.
+
+## Earlier Rollout Notes
+
 - 2026-10-30 follow-up: the Xen installation/provisioning guide and explicit
   on-demand import script are in [INSTALL-XEN.md](../INSTALL-XEN.md).
   `81825d6` checkpoints new presentation/API setup; `81b8d53` is the separately

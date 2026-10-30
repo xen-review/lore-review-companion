@@ -179,25 +179,43 @@ verification claims and revoked grants are refused. Original import replay
 does not reset a correction or rewrite legacy content. Corrections are not
 automatic or part of the companion worker.
 
-The normal author is the imported submitting/reviewing participant. The web UI
-places importing account, source time and actual import time below content,
-including exact historical patch views; PRs have a separate-line lore link.
+The normal author is the imported submitting/reviewing participant. Below content,
+including exact historical patch views, compact provenance shows the importing
+account, its recorded companion build, the linked source inbox and relative import
+time. Source timestamps remain in native chronology and structured API metadata,
+not a second visible source-time line.
 It omits repeated participant labels and the parenthetical unverified suffix
 without claiming verified ownership. Source quality remains explicit in the API.
-Correction history is expandable and bounded to the latest 100 entries, with
+Source-time correction history is expandable and bounded to the latest 100 entries, with
 truncation made explicit. Ordinary issue/PR/comment/review read APIs expose the
-same `review_import` metadata and audit history under normal repository read
+same `review_import` metadata and source-time audit history under normal repository read
 permissions; no import credential is needed merely to inspect provenance.
 
-New imported conversations and inline remarks retain source prose with a small
-named link, "Original review comment by Name", below a rule, not a numbered
-footnote or exposed full URL. Proven reply-to-reply conversations omit repeated
+New `mail-text-v3` conversations and inline remarks contain source prose without
+generated source footnotes or named-link suffixes. The provenance inbox name links
+to that exact mail. Proven reply-to-reply conversations omit repeated
 nested quotes and link their accepted parent; exact inline answers use native
 review threads. Complete mail remains in the ledger. New PR descriptions omit
-trailing diffstat/generated Git signatures and put revision information last.
+validated generated author/commit overviews and everything following their
+diffstat, including b4 base/change metadata and Git signatures. Titles use
+`Sender: Subject [vN]`; the body has no generated `Revision:` line.
 Identity and chronology appear in the server's provenance UI, not generated
 comment narration. Existing queued or delivered effects keep their original
-rendering and request bytes so upgrades cannot invalidate replay or approval.
+request bytes so upgrades cannot invalidate replay or approval. The server hides
+only exact source-bound legacy suffixes at display time.
+
+Build identity is the creating checkout's SHA and sanitized commit subject,
+stamped into source distributions and wheels. Scoped import writes send it in
+`X-Lore-Companion-Revision`, outside the canonical approved JSON payload. A replay
+never relabels an existing import; historical unknown builds stay blank.
+
+An operator can explicitly correct an existing imported PR's title/body through
+`PATCH /repos/{owner}/{repo}/review-imports/operations/{operation}/presentation`.
+The original importer and active grant are required, with the original payload
+hash, expected title/body hash, a unique correction key and reason. The server
+retains a transactional audit, preserves author/timestamps/refs, and increments
+the content version. Same-key retries and original publication replay remain
+idempotent; unaudited local edits conflict. The worker never performs corrections.
 
 ## Coordinated Dry Run
 

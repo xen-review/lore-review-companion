@@ -161,8 +161,9 @@ write; conversation fallback must be a separately planned effect. Reply to an
 existing inline conversation only when source ancestry and mappings prove it.
 
 For new imported effects in this dedicated review-only repository, display the
-reviewer's original message or exact remark text with only a small named link to
-to the source mail on lore. Do not add sender/time/tool narration or surround
+reviewer's original message or exact remark text without a generated source-link
+suffix. Link the source mail from the compact provenance footer, alongside the
+importer's recorded build and relative import time. Do not add sender/time/tool narration or surround
 the prose with a generated code fence. Server provenance remains separate and
 appears below content. New nested replies omit repeated quoted mail once an
 accepted explicit parent is proven, using native code-review replies where
@@ -170,6 +171,11 @@ exact parent remarks match, otherwise a concise conversation and parent link.
 Raw mail remains complete in the ledger; old approved effect bytes are unchanged.
 Rendering is explicitly tagged; retained old effects keep their original bytes
 and operation identities rather than being silently rewritten on replay.
+Build identity is transport metadata, never part of the canonical import hash;
+replay preserves the originally recorded build. PR titles are `Sender: Subject
+[vN]`; covers omit the generated revision line and validated shortlog/diffstat
+tail. Existing PR presentation changes require an explicit scoped, audited
+compare-and-swap rather than silently changing the original import request.
 
 ## Working Method
 
