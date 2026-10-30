@@ -13,15 +13,15 @@ from unittest.mock import patch
 from b4_adapter import AssemblyResult
 from cli import main
 from git_branches import RevisionBranchResult, revision_branch_name
-from gitea_api import GiteaAPI
-from gitea_pulls import GiteaPullPublisher, PullRequestConflict, _series_marker
-from gitea_comments import DeliveryUncertainError
+from forge_api import ForgeAPI
+from forge_pulls import ForgePullPublisher, PullRequestConflict, _series_marker
+from forge_comments import DeliveryUncertainError
 from ledger import ArchiveSafetyBlocked, Ledger, MessageConflictError, PublicationConflict
 from mail_parser import parse_message
 from preflight import PreflightResult
 from series import discover_series
 from series_sync import PublicationUncertain, sync_series_revision
-from test_gitea_pulls import PullTransport
+from test_forge_pulls import PullTransport
 from test_series import message
 
 
@@ -31,7 +31,7 @@ class SeriesSyncTests(unittest.TestCase):
         self.addCleanup(self.tempdir.cleanup)
         self.repository = Path(self.tempdir.name)
         self.transport = PullTransport()
-        self.api = GiteaAPI("https://gitea.test/api/v1/", transport=self.transport, max_retries=0)
+        self.api = ForgeAPI("https://gitea.test/api/v1/", transport=self.transport, max_retries=0)
         self.revision = discover_series([message("patch@example.test", "[PATCH 1/1] xen: change")])[0]
         self.remote = "https://gitea.test/o/r.git"
         self.branch_writes = []
@@ -64,7 +64,7 @@ class SeriesSyncTests(unittest.TestCase):
             )
 
     def test_preview_and_approved_write_use_the_same_plan(self):
-        preview = self.sync(GiteaPullPublisher(self.api, "o", "r"), labels=(7,))
+        preview = self.sync(ForgePullPublisher(self.api, "o", "r"), labels=(7,))
         self.assertFalse(preview.applied)
         self.assertTrue(preview.pull_request.planned)
         self.assertEqual(preview.attribution_status, "planned")
@@ -74,7 +74,7 @@ class SeriesSyncTests(unittest.TestCase):
         self.assertEqual(self.transport.pulls, [])
 
         result = self.sync(
-            GiteaPullPublisher(self.api, "o", "r", write_enabled=True),
+            ForgePullPublisher(self.api, "o", "r", write_enabled=True),
             labels=(7,), approved_digest=preview.approval_digest,
         )
         self.assertTrue(result.applied)
@@ -86,8 +86,8 @@ class SeriesSyncTests(unittest.TestCase):
         self.assertEqual((publication.status, publication.pull_index), ("complete", 1))
 
     def test_list_publications_is_read_only_filtered_and_paginated(self):
-        preview = self.sync(GiteaPullPublisher(self.api, "o", "r"))
-        self.sync(GiteaPullPublisher(self.api, "o", "r", write_enabled=True), approved_digest=preview.approval_digest)
+        preview = self.sync(ForgePullPublisher(self.api, "o", "r"))
+        self.sync(ForgePullPublisher(self.api, "o", "r", write_enabled=True), approved_digest=preview.approval_digest)
         self.ledger.begin_publication("other", self.revision.series_key, 1, "other-digest", "b" * 40, "other-branch", "a" * 40)
         arguments = ["list-publications", "--ledger", str(self.ledger.path), "--series-key", self.revision.series_key]
         before = self.ledger.path.read_bytes()
@@ -106,22 +106,22 @@ class SeriesSyncTests(unittest.TestCase):
             self.ledger.list_publications(limit=1001)
 
     def test_changed_plan_does_not_write(self):
-        preview = self.sync(GiteaPullPublisher(self.api, "o", "r"), labels=(7,))
+        preview = self.sync(ForgePullPublisher(self.api, "o", "r"), labels=(7,))
         with self.assertRaisesRegex(ValueError, "does not match"):
             self.sync(
-                GiteaPullPublisher(self.api, "o", "r", write_enabled=True),
+                ForgePullPublisher(self.api, "o", "r", write_enabled=True),
                 labels=(8,), approved_digest=preview.approval_digest,
             )
         self.assertFalse(any(self.branch_writes))
         self.assertEqual(self.transport.pulls, [])
 
     def test_revision_policy_is_bound_to_the_approval_digest(self):
-        preview = self.sync(GiteaPullPublisher(self.api, "o", "r"))
-        separate = self.sync(GiteaPullPublisher(self.api, "o", "r"), revision_policy="separate")
+        preview = self.sync(ForgePullPublisher(self.api, "o", "r"))
+        separate = self.sync(ForgePullPublisher(self.api, "o", "r"), revision_policy="separate")
         self.assertNotEqual(preview.approval_digest, separate.approval_digest)
         with self.assertRaisesRegex(ValueError, "does not match"):
             self.sync(
-                GiteaPullPublisher(self.api, "o", "r", write_enabled=True),
+                ForgePullPublisher(self.api, "o", "r", write_enabled=True),
                 revision_policy="separate", approved_digest=preview.approval_digest,
             )
         self.assertFalse(any(self.branch_writes))
@@ -136,8 +136,8 @@ class SeriesSyncTests(unittest.TestCase):
             b"Subject: [PATCH v2 1/1] change\n\nPatch without a change-ID.\n"
         )
         self.revision = discover_series((first,))[0]
-        preview = self.sync(GiteaPullPublisher(self.api, "o", "r"))
-        writer = GiteaPullPublisher(self.api, "o", "r", write_enabled=True)
+        preview = self.sync(ForgePullPublisher(self.api, "o", "r"))
+        writer = ForgePullPublisher(self.api, "o", "r", write_enabled=True)
         self.sync(writer, approved_digest=preview.approval_digest)
         original_head = self.transport.pulls[0]["head"].copy()
         self.ledger.record_parsed_message(second)
@@ -162,27 +162,27 @@ class SeriesSyncTests(unittest.TestCase):
             self.assertEqual(main([*arguments, "--write", "--approve", digest]), 0)
         self.revision = self.ledger.discover_related_series(second.message_id)[0]
         with self.assertRaises(PullRequestConflict):
-            self.sync(GiteaPullPublisher(self.api, "o", "r"))
-        preview = self.sync(GiteaPullPublisher(self.api, "o", "r"), revision_policy="separate")
+            self.sync(ForgePullPublisher(self.api, "o", "r"))
+        preview = self.sync(ForgePullPublisher(self.api, "o", "r"), revision_policy="separate")
         result = self.sync(writer, revision_policy="separate", approved_digest=preview.approval_digest)
         self.assertTrue(result.pull_request.created)
         self.assertEqual(len(self.transport.pulls), 2)
         self.assertEqual(self.transport.pulls[0]["head"], original_head)
 
     def test_api_account_id_is_bound_to_series_approval(self):
-        preview = self.sync(GiteaPullPublisher(self.api, "o", "r"))
+        preview = self.sync(ForgePullPublisher(self.api, "o", "r"))
         self.assertEqual(preview.plan.actor_id, 5)
         self.transport.actor_id = 6
         with self.assertRaisesRegex(ValueError, "does not match"):
             self.sync(
-                GiteaPullPublisher(self.api, "o", "r", write_enabled=True),
+                ForgePullPublisher(self.api, "o", "r", write_enabled=True),
                 approved_digest=preview.approval_digest,
             )
         self.assertFalse(any(self.branch_writes))
 
     def test_completed_legacy_publication_replays_without_changing_its_intent(self):
-        preview = self.sync(GiteaPullPublisher(self.api, "o", "r"))
-        writer = GiteaPullPublisher(self.api, "o", "r", write_enabled=True)
+        preview = self.sync(ForgePullPublisher(self.api, "o", "r"))
+        writer = ForgePullPublisher(self.api, "o", "r", write_enabled=True)
         self.sync(writer, approved_digest=preview.approval_digest)
         legacy_digest = preview.plan.approval_digest(legacy=True)
         with self.ledger._connection() as connection:
@@ -194,8 +194,8 @@ class SeriesSyncTests(unittest.TestCase):
         self.assertEqual(recorded.approval_digest, legacy_digest)
 
     def test_completed_pr_without_old_attribution_replays_without_rewriting(self):
-        preview = self.sync(GiteaPullPublisher(self.api, "o", "r"))
-        writer = GiteaPullPublisher(self.api, "o", "r", write_enabled=True)
+        preview = self.sync(ForgePullPublisher(self.api, "o", "r"))
+        writer = ForgePullPublisher(self.api, "o", "r", write_enabled=True)
         self.sync(writer, approved_digest=preview.approval_digest)
         legacy_body = (
             f"Source: https://lore.kernel.org/xen-devel/{preview.plan.source_message_id}/\n\n"
@@ -211,19 +211,19 @@ class SeriesSyncTests(unittest.TestCase):
         self.assertTrue(self.transport.pulls[0]["body"].startswith(legacy_body))
 
     def test_completed_publication_rejects_a_changed_intent(self):
-        original = self.sync(GiteaPullPublisher(self.api, "o", "r"), labels=(7,))
-        writer = GiteaPullPublisher(self.api, "o", "r", write_enabled=True)
+        original = self.sync(ForgePullPublisher(self.api, "o", "r"), labels=(7,))
+        writer = ForgePullPublisher(self.api, "o", "r", write_enabled=True)
         self.sync(writer, labels=(7,), approved_digest=original.approval_digest)
-        changed = self.sync(GiteaPullPublisher(self.api, "o", "r"), labels=(8,))
+        changed = self.sync(ForgePullPublisher(self.api, "o", "r"), labels=(8,))
         with self.assertRaisesRegex(PublicationConflict, "intent"):
             self.sync(writer, labels=(8,), approved_digest=changed.approval_digest)
 
     def test_observed_archive_deletion_blocks_previously_approved_publication(self):
-        preview = self.sync(GiteaPullPublisher(self.api, "o", "r"))
+        preview = self.sync(ForgePullPublisher(self.api, "o", "r"))
         self.ledger.record_archive_deletion("/archive/epoch", "d" * 40)
         with self.assertRaises(ArchiveSafetyBlocked):
             self.sync(
-                GiteaPullPublisher(self.api, "o", "r", write_enabled=True),
+                ForgePullPublisher(self.api, "o", "r", write_enabled=True),
                 approved_digest=preview.approval_digest,
             )
         self.assertFalse(any(self.branch_writes))
@@ -235,17 +235,17 @@ class SeriesSyncTests(unittest.TestCase):
         )
         self.revision = discover_series((child,))[0]
         with self.assertRaisesRegex(PublicationConflict, "ancestry is incomplete"):
-            self.sync(GiteaPullPublisher(self.api, "o", "r"))
+            self.sync(ForgePullPublisher(self.api, "o", "r"))
         self.assertEqual(self.branch_writes, [])
         parent = message("parent@example.test", "older discussion")
         self.ledger.record_parsed_message(parent)
-        preview = self.sync(GiteaPullPublisher(self.api, "o", "r"))
+        preview = self.sync(ForgePullPublisher(self.api, "o", "r"))
         self.assertTrue(preview.pull_request.planned)
 
     def test_new_related_patch_blocks_stale_approved_publication(self):
         first = message("first@example.test", "[PATCH 1/1] original")
         self.revision = discover_series([first])[0]
-        preview = self.sync(GiteaPullPublisher(self.api, "o", "r"))
+        preview = self.sync(ForgePullPublisher(self.api, "o", "r"))
         duplicate = message(
             "duplicate@example.test", "[PATCH 1/1] conflicting sibling",
             headers="In-Reply-To: <first@example.test>\n",
@@ -253,7 +253,7 @@ class SeriesSyncTests(unittest.TestCase):
         self.ledger.record_parsed_message(duplicate)
         with self.assertRaisesRegex(ValueError, "membership changed"):
             self.sync(
-                GiteaPullPublisher(self.api, "o", "r", write_enabled=True),
+                ForgePullPublisher(self.api, "o", "r", write_enabled=True),
                 approved_digest=preview.approval_digest,
             )
         self.assertFalse(any(self.branch_writes))
@@ -261,15 +261,15 @@ class SeriesSyncTests(unittest.TestCase):
 
     def test_rejects_unapproved_or_mismatched_destination(self):
         with self.assertRaisesRegex(ValueError, "approval digest"):
-            self.sync(GiteaPullPublisher(self.api, "o", "r", write_enabled=True))
+            self.sync(ForgePullPublisher(self.api, "o", "r", write_enabled=True))
         self.remote = "https://other.test/o/r.git"
         with self.assertRaisesRegex(ValueError, "same HTTP"):
-            self.sync(GiteaPullPublisher(self.api, "o", "r"))
+            self.sync(ForgePullPublisher(self.api, "o", "r"))
 
     def test_rejects_incomplete_revision_before_assembly(self):
         self.revision = discover_series([message("patch@example.test", "[PATCH 1/2] incomplete")])[0]
         with self.assertRaisesRegex(ValueError, "complete"):
-            self.sync(GiteaPullPublisher(self.api, "o", "r"))
+            self.sync(ForgePullPublisher(self.api, "o", "r"))
 
     def test_quarantined_series_is_not_published_on_original_replay(self):
         patch_message = self.revision.messages[0]
@@ -277,12 +277,12 @@ class SeriesSyncTests(unittest.TestCase):
         with self.assertRaises(MessageConflictError):
             self.ledger.record_message(patch_message.message_id, b"conflicting mail")
         with self.assertRaisesRegex(MessageConflictError, "Quarantined"):
-            self.sync(GiteaPullPublisher(self.api, "o", "r"))
+            self.sync(ForgePullPublisher(self.api, "o", "r"))
         self.assertEqual(self.branch_writes, [])
 
     def test_uncertain_pr_write_requires_explicit_retry(self):
-        preview = self.sync(GiteaPullPublisher(self.api, "o", "r"))
-        writer = GiteaPullPublisher(self.api, "o", "r", write_enabled=True)
+        preview = self.sync(ForgePullPublisher(self.api, "o", "r"))
+        writer = ForgePullPublisher(self.api, "o", "r", write_enabled=True)
         self.transport.fail_without_write = True
         with self.assertRaises(DeliveryUncertainError):
             self.sync(writer, approved_digest=preview.approval_digest)
@@ -294,8 +294,8 @@ class SeriesSyncTests(unittest.TestCase):
         self.assertTrue(result.pull_request.created)
 
     def test_reconciles_pr_after_remote_write_before_ledger_acknowledgment(self):
-        preview = self.sync(GiteaPullPublisher(self.api, "o", "r"))
-        writer = GiteaPullPublisher(self.api, "o", "r", write_enabled=True)
+        preview = self.sync(ForgePullPublisher(self.api, "o", "r"))
+        writer = ForgePullPublisher(self.api, "o", "r", write_enabled=True)
         transition = self.ledger.transition_publication
 
         def fail_acknowledgment(*args, **kwargs):

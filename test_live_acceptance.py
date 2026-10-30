@@ -13,9 +13,9 @@ from unittest.mock import patch
 
 from cli import main
 from git_branches import GitHttpCredentials
-from gitea_api import GiteaAPI, GiteaAPIError
-from gitea_comments import GiteaCommentPublisher
-from gitea_pulls import GiteaPullPublisher, PullRequestConflict
+from forge_api import ForgeAPI, ForgeAPIError
+from forge_comments import ForgeCommentPublisher
+from forge_pulls import ForgePullPublisher, PullRequestConflict
 from ingest import sync_public_inbox
 from ledger import Ledger
 from mail_parser import parse_mbox, parse_message
@@ -40,8 +40,8 @@ class LiveAcceptanceTests(unittest.TestCase):
         self.assertNotEqual(parsed.port, 30001, "the existing Gitea instance must not be used")
         remote = f"{parsed.scheme}://{parsed.netloc}/{owner}/{repo}.git"
         credentials = GitHttpCredentials(owner, token)
-        api = GiteaAPI(api_url, token=token, max_retries=0)
-        GiteaPullPublisher(api, owner, repo).check_repository()
+        api = ForgeAPI(api_url, token=token, max_retries=0)
+        ForgePullPublisher(api, owner, repo).check_repository()
 
         with tempfile.TemporaryDirectory(prefix="lore-gitea-acceptance-") as temp_dir:
             environment = {
@@ -101,13 +101,13 @@ class LiveAcceptanceTests(unittest.TestCase):
                 "ledger": ledger,
             }
             preview = sync_series_revision(
-                publisher=GiteaPullPublisher(api, owner, repo), **arguments,
+                publisher=ForgePullPublisher(api, owner, repo), **arguments,
             )
             self.assertFalse(preview.applied)
             self.assertTrue(preview.branch.planned)
             self.assertTrue(preview.pull_request.planned)
 
-            writer = GiteaPullPublisher(api, owner, repo, write_enabled=True)
+            writer = ForgePullPublisher(api, owner, repo, write_enabled=True)
             published = sync_series_revision(
                 publisher=writer, approved_digest=preview.approval_digest, **arguments,
             )
@@ -123,7 +123,7 @@ class LiveAcceptanceTests(unittest.TestCase):
             self.assertTrue(remote_main.startswith(base))
 
             pull_index = published.pull_request.remote_object["number"]
-            comment_preview = GiteaCommentPublisher(api, owner, repo)
+            comment_preview = ForgeCommentPublisher(api, owner, repo)
             with patch.dict(os.environ, {"LORE_GITEA_TOKEN": token}), redirect_stdout(StringIO()):
                 self.assertEqual(main([
                     "map-identity", "--ledger", str(ledger.path), "--api-url", api_url,
@@ -135,7 +135,7 @@ class LiveAcceptanceTests(unittest.TestCase):
             )
             self.assertEqual((queue.matched, queue.inline_count, queue.unresolved_count, queue.diagnostics), (1, 1, 0, ()))
             self.assertIn("Operator-mapped Gitea account (unverified sender)", ledger.pending()[0].payload["body"])
-            comment_writer = GiteaCommentPublisher(
+            comment_writer = ForgeCommentPublisher(
                 api, owner, repo, write_enabled=True, allow_inline_writes=True,
             )
             source_time = "Source time (unverified Received header): 2026-10-22T13:30:00+00:00"
@@ -194,9 +194,9 @@ class LiveAcceptanceTests(unittest.TestCase):
             self.assertEqual((worker_result["delivered"], worker_result["failed"]), (1, 0))
 
             ledger = Ledger(ledger.path)
-            api = GiteaAPI(api_url, token=token, max_retries=0)
-            comment_preview = GiteaCommentPublisher(api, owner, repo)
-            comment_writer = GiteaCommentPublisher(api, owner, repo, write_enabled=True, allow_inline_writes=True)
+            api = ForgeAPI(api_url, token=token, max_retries=0)
+            comment_preview = ForgeCommentPublisher(api, owner, repo)
+            comment_writer = ForgeCommentPublisher(api, owner, repo, write_enabled=True, allow_inline_writes=True)
             plan = plan_comment_delivery(ledger, comment_writer, pull_index, "INLINE_COMMENT")
             self.assertEqual(len(plan.deliveries), 1)
             self.assertIn(source_time, plan.deliveries[0].payload["body"])
@@ -292,9 +292,9 @@ class LiveAcceptanceTests(unittest.TestCase):
             self.assertEqual(revision_two.series_key, revision.series_key)
             arguments_two = {**arguments, "revision": revision_two}
             with self.assertRaises(PullRequestConflict):
-                sync_series_revision(publisher=GiteaPullPublisher(api, owner, repo), **arguments_two)
+                sync_series_revision(publisher=ForgePullPublisher(api, owner, repo), **arguments_two)
             preview_two = sync_series_revision(
-                publisher=GiteaPullPublisher(api, owner, repo), revision_policy="separate", **arguments_two,
+                publisher=ForgePullPublisher(api, owner, repo), revision_policy="separate", **arguments_two,
             )
             published_two = sync_series_revision(
                 publisher=writer, revision_policy="separate", approved_digest=preview_two.approval_digest, **arguments_two,
@@ -320,7 +320,7 @@ class LiveAcceptanceTests(unittest.TestCase):
                 self.assertIsNone(api.request_json(comment_path, method="DELETE"))
                 self.assertIsNone(api.request_json(review_path, method="DELETE"))
                 for path in (comment_path, review_path):
-                    with self.subTest(path=path), self.assertRaises(GiteaAPIError) as error:
+                    with self.subTest(path=path), self.assertRaises(ForgeAPIError) as error:
                         api.request_json(path)
                     self.assertEqual(error.exception.status, 404)
 
@@ -332,7 +332,7 @@ class LiveAcceptanceTests(unittest.TestCase):
                 self.assertEqual(git("ls-remote", "--heads", remote, f"refs/heads/{second_branch}"), b"")
                 self.assertTrue(git("ls-remote", "--heads", remote, "refs/heads/main").decode().startswith(base))
                 self.assertIsNone(api.request_json(f"repos/{owner}/{repo}/issues/{second_index}", method="DELETE"))
-                with self.assertRaises(GiteaAPIError) as error:
+                with self.assertRaises(ForgeAPIError) as error:
                     api.request_json(f"repos/{owner}/{repo}/pulls/{second_index}")
                 self.assertEqual(error.exception.status, 404)
 

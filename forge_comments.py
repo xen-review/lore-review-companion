@@ -9,7 +9,7 @@ from typing import Any
 from urllib.parse import quote
 
 from anchor import Anchor
-from gitea_api import GiteaAPI, GiteaAPIError
+from forge_api import ForgeAPI, ForgeAPIError
 
 
 class DeliveryUncertainError(RuntimeError):
@@ -61,9 +61,9 @@ def _with_marker(body: str, marker: str) -> str:
     return f"{body}\n\n{marker}" if body else marker
 
 
-class GiteaCommentPublisher:
+class ForgeCommentPublisher:
     def __init__(
-        self, api: GiteaAPI, owner: str, repo: str, *, write_enabled: bool = False,
+        self, api: ForgeAPI, owner: str, repo: str, *, write_enabled: bool = False,
         allow_inline_writes: bool = False,
     ):
         if not owner or not repo:
@@ -101,7 +101,7 @@ class GiteaCommentPublisher:
                 method="POST",
                 payload=payload,
             )
-        except GiteaAPIError as error:
+        except ForgeAPIError as error:
             existing = self._find_issue_comment(path, marker)
             if existing:
                 return DeliveryResult(existing, created=False)
@@ -177,7 +177,7 @@ class GiteaCommentPublisher:
             review = self.api.request_json(
                 f"{path}/reviews", method="POST", payload=payload
             )
-        except GiteaAPIError as error:
+        except ForgeAPIError as error:
             existing, matching_review = self._find_inline_comment(path, marker)
             if existing:
                 return DeliveryResult(existing, created=False)

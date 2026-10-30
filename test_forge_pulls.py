@@ -9,9 +9,9 @@ from urllib.error import URLError
 
 from cli import main
 from git_branches import RevisionBranchConflict, RevisionBranchResult, RevisionBranchUncertain, StagingSyncPlan, StagingSyncResult, revision_branch_name
-from gitea_api import GiteaAPI, GiteaAPIError
-from gitea_comments import DeliveryUncertainError
-from gitea_pulls import GiteaPullPublisher, PullRequestConflict, inspect_review_staging, sync_review_staging
+from forge_api import ForgeAPI, ForgeAPIError
+from forge_comments import DeliveryUncertainError
+from forge_pulls import ForgePullPublisher, PullRequestConflict, inspect_review_staging, sync_review_staging
 from ledger import ArchiveSafetyBlocked, Ledger, WorkerBusyError
 from staging_supervisor import run_staging_sync
 
@@ -67,11 +67,11 @@ class PullTransport:
         raise AssertionError(f"Unexpected request: {request.get_method()} {path}")
 
 
-class GiteaPullPublisherTests(unittest.TestCase):
+class ForgePullPublisherTests(unittest.TestCase):
     def setUp(self):
         self.transport = PullTransport()
-        self.api = GiteaAPI("https://gitea.test/api/v1/", transport=self.transport, max_retries=0)
-        self.publisher = GiteaPullPublisher(self.api, "o", "r", write_enabled=True)
+        self.api = ForgeAPI("https://gitea.test/api/v1/", transport=self.transport, max_retries=0)
+        self.publisher = ForgePullPublisher(self.api, "o", "r", write_enabled=True)
         self.series_key = "lore:root@example.test"
         self.branch = RevisionBranchResult(revision_branch_name(self.series_key, 1), "a" * 40, False)
         self.arguments = {
@@ -80,7 +80,7 @@ class GiteaPullPublisherTests(unittest.TestCase):
         }
 
     def test_dry_run_never_posts(self):
-        publisher = GiteaPullPublisher(self.api, "o", "r")
+        publisher = ForgePullPublisher(self.api, "o", "r")
         preview = publisher.ensure_pull_request(**self.arguments)
         self.assertTrue(preview.planned)
         self.assertEqual(preview.remote_object["labels"], [7])
@@ -106,7 +106,7 @@ class GiteaPullPublisherTests(unittest.TestCase):
         self.api.token = "synthetic-token"
         with (
             patch.dict("os.environ", {"LORE_GITEA_TOKEN": "synthetic-token"}),
-            patch("cli.GiteaAPI", return_value=self.api) as client,
+            patch("cli.ForgeAPI", return_value=self.api) as client,
             redirect_stdout(io.StringIO()) as output,
         ):
             self.assertEqual(main([
@@ -129,20 +129,20 @@ class GiteaPullPublisherTests(unittest.TestCase):
             owner = request.full_url.split("/repos/", 1)[1].split("/", 1)[0]
             return FakeResponse(200, {"name": "staging", "commit": {"id": commits[owner]}})
 
-        api = GiteaAPI("https://gitea.test/api/v1/", transport=transport)
+        api = ForgeAPI("https://gitea.test/api/v1/", transport=transport)
         result = inspect_review_staging(api, "source", "xen", "review", "xen", "staging")
         self.assertEqual((result.source_commit, result.review_commit, result.same_tip), ("a" * 40, "b" * 40, False))
         commits["review"] = commits["source"]
         self.assertTrue(inspect_review_staging(api, "source", "xen", "review", "xen", "staging").same_tip)
         self.assertTrue(all(request.get_method() == "GET" for request in requests))
         commits["source"] = "invalid"
-        with self.assertRaisesRegex(GiteaAPIError, "invalid branch"):
+        with self.assertRaisesRegex(ForgeAPIError, "invalid branch"):
             inspect_review_staging(api, "source", "xen", "review", "xen", "staging")
         with self.assertRaises(ValueError):
             inspect_review_staging(api, "source", "xen", "source", "xen", "staging")
 
     def test_staging_comparison_cli_does_not_send_a_token_by_default(self):
-        api = GiteaAPI(
+        api = ForgeAPI(
             "https://gitea.test/api/v1/",
             transport=lambda request, _timeout: FakeResponse(200, {"name": "staging", "commit": {"id": "a" * 40}}),
         )
@@ -150,7 +150,7 @@ class GiteaPullPublisherTests(unittest.TestCase):
             "inspect-review-staging", "--api-url", api.base_url, "--source-owner", "source", "--source-repo", "xen",
             "--review-owner", "review", "--review-repo", "xen",
         ]
-        with patch.dict("os.environ", {"LORE_GITEA_TOKEN": "synthetic-token"}), patch("cli.GiteaAPI", return_value=api) as client:
+        with patch.dict("os.environ", {"LORE_GITEA_TOKEN": "synthetic-token"}), patch("cli.ForgeAPI", return_value=api) as client:
             with redirect_stdout(io.StringIO()) as output:
                 self.assertEqual(main(arguments), 0)
             self.assertTrue(json.loads(output.getvalue())["same_tip"])
@@ -174,10 +174,10 @@ class GiteaPullPublisherTests(unittest.TestCase):
             commit = "a" * 40 if path == "repos/source/xen/branches/staging" else "b" * 40
             return FakeResponse(200, {"name": "staging", "commit": {"id": commit}})
 
-        api = GiteaAPI("https://gitea.test/api/v1/", token="synthetic-token", transport=transport)
+        api = ForgeAPI("https://gitea.test/api/v1/", token="synthetic-token", transport=transport)
         with tempfile.TemporaryDirectory() as directory:
             ledger = Ledger(Path(directory) / "ledger.sqlite3")
-            with patch("gitea_pulls.plan_staging_sync", return_value=plan), patch("gitea_pulls.sync_staging") as sync:
+            with patch("forge_pulls.plan_staging_sync", return_value=plan), patch("forge_pulls.sync_staging") as sync:
                 sync.return_value = StagingSyncResult(plan, updated=True)
                 result = sync_review_staging(ledger, api, "source", "xen", "review", "xen", Path("/source"), remote)
                 self.assertEqual((result.actor.login, result.repository_id, result.result.updated), ("mirror-bot", 42, True))
@@ -260,7 +260,7 @@ class GiteaPullPublisherTests(unittest.TestCase):
                 "--source-repository", "/source", "--remote", "https://gitea.test/review/xen.git",
                 "--token-file", str(token_file), "--write",
             ]
-            with ledger.worker_lock(), patch("gitea_pulls.plan_staging_sync") as plan, patch("sys.stderr", new_callable=io.StringIO) as error:
+            with ledger.worker_lock(), patch("forge_pulls.plan_staging_sync") as plan, patch("sys.stderr", new_callable=io.StringIO) as error:
                 self.assertEqual(run_staging_sync(pending, arguments), 0)
             self.assertIn("worker", error.getvalue())
             self.assertNotIn("synthetic-token", error.getvalue())
@@ -268,14 +268,14 @@ class GiteaPullPublisherTests(unittest.TestCase):
             self.assertFalse(pending.exists())
             sync_pending = Path(f"{ledger.path}.staging-sync-pending")
             self.assertFalse(sync_pending.exists())
-            with patch("gitea_pulls.authenticated_user", side_effect=WorkerBusyError("later failure")), patch("sys.stderr", new_callable=io.StringIO):
+            with patch("forge_pulls.authenticated_user", side_effect=WorkerBusyError("later failure")), patch("sys.stderr", new_callable=io.StringIO):
                 self.assertEqual(run_staging_sync(pending, arguments), 1)
             self.assertTrue(sync_pending.exists())
             self.assertTrue(pending.exists())
             sync_pending.unlink()
             pending.unlink()
             sync_pending.write_text("previous attempt")
-            with ledger.worker_lock(), patch("gitea_pulls.plan_staging_sync") as plan, patch("sys.stderr", new_callable=io.StringIO):
+            with ledger.worker_lock(), patch("forge_pulls.plan_staging_sync") as plan, patch("sys.stderr", new_callable=io.StringIO):
                 self.assertEqual(run_staging_sync(pending, arguments), 1)
             plan.assert_not_called()
             self.assertTrue(sync_pending.exists())
@@ -326,7 +326,7 @@ class GiteaPullPublisherTests(unittest.TestCase):
         other = dict(self.arguments, revision=2, revision_policy="separate")
         other["branch"] = RevisionBranchResult(revision_branch_name(self.series_key, 2), "b" * 40, False)
         self.transport.head_commit = "b" * 40
-        preview = GiteaPullPublisher(self.api, "o", "r").ensure_pull_request(**other)
+        preview = ForgePullPublisher(self.api, "o", "r").ensure_pull_request(**other)
         self.assertTrue(preview.planned)
         created = self.publisher.ensure_pull_request(**other)
         replay = self.publisher.ensure_pull_request(**other)

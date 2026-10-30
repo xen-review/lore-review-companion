@@ -14,7 +14,9 @@ No automatic pushes. Forgejo changes belong to the separate parent repository.
 - B01 `DONE`: current source/history/tool inventory and offline baseline recorded
   below. B02 imported the unchanged source; installed b4 is still unavailable.
 - B03 `DONE`: unsafe inline delivery no longer becomes a conversation write.
-  Focused publisher and neighboring queue tests passed; B04 packaging is next.
+  Focused publisher and neighboring queue tests passed.
+- B04 `IN PROGRESS`: neutral adapter names are verified; package layout and
+  install/CLI checks follow as a separate topic.
 - Historical sample publications remain background evidence only; the current
   baseline is 295 synthetic tests, with 3 explicitly reported skips.
 
@@ -38,7 +40,7 @@ installed versions, historical commits and current tests are B01, not assumed.
 | B01 | DONE | DOC-01 | Current worktrees/history/tools inspected and narrow/full offline baseline passed; source is an untracked snapshot, b4 runtime absent. See execution record. |
 | B02 | DONE | B01 | Unchanged Python/requirements snapshot imported with checksums, legal context, provenance and ignores. Original files untouched; imported offline suite passed. Final distribution-license review remains R01. |
 | B03 | DONE | B02 | Removed inline fallback; tests prove stale/disabled/pending-review paths make zero POSTs and preserve unresolved effects. Separate conversation approval still works; 25 publisher and 31 queue tests passed. |
-| B04 | TODO | B03 | Rename to neutral project/modules and installable lore_review_companion package with CLI/CI. Preserve legacy replay markers, destination/effect keys and versioned preflight identity. Independent install and old-state replay must not create duplicate writes. |
+| B04 | IN PROGRESS | B03 | Neutral adapter names verified. Package/CLI/CI and independent install checks remain; legacy wire markers, destination/effect keys and preflight identity must stay stable. |
 
 ## Deterministic Multiline Reviews
 
@@ -178,3 +180,17 @@ Bring them into scope only through an explicit decision.
 - Existing uncertain-write state handling is unchanged; failures remain visible
   for inspection rather than silently authorizing an alternate write.
 - Commit subject: `fix: keep unsafe inline deliveries from changing write type`.
+
+### 2026-10-29: B04 Adapter Naming
+
+- B03 commit: `5250716`. Renamed the API and publisher modules/classes to
+  `forge_api`, `forge_comments`, `forge_pulls`, `ForgeAPI`,
+  `ForgeCommentPublisher` and `ForgePullPublisher`, including test references.
+- The Python rename provider is unavailable, so exact mechanical identifier
+  replacement and Git file renames were used. The first full check caught two
+  cross-test helper imports; repaired those locally and reran the same check.
+- Full offline result: 296 run, 293 passed, 3 opt-in skips in 19.123 seconds.
+  The added test is B03's approved-inline regression; no tests were removed.
+- Legacy wire markers, source-body wording, environment variables, serialized
+  ledger data and the Git committer identity were not renamed in this slice.
+- Commit subject: `refactor: use neutral forge adapter names`.

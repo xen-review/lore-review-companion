@@ -13,8 +13,8 @@ from typing import Any
 from urllib.parse import quote
 
 from git_branches import GitHttpCredentials, RevisionBranchConflict, RevisionBranchResult, RevisionBranchUncertain, StagingSyncResult, plan_staging_sync, revision_branch_name, sync_staging
-from gitea_api import AuthenticatedUser, GiteaAPI, GiteaAPIError, authenticated_user
-from gitea_comments import DeliveryResult, DeliveryUncertainError
+from forge_api import AuthenticatedUser, ForgeAPI, ForgeAPIError, authenticated_user
+from forge_comments import DeliveryResult, DeliveryUncertainError
 from ledger import Ledger, WorkerBusyError
 
 
@@ -54,7 +54,7 @@ class ReviewStagingSync:
 
 
 def inspect_review_staging(
-    api: GiteaAPI, source_owner: str, source_repo: str, review_owner: str, review_repo: str, branch: str,
+    api: ForgeAPI, source_owner: str, source_repo: str, review_owner: str, review_repo: str, branch: str,
 ) -> ReviewStagingComparison:
     names = (source_owner, source_repo, review_owner, review_repo, branch)
     if any(not isinstance(name, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name) is None for name in names):
@@ -73,7 +73,7 @@ def inspect_review_staging(
             not isinstance(response, dict) or response.get("name") != branch
             or not isinstance(object_id, str) or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", object_id) is None
         ):
-            raise GiteaAPIError(200, "Gitea returned invalid branch comparison data")
+            raise ForgeAPIError(200, "Gitea returned invalid branch comparison data")
         commits.append(object_id)
     return ReviewStagingComparison(
         api.base_url + paths[0], api.base_url + paths[1], branch, commits[0], commits[1], commits[0] == commits[1],
@@ -81,14 +81,14 @@ def inspect_review_staging(
 
 
 def sync_review_staging(
-    ledger: Ledger, api: GiteaAPI, source_owner: str, source_repo: str, review_owner: str, review_repo: str,
+    ledger: Ledger, api: ForgeAPI, source_owner: str, source_repo: str, review_owner: str, review_repo: str,
     source_repository: Path, remote: str, *, branch: str = "staging",
 ) -> ReviewStagingSync:
     from series_sync import _validate_destination
 
     if not api.token:
         raise ValueError("Staging synchronization requires an authenticated token")
-    publisher = GiteaPullPublisher(api, review_owner, review_repo)
+    publisher = ForgePullPublisher(api, review_owner, review_repo)
     _validate_destination(publisher, remote)
     pending = Path(f"{ledger.path.resolve()}.staging-sync-pending")
     try:
@@ -139,8 +139,8 @@ def _series_marker(series_key: str) -> str:
     return f"<!-- lore-gitea-mirror:series:v1:{digest} -->"
 
 
-class GiteaPullPublisher:
-    def __init__(self, api: GiteaAPI, owner: str, repo: str, *, write_enabled: bool = False):
+class ForgePullPublisher:
+    def __init__(self, api: ForgeAPI, owner: str, repo: str, *, write_enabled: bool = False):
         if not owner or not repo:
             raise ValueError("owner and repository must be non-empty")
         self.api = api
@@ -158,7 +158,7 @@ class GiteaPullPublisher:
     def check_repository(self) -> int:
         repository = self.api.request_json(self.repository_path)
         if not isinstance(repository, dict):
-            raise GiteaAPIError(200, "Expected a repository object")
+            raise ForgeAPIError(200, "Expected a repository object")
         repository_id = repository.get("id")
         permissions = repository.get("permissions")
         if (
@@ -203,7 +203,7 @@ class GiteaPullPublisher:
             others = []
             for pull in self.api.get_pages(path, params={"state": "all"}):
                 if not isinstance(pull, dict):
-                    raise GiteaAPIError(200, "Expected pull request objects")
+                    raise ForgeAPIError(200, "Expected pull request objects")
                 head = pull.get("head") or {}
                 base = pull.get("base") or {}
                 if marker in str(pull.get("body", "")):
@@ -255,10 +255,10 @@ class GiteaPullPublisher:
 
         try:
             created = self.api.request_json(path, method="POST", payload=payload)
-        except GiteaAPIError as error:
+        except ForgeAPIError as error:
             try:
                 existing = find_existing()
-            except GiteaAPIError as reconciliation_error:
+            except ForgeAPIError as reconciliation_error:
                 raise DeliveryUncertainError("Pull request write and reconciliation both failed") from reconciliation_error
             if existing:
                 return DeliveryResult(existing, created=False)

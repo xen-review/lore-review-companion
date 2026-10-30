@@ -8,16 +8,16 @@ from unittest.mock import patch
 
 from b4_adapter import B4ReviewError, DraftSnapshot, LocalDraft, QuotedComment
 from cli import main
-from gitea_api import GiteaAPI
-from gitea_comments import GiteaCommentPublisher
-from gitea_pulls import _series_marker
+from forge_api import ForgeAPI
+from forge_comments import ForgeCommentPublisher
+from forge_pulls import _series_marker
 from ledger import DeliveryStateConflict, Ledger, MessageConflictError, PublicationConflict, WorkerBusyError
 from mail_parser import parse_message
 from outbox import deliver_approved_comments, migrate_legacy_deliveries, plan_comment_delivery, plan_legacy_migration
 from review_queue import queue_archive_replies, queue_b4_drafts, queue_thread_replies, queue_thread_reply
 from series import discover_series
 from test_anchor import PATCH
-from test_gitea_comments import CommentTransport
+from test_forge_comments import CommentTransport
 from test_series import message
 from threads import match_thread_replies
 
@@ -29,8 +29,8 @@ class ReviewQueueTests(unittest.TestCase):
         self.ledger = Ledger(Path(self.tempdir.name) / "ledger.sqlite3")
         self.transport = CommentTransport()
         self.transport.diff = PATCH.encode()
-        self.api = GiteaAPI("https://gitea.test/api/v1/", transport=self.transport, max_retries=0)
-        self.publisher = GiteaCommentPublisher(self.api, "xen-project", "xen")
+        self.api = ForgeAPI("https://gitea.test/api/v1/", transport=self.transport, max_retries=0)
+        self.publisher = ForgeCommentPublisher(self.api, "xen-project", "xen")
         patch_message = message("patch@example.test", "[PATCH 1/1] xen: change")
         self.ledger.record_parsed_message(patch_message)
         (revision,) = discover_series([patch_message])
@@ -193,7 +193,7 @@ class ReviewQueueTests(unittest.TestCase):
         first = queue_archive_replies(
             self.ledger, self.publisher, 7, self.match.series_key, self.match.revision, b4_python="b4-python", limit=1,
         )
-        other_publisher = GiteaCommentPublisher(self.api, "other", "xen")
+        other_publisher = ForgeCommentPublisher(self.api, "other", "xen")
         with self.assertRaisesRegex(ValueError, "snapshot or destination"):
             queue_archive_replies(
                 self.ledger, other_publisher, 7, self.match.series_key, self.match.revision,
@@ -254,7 +254,7 @@ class ReviewQueueTests(unittest.TestCase):
     @patch("review_queue.extract_quoted_comments", return_value=())
     def test_queued_comment_is_blocked_when_its_series_later_becomes_conflicted(self, _extract):
         queue_thread_reply(self.ledger, self.publisher, 7, self.match, b4_python="b4-python")
-        writer = GiteaCommentPublisher(self.api, "xen-project", "xen", write_enabled=True)
+        writer = ForgeCommentPublisher(self.api, "xen-project", "xen", write_enabled=True)
         plan = plan_comment_delivery(self.ledger, writer, 7, "ISSUE_COMMENT")
         with self.assertRaises(MessageConflictError):
             self.ledger.record_message("patch@example.test", b"different patch")
@@ -302,7 +302,7 @@ class ReviewQueueTests(unittest.TestCase):
         )
         recorded = self.ledger.series_revision(self.match.series_key, self.match.revision)
         match = match_thread_replies((*recorded.messages, reply), (recorded,)).matched[0]
-        writer = GiteaCommentPublisher(self.api, "xen-project", "xen", write_enabled=True)
+        writer = ForgeCommentPublisher(self.api, "xen-project", "xen", write_enabled=True)
         with patch.object(self.ledger, "assert_message_ancestry_available"):
             queue_thread_reply(self.ledger, self.publisher, 7, match, b4_python="b4-python")
             plan = plan_comment_delivery(self.ledger, writer, 7, "ISSUE_COMMENT")
@@ -535,7 +535,7 @@ class ReviewQueueTests(unittest.TestCase):
         source_time = "Source time (unverified Received header): 2026-10-22T13:30:00+00:00"
         with (
             patch.dict("os.environ", {"LORE_GITEA_TOKEN": "sample-token"}),
-            patch("cli.GiteaAPI", return_value=self.api),
+            patch("cli.ForgeAPI", return_value=self.api),
             patch("cli.parse_mbox", return_value=(reply,)),
         ):
             with redirect_stdout(StringIO()) as output:
@@ -572,7 +572,7 @@ class ReviewQueueTests(unittest.TestCase):
         ]
         with (
             patch.dict("os.environ", {"LORE_GITEA_TOKEN": "sample-token"}),
-            patch("cli.GiteaAPI", return_value=self.api), redirect_stdout(StringIO()) as output,
+            patch("cli.ForgeAPI", return_value=self.api), redirect_stdout(StringIO()) as output,
         ):
             self.assertEqual(main(arguments), 0)
         self.assertEqual(json.loads(output.getvalue())["matched"], 1)
@@ -585,7 +585,7 @@ class ReviewQueueTests(unittest.TestCase):
             "deliver-comments", "--ledger", str(self.ledger.path), "--api-url", self.api.base_url,
             "--owner", "xen-project", "--repo", "xen", "--pull-index", "7", "--kind", "conversation",
         ]
-        with patch.dict("os.environ", {"LORE_GITEA_TOKEN": "sample-token"}), patch("cli.GiteaAPI", return_value=self.api):
+        with patch.dict("os.environ", {"LORE_GITEA_TOKEN": "sample-token"}), patch("cli.ForgeAPI", return_value=self.api):
             with redirect_stdout(StringIO()) as output:
                 self.assertEqual(main(arguments), 0)
             digest = json.loads(output.getvalue())["approval_digest"]
@@ -601,7 +601,7 @@ class ReviewQueueTests(unittest.TestCase):
         common = ["--ledger", str(self.ledger.path), "--api-url", self.api.base_url]
         with (
             patch.dict("os.environ", {"LORE_GITEA_TOKEN": "sample-token"}),
-            patch("cli.GiteaAPI", return_value=self.api), redirect_stdout(StringIO()) as output,
+            patch("cli.ForgeAPI", return_value=self.api), redirect_stdout(StringIO()) as output,
         ):
             self.assertEqual(main([
                 "map-identity", *common, "--email", "reviewer@example.test", "--username", "reviewer",

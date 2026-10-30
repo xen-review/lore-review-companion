@@ -14,9 +14,9 @@ from urllib.parse import quote
 
 from b4_adapter import B4AssemblyError, B4ReviewError, read_local_review_drafts
 from git_branches import GitHttpCredentials, RevisionBranchError, UpstreamEvidence, inspect_upstream_history, plan_staging_sync
-from gitea_api import GiteaAPI, GiteaAPIError, authenticated_user, read_private_token
-from gitea_comments import DeliveryUncertainError, GiteaCommentPublisher
-from gitea_pulls import GiteaPullPublisher, PullRequestConflict, StagingWorkerBusy, inspect_review_staging, sync_review_staging
+from forge_api import ForgeAPI, ForgeAPIError, authenticated_user, read_private_token
+from forge_comments import DeliveryUncertainError, ForgeCommentPublisher
+from forge_pulls import ForgePullPublisher, PullRequestConflict, StagingWorkerBusy, inspect_review_staging, sync_review_staging
 from ingest import EpochArchive, backfill_epoch_round, backfill_public_inbox, check_epoch_health, plan_archive_discontinuity_resolution, resolve_archive_discontinuity, sync_epoch_round, sync_public_inbox, watch_epoch_rounds
 from ledger import (
     ArchiveCheckpointConflict, ArchiveDeletion, ArchiveDeletionPresence, ArchiveDiscontinuity, ArchiveDiscontinuityResolution, ArchiveSafetyBlocked, DeliveryStateConflict, Ledger, MessageConflictError,
@@ -537,7 +537,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "inspect-upstream":
             if not args.ledger.is_file() or args.pull_index < 1:
                 raise ValueError("An existing ledger and positive pull request index are required")
-            publisher = GiteaCommentPublisher(GiteaAPI(args.api_url), args.owner, args.repo)
+            publisher = ForgeCommentPublisher(ForgeAPI(args.api_url), args.owner, args.repo)
             destination = publisher.api.base_url + publisher.repository_path
             publications = Ledger(args.ledger, read_only=True).publications_for_pull(destination, args.pull_index)
             if len(publications) != 1:
@@ -652,7 +652,7 @@ def main(argv: list[str] | None = None) -> int:
             token = os.environ.get(args.token_env)
             if not token:
                 raise ValueError(f"Set the token environment variable {args.token_env}")
-            api = GiteaAPI(args.api_url, token=token)
+            api = ForgeAPI(args.api_url, token=token)
             authenticated = authenticated_user(api)
             actor = f"{authenticated.login} (id {authenticated.user_id})"
             ledger = Ledger(args.ledger)
@@ -675,14 +675,14 @@ def main(argv: list[str] | None = None) -> int:
             token = os.environ.get(args.token_env)
             if not token:
                 raise ValueError(f"Set the token environment variable {args.token_env}")
-            api = GiteaAPI(args.api_url, token=token)
-            result = GiteaPullPublisher(api, args.owner, args.repo).inspect_access()
+            api = ForgeAPI(args.api_url, token=token)
+            result = ForgePullPublisher(api, args.owner, args.repo).inspect_access()
         elif args.command == "inspect-review-staging":
             token = os.environ.get(args.token_env) if args.token_env else None
             if args.token_env and not token:
                 raise ValueError(f"Set the token environment variable {args.token_env}")
             result = inspect_review_staging(
-                GiteaAPI(args.api_url, token=token), args.source_owner, args.source_repo,
+                ForgeAPI(args.api_url, token=token), args.source_owner, args.source_repo,
                 args.review_owner, args.review_repo, args.branch,
             )
         elif args.command == "plan-staging-sync":
@@ -700,7 +700,7 @@ def main(argv: list[str] | None = None) -> int:
             ledger = Ledger(args.ledger, read_only=True)
             token = read_private_token(args.token_file)
             result = sync_review_staging(
-                ledger, GiteaAPI(args.api_url, token=token), args.source_owner, args.source_repo,
+                ledger, ForgeAPI(args.api_url, token=token), args.source_owner, args.source_repo,
                 args.review_owner, args.review_repo, args.source_repository, args.remote, branch=args.branch,
             )
         elif args.command == "sync-series":
@@ -728,8 +728,8 @@ def main(argv: list[str] | None = None) -> int:
             )
             if len(revisions) != 1:
                 raise ValueError("Select exactly one revision using --series-key and --revision")
-            api = GiteaAPI(args.api_url, token=token)
-            publisher = GiteaPullPublisher(api, args.owner, args.repo, write_enabled=args.write)
+            api = ForgeAPI(args.api_url, token=token)
+            publisher = ForgePullPublisher(api, args.owner, args.repo, write_enabled=args.write)
             credentials = GitHttpCredentials(args.git_username or args.owner, token)
             result = sync_series_revision(
                 revisions[0], args.repository, args.base, args.remote, publisher,
@@ -745,13 +745,13 @@ def main(argv: list[str] | None = None) -> int:
             token = os.environ.get(args.token_env)
             if not token:
                 raise ValueError(f"Set the token environment variable {args.token_env}")
-            api = GiteaAPI(args.api_url, token=token)
+            api = ForgeAPI(args.api_url, token=token)
             preview = args.command in ("migrate-legacy-outbox", "deliver-comments") and not args.write
             ledger = Ledger(args.ledger, read_only=preview)
             if args.command == "migrate-legacy-outbox":
                 if bool(args.write) != bool(args.approve):
                     raise ValueError("--write and --approve must be supplied together")
-                publisher = GiteaCommentPublisher(api, args.owner, args.repo)
+                publisher = ForgeCommentPublisher(api, args.owner, args.repo)
                 if args.write:
                     result = migrate_legacy_deliveries(
                         ledger, publisher, args.pull_index, args.reason, approved_digest=args.approve, limit=args.limit,
@@ -764,13 +764,13 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     result = MigrationPreview(plan, plan.approval_digest())
             elif args.command == "queue-b4-drafts":
-                publisher = GiteaCommentPublisher(api, args.owner, args.repo)
+                publisher = ForgeCommentPublisher(api, args.owner, args.repo)
                 result = queue_b4_drafts(
                     ledger, publisher, args.pull_index, args.series_key, args.revision, args.repository,
                     args.branch, args.reviewer_email, b4_python=args.b4_python,
                 )
             elif args.command == "queue-comments":
-                publisher = GiteaCommentPublisher(api, args.owner, args.repo)
+                publisher = ForgeCommentPublisher(api, args.owner, args.repo)
                 if args.related:
                     result = queue_archive_replies(
                         ledger, publisher, args.pull_index, args.series_key, args.revision,
@@ -789,7 +789,7 @@ def main(argv: list[str] | None = None) -> int:
                     raise ValueError("--write and --approve must be supplied together")
                 if args.allow_inline_writes and args.kind != "inline":
                     raise ValueError("--allow-inline-writes applies only to inline delivery")
-                publisher = GiteaCommentPublisher(
+                publisher = ForgeCommentPublisher(
                     api, args.owner, args.repo, write_enabled=args.write,
                     allow_inline_writes=args.allow_inline_writes,
                 )
@@ -811,7 +811,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"command": args.command, "error": str(error), "error_type": type(error).__name__}, sort_keys=True), file=sys.stderr)
         return os.EX_TEMPFAIL
     except (
-        ArchiveCheckpointConflict, ArchiveSafetyBlocked, B4AssemblyError, B4ReviewError, DeliveryStateConflict, DeliveryUncertainError, GiteaAPIError,
+        ArchiveCheckpointConflict, ArchiveSafetyBlocked, B4AssemblyError, B4ReviewError, DeliveryStateConflict, DeliveryUncertainError, ForgeAPIError,
         GitPreflightError, NNTPSourceError, PublicInboxError, PullRequestConflict, RevisionBranchError,
         MessageConflictError, PublicationConflict, PublicationUncertain, WorkerBusyError,
         OSError, sqlite3.Error, subprocess.TimeoutExpired, ValueError,

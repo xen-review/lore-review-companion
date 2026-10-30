@@ -14,9 +14,9 @@ from urllib.parse import quote, urlsplit
 
 from b4_adapter import assemble_local_series
 from git_branches import GitHttpCredentials, RevisionBranchResult, ensure_revision_branch
-from gitea_api import authenticated_user
-from gitea_comments import DeliveryResult, quote_untrusted_text, with_tool_attribution
-from gitea_pulls import GiteaPullPublisher
+from forge_api import authenticated_user
+from forge_comments import DeliveryResult, quote_untrusted_text, with_tool_attribution
+from forge_pulls import ForgePullPublisher
 from ledger import Ledger, PublicationConflict
 from preflight import prepare_patch_mailbox
 from series import SeriesRevision, discover_series
@@ -76,7 +76,7 @@ def _attribution_status(pull: DeliveryResult, body: str) -> str:
     return "present" if isinstance(remote_body, str) and body in remote_body else "existing_pr_unmodified"
 
 
-def _validate_destination(publisher: GiteaPullPublisher, remote: str) -> None:
+def _validate_destination(publisher: ForgePullPublisher, remote: str) -> None:
     api = urlsplit(publisher.api.base_url)
     git = urlsplit(remote)
     api_path = api.path.rstrip("/")
@@ -100,7 +100,7 @@ def sync_series_revision(
     repository: Path,
     base_ref: str,
     remote: str,
-    publisher: GiteaPullPublisher,
+    publisher: ForgePullPublisher,
     *,
     target_branch: str,
     inbox_url: str = "https://lore.kernel.org/xen-devel/",
@@ -174,7 +174,7 @@ def sync_series_revision(
                 "credentials": credentials,
             }
             branch = ensure_revision_branch(prepared, remote, **branch_arguments)
-            preview_publisher = GiteaPullPublisher(publisher.api, publisher.owner, publisher.repo)
+            preview_publisher = ForgePullPublisher(publisher.api, publisher.owner, publisher.repo)
             pull_arguments = {
                 "series_key": revision.series_key,
                 "revision": revision.revision,

@@ -13,8 +13,8 @@ from urllib.parse import quote, urlsplit
 
 from anchor import DiffIndex
 from b4_adapter import B4ReviewError, extract_quoted_comments, read_local_review_drafts
-from gitea_api import GiteaAPIError
-from gitea_comments import GiteaCommentPublisher, StaleAnchorError, quote_untrusted_text
+from forge_api import ForgeAPIError
+from forge_comments import ForgeCommentPublisher, StaleAnchorError, quote_untrusted_text
 from ledger import Ledger
 from mail_parser import ParsedMessage
 from outbox import comment_destination
@@ -51,7 +51,7 @@ class DraftQueueSummary:
     diagnostic: str | None
 
 
-def _stable_pull_diff(publisher: GiteaCommentPublisher, pull_index: int, expected_head: str) -> str:
+def _stable_pull_diff(publisher: ForgeCommentPublisher, pull_index: int, expected_head: str) -> str:
     path = f"{publisher.repository_path}/pulls/{pull_index}"
 
     def snapshot() -> tuple[str, str, str]:
@@ -98,7 +98,7 @@ def _source_time_provenance(message: ParsedMessage) -> str:
 
 def queue_thread_reply(
     ledger: Ledger,
-    publisher: GiteaCommentPublisher,
+    publisher: ForgeCommentPublisher,
     pull_index: int,
     match: ThreadMatch,
     *,
@@ -113,7 +113,7 @@ def queue_thread_reply(
 
 
 def _queue_thread_reply(
-    ledger: Ledger, publisher: GiteaCommentPublisher, pull_index: int, match: ThreadMatch, *,
+    ledger: Ledger, publisher: ForgeCommentPublisher, pull_index: int, match: ThreadMatch, *,
     b4_python: str, inbox_url: str,
 ) -> ReplyQueueSummary:
     message = match.message
@@ -145,7 +145,7 @@ def _queue_thread_reply(
 
 
 def _queue_verified_thread_reply(
-    ledger: Ledger, publisher: GiteaCommentPublisher, pull_index: int, match: ThreadMatch, head_commit: str, *,
+    ledger: Ledger, publisher: ForgeCommentPublisher, pull_index: int, match: ThreadMatch, head_commit: str, *,
     b4_python: str, inbox_url: str,
 ) -> ReplyQueueSummary:
     message = match.message
@@ -164,7 +164,7 @@ def _queue_verified_thread_reply(
     if mapping:
         try:
             account = publisher.api.request_json(f"users/{quote(mapping.login, safe='')}")
-        except (GiteaAPIError, ValueError):
+        except (ForgeAPIError, ValueError):
             account = None
         if (
             isinstance(account, dict) and isinstance(account.get("id"), int)
@@ -190,7 +190,7 @@ def _queue_verified_thread_reply(
         return ReplyQueueSummary(conversation_id, 0, 0)
     try:
         index = DiffIndex(_stable_pull_diff(publisher, pull_index, head_commit))
-    except (GiteaAPIError, StaleAnchorError, ValueError) as error:
+    except (ForgeAPIError, StaleAnchorError, ValueError) as error:
         return ReplyQueueSummary(conversation_id, 0, len(comments), str(error))
 
     inline_count = unresolved = 0
@@ -213,7 +213,7 @@ def _queue_verified_thread_reply(
 
 
 def queue_thread_replies(
-    ledger: Ledger, publisher: GiteaCommentPublisher, pull_index: int,
+    ledger: Ledger, publisher: ForgeCommentPublisher, pull_index: int,
     series_key: str, revision: int, messages: Iterable[ParsedMessage], *,
     b4_python: str, inbox_url: str = "https://lore.kernel.org/xen-devel/",
 ) -> ReplyBatchSummary:
@@ -225,7 +225,7 @@ def queue_thread_replies(
 
 
 def queue_archive_replies(
-    ledger: Ledger, publisher: GiteaCommentPublisher, pull_index: int,
+    ledger: Ledger, publisher: ForgeCommentPublisher, pull_index: int,
     series_key: str, revision: int, *, b4_python: str,
     inbox_url: str = "https://lore.kernel.org/xen-devel/", limit: int = 1000, cursor: str | None = None,
 ) -> ReplyBatchSummary:
@@ -278,7 +278,7 @@ def queue_archive_replies(
 
 
 def queue_b4_drafts(
-    ledger: Ledger, publisher: GiteaCommentPublisher, pull_index: int,
+    ledger: Ledger, publisher: ForgeCommentPublisher, pull_index: int,
     series_key: str, revision: int, repository: Path, branch: str, reviewer_email: str, *, b4_python: str,
 ) -> DraftQueueSummary:
     """Queue an immutable local draft snapshot; delivery still requires explicit approval."""
@@ -308,7 +308,7 @@ def queue_b4_drafts(
         if any(draft.comments for draft in snapshot.drafts):
             try:
                 index = DiffIndex(_stable_pull_diff(publisher, pull_index, publication.head_commit))
-            except (GiteaAPIError, StaleAnchorError, ValueError) as error:
+            except (ForgeAPIError, StaleAnchorError, ValueError) as error:
                 diagnostic = str(error)
         destination = comment_destination(publisher, pull_index)
         queued = inline_count = unresolved = 0
@@ -349,7 +349,7 @@ def queue_b4_drafts(
 
 
 def _queue_thread_replies(
-    ledger: Ledger, publisher: GiteaCommentPublisher, pull_index: int,
+    ledger: Ledger, publisher: ForgeCommentPublisher, pull_index: int,
     series_key: str, revision: int, messages: Iterable[ParsedMessage], *, b4_python: str, inbox_url: str,
     selected_ids: frozenset[str] | None = None, stored: bool = False,
 ) -> ReplyBatchSummary:

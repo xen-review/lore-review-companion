@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from unittest.mock import patch
 
-from gitea_api import MAX_JSON_BYTES, GiteaAPI, GiteaAPIError, read_private_token
+from forge_api import MAX_JSON_BYTES, ForgeAPI, ForgeAPIError, read_private_token
 
 
 class FakeResponse:
@@ -50,11 +50,11 @@ class GiteaAPITests(unittest.TestCase):
                     self.assertNotIn(value if value else "synthetic-token", str(caught.exception))
             self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
 
-    @patch("gitea_api.build_opener")
+    @patch("forge_api.build_opener")
     def test_default_transport_passes_timeout_by_keyword(self, build_opener):
         response = FakeResponse(200, b"{}")
         build_opener.return_value.open.return_value = response
-        api = GiteaAPI("http://gitea.test", timeout=3.5)
+        api = ForgeAPI("http://gitea.test", timeout=3.5)
 
         self.assertEqual(api.request_json("api/v1/version"), {})
 
@@ -69,7 +69,7 @@ class GiteaAPITests(unittest.TestCase):
             captured.append((request, timeout))
             return responses.pop(0)
 
-        api = GiteaAPI("https://gitea.test/", token="local-token", transport=transport)
+        api = ForgeAPI("https://gitea.test/", token="local-token", transport=transport)
         result = api.request_json("/api/v1/version")
 
         self.assertEqual(result, {"version": "test"})
@@ -78,7 +78,7 @@ class GiteaAPITests(unittest.TestCase):
 
     def test_rejects_external_and_traversal_paths_before_sending_token(self):
         requests = []
-        api = GiteaAPI(
+        api = ForgeAPI(
             "https://gitea.test/api/v1/", token="local-token",
             transport=lambda request, _timeout: requests.append(request),
         )
@@ -109,8 +109,8 @@ class GiteaAPITests(unittest.TestCase):
         thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
         thread.start()
         try:
-            api = GiteaAPI(f"http://127.0.0.1:{server.server_port}", token="local-token")
-            with self.assertRaises(GiteaAPIError) as raised:
+            api = ForgeAPI(f"http://127.0.0.1:{server.server_port}", token="local-token")
+            with self.assertRaises(ForgeAPIError) as raised:
                 api.request_json("redirect")
             self.assertEqual(raised.exception.status, 302)
             self.assertEqual(requests, ["/redirect"])
@@ -122,9 +122,9 @@ class GiteaAPITests(unittest.TestCase):
     def test_rejects_unsafe_base_urls(self):
         for base_url in ("ftp://gitea.test/", "https://user:token@gitea.test/", "https://gitea.test/?x=1"):
             with self.subTest(base_url=base_url), self.assertRaises(ValueError):
-                GiteaAPI(base_url)
+                ForgeAPI(base_url)
         with self.assertRaisesRegex(ValueError, "require HTTPS"):
-            GiteaAPI("http://gitea.test/", token="local-token")
+            ForgeAPI("http://gitea.test/", token="local-token")
 
     def test_paginates_until_short_page(self):
         requested = []
@@ -136,7 +136,7 @@ class GiteaAPITests(unittest.TestCase):
             page = int(dict(item.split("=") for item in query.split("&"))["page"])
             return FakeResponse(200, json.dumps(pages[page - 1]).encode())
 
-        api = GiteaAPI("http://gitea.test", transport=transport)
+        api = ForgeAPI("http://gitea.test", transport=transport)
         result = list(api.get_pages("api/v1/repos/o/r/issues", per_page=2))
 
         self.assertEqual([item["id"] for item in result], [1, 2, 3])
@@ -150,23 +150,23 @@ class GiteaAPITests(unittest.TestCase):
             requests.append(request)
             return FakeResponse(200, b"diff contents")
 
-        api = GiteaAPI("https://gitea.test/api/v1/", transport=transport)
+        api = ForgeAPI("https://gitea.test/api/v1/", transport=transport)
         self.assertEqual(api.request_bytes("repos/o/r/pulls/7.diff", max_bytes=20), b"diff contents")
         self.assertEqual(requests[0].get_header("Accept"), "text/plain")
-        with self.assertRaisesRegex(GiteaAPIError, "exceeds"):
+        with self.assertRaisesRegex(ForgeAPIError, "exceeds"):
             api.request_bytes("repos/o/r/pulls/7.diff", max_bytes=4)
 
     def test_bounds_json_and_rejects_incomplete_pagination(self):
-        api = GiteaAPI("https://gitea.test/api/v1/", transport=lambda _request, _timeout: FakeResponse(200, b" " * (MAX_JSON_BYTES + 1)))
-        with self.assertRaisesRegex(GiteaAPIError, "exceeds"):
+        api = ForgeAPI("https://gitea.test/api/v1/", transport=lambda _request, _timeout: FakeResponse(200, b" " * (MAX_JSON_BYTES + 1)))
+        with self.assertRaisesRegex(ForgeAPIError, "exceeds"):
             api.request_json("user")
-        api = GiteaAPI("https://gitea.test/api/v1/", transport=lambda _request, _timeout: FakeResponse(200, b"[1]"))
-        with self.assertRaisesRegex(GiteaAPIError, "page limit"):
+        api = ForgeAPI("https://gitea.test/api/v1/", transport=lambda _request, _timeout: FakeResponse(200, b"[1]"))
+        with self.assertRaisesRegex(ForgeAPIError, "page limit"):
             list(api.get_pages("pulls", per_page=1, max_pages=2))
 
     def test_invalid_json_preserves_the_response_status(self):
-        api = GiteaAPI("https://gitea.test/", transport=lambda _request, _timeout: FakeResponse(201, b"invalid"))
-        with self.assertRaises(GiteaAPIError) as raised:
+        api = ForgeAPI("https://gitea.test/", transport=lambda _request, _timeout: FakeResponse(201, b"invalid"))
+        with self.assertRaises(ForgeAPIError) as raised:
             api.request_json("pulls", method="POST", payload={})
         self.assertEqual(raised.exception.status, 201)
 
@@ -180,7 +180,7 @@ class GiteaAPITests(unittest.TestCase):
         def transport(_request, _timeout):
             return responses.pop(0)
 
-        api = GiteaAPI(
+        api = ForgeAPI(
             "http://gitea.test",
             transport=transport,
             sleeper=delays.append,
@@ -196,9 +196,9 @@ class GiteaAPITests(unittest.TestCase):
             attempts.append(request.get_method())
             raise URLError("temporary network error")
 
-        api = GiteaAPI("http://gitea.test", transport=transport, retry_delay=0)
+        api = ForgeAPI("http://gitea.test", transport=transport, retry_delay=0)
 
-        with self.assertRaisesRegex(GiteaAPIError, "temporary network error"):
+        with self.assertRaisesRegex(ForgeAPIError, "temporary network error"):
             api.request_json(
                 "api/v1/repos/o/r/pulls", method="POST", payload={"title": "x"}
             )
@@ -217,12 +217,12 @@ class GiteaAPITests(unittest.TestCase):
             requests.append(request.get_method())
             return responses.pop(0)
 
-        api = GiteaAPI("https://gitea.test", transport=transport, retry_delay=0)
+        api = ForgeAPI("https://gitea.test", transport=transport, retry_delay=0)
         self.assertEqual(api.request_json("user"), {})
         self.assertTrue(failed.closed)
         self.assertEqual(requests, ["GET", "GET"])
         responses.append(TimedOutResponse(201, b""))
-        with self.assertRaises(GiteaAPIError) as caught:
+        with self.assertRaises(ForgeAPIError) as caught:
             api.request_json("comments", method="POST", payload={})
         self.assertIsNone(caught.exception.status)
         self.assertNotIn("secret response content", str(caught.exception))
@@ -231,22 +231,22 @@ class GiteaAPITests(unittest.TestCase):
     def test_timeout_reading_http_error_closes_response_and_is_uncertain(self):
         body = io.BytesIO(b"")
         error = HTTPError("https://gitea.test/secret", 500, "failure", {}, body)
-        api = GiteaAPI("https://gitea.test", transport=lambda *_: (_ for _ in ()).throw(error), max_retries=0)
+        api = ForgeAPI("https://gitea.test", transport=lambda *_: (_ for _ in ()).throw(error), max_retries=0)
         with patch.object(body, "read", side_effect=TimeoutError("secret")):
-            with self.assertRaises(GiteaAPIError) as caught:
+            with self.assertRaises(ForgeAPIError) as caught:
                 api.request_json("comments", method="POST", payload={})
         self.assertTrue(body.closed)
         self.assertIsNone(caught.exception.status)
         self.assertNotIn("secret", str(caught.exception))
 
     def test_http_failure_reports_status_without_response_body(self):
-        api = GiteaAPI(
+        api = ForgeAPI(
             "http://gitea.test",
             transport=lambda _request, _timeout: FakeResponse(404, b"private response"),
             max_retries=0,
         )
 
-        with self.assertRaises(GiteaAPIError) as raised:
+        with self.assertRaises(ForgeAPIError) as raised:
             api.request_json("api/v1/missing")
 
         self.assertEqual(raised.exception.status, 404)

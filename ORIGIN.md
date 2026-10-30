@@ -42,8 +42,9 @@ not copied source. Its own license and runtime installation must be respected.
 
 ## Compatibility
 
-The snapshot still uses legacy Gitea-named modules, environment variables,
-markers, and test fixtures. Conversion is a separate topic. Durable source and
+The snapshot used legacy Gitea-named modules, environment variables, markers,
+and test fixtures. The API/publisher modules now use neutral `forge_*` names;
+environment and wire compatibility are separate concerns. Durable source and
 delivery identities must survive renaming, and changes to the preflight
 committer identity must be versioned because they change generated commit IDs.
 

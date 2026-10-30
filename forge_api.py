@@ -39,7 +39,7 @@ def _urlopen_transport(request: Request, timeout: float) -> HTTPResponse:
     return build_opener(_NoRedirect()).open(request, timeout=timeout)
 
 
-class GiteaAPIError(RuntimeError):
+class ForgeAPIError(RuntimeError):
     def __init__(self, status: int | None, message: str):
         super().__init__(message)
         self.status = status
@@ -63,7 +63,7 @@ def read_private_token(path: Path) -> str:
     return token
 
 
-class GiteaAPI:
+class ForgeAPI:
     def __init__(
         self,
         base_url: str,
@@ -117,7 +117,7 @@ class GiteaAPI:
         try:
             return json.loads(response_body)
         except (json.JSONDecodeError, UnicodeDecodeError) as error:
-            raise GiteaAPIError(status, "Gitea returned invalid JSON") from error
+            raise ForgeAPIError(status, "Gitea returned invalid JSON") from error
 
     def request_bytes(
         self, path: str, *, params: Mapping[str, Any] | None = None,
@@ -184,11 +184,11 @@ class GiteaAPI:
                     attempt += 1
                     continue
                 detail = error.reason if isinstance(error, URLError) else type(error).__name__
-                raise GiteaAPIError(None, f"Gitea request failed: {detail}") from error
+                raise ForgeAPIError(None, f"Gitea request failed: {detail}") from error
 
             if 200 <= status < 300:
                 if max_bytes is not None and len(response_body) > max_bytes:
-                    raise GiteaAPIError(status, f"Gitea response exceeds {max_bytes} bytes")
+                    raise ForgeAPIError(status, f"Gitea response exceeds {max_bytes} bytes")
                 if status == 204 or not response_body:
                     return status, None
                 return status, response_body
@@ -197,7 +197,7 @@ class GiteaAPI:
                 self._wait(attempt, retry_after)
                 attempt += 1
                 continue
-            raise GiteaAPIError(status, f"Gitea returned HTTP {status}")
+            raise ForgeAPIError(status, f"Gitea returned HTTP {status}")
 
     def get_pages(
         self,
@@ -217,12 +217,12 @@ class GiteaAPI:
             page_params.update({"page": page, "limit": per_page})
             result = self.request_json(path, params=page_params)
             if not isinstance(result, list):
-                raise GiteaAPIError(200, "Expected a paginated JSON array")
+                raise ForgeAPIError(200, "Expected a paginated JSON array")
             yield from result
             if len(result) < per_page:
                 return
             if page >= max_pages:
-                raise GiteaAPIError(200, "Gitea pagination exceeds the page limit")
+                raise ForgeAPIError(200, "Gitea pagination exceeds the page limit")
             page += 1
 
     def _wait(self, attempt: int, retry_after: str | None) -> None:
@@ -243,7 +243,7 @@ class AuthenticatedUser:
     login: str
 
 
-def authenticated_user(api: GiteaAPI) -> AuthenticatedUser:
+def authenticated_user(api: ForgeAPI) -> AuthenticatedUser:
     user = api.request_json("user")
     login = user.get("login") if isinstance(user, dict) else None
     user_id = user.get("id") if isinstance(user, dict) else None
@@ -255,5 +255,5 @@ def authenticated_user(api: GiteaAPI) -> AuthenticatedUser:
     return AuthenticatedUser(user_id, login)
 
 
-def authenticated_login(api: GiteaAPI) -> str:
+def authenticated_login(api: ForgeAPI) -> str:
     return authenticated_user(api).login

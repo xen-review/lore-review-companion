@@ -495,7 +495,7 @@ class PublicInboxTests(unittest.TestCase):
             ("migrate-legacy-outbox", "--api-url", "https://gitea.test/api/v1/", "--owner", "owner", "--repo", "repo",
              "--pull-index", "1", "--reason", "review"),
         )
-        with patch.dict("os.environ", {"LORE_GITEA_TOKEN": "synthetic-token"}), patch("gitea_api.GiteaAPI.request_json") as request:
+        with patch.dict("os.environ", {"LORE_GITEA_TOKEN": "synthetic-token"}), patch("forge_api.ForgeAPI.request_json") as request:
             for command in commands:
                 with self.subTest(command=command[0]), redirect_stderr(io.StringIO()) as error:
                     self.assertEqual(main([*command, "--ledger", str(ledger.path)]), 1)

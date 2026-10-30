@@ -6,8 +6,8 @@ from urllib.error import URLError
 from unittest.mock import patch
 
 from anchor import Anchor
-from gitea_api import GiteaAPI, GiteaAPIError
-from gitea_comments import DeliveryUncertainError, GiteaCommentPublisher, InlineWritesDisabledError, StaleAnchorError
+from forge_api import ForgeAPI, ForgeAPIError
+from forge_comments import DeliveryUncertainError, ForgeCommentPublisher, InlineWritesDisabledError, StaleAnchorError
 from ledger import ArchiveSafetyBlocked, Ledger, MessageConflictError, WorkerBusyError
 from outbox import (
     comment_destination, deliver_approved_comments, deliver_inline_comments,
@@ -97,20 +97,20 @@ class CommentTransport:
         raise AssertionError(f"Unexpected {request.get_method()} {path}")
 
 
-class GiteaCommentPublisherTests(unittest.TestCase):
+class ForgeCommentPublisherTests(unittest.TestCase):
     def setUp(self):
         self.transport = CommentTransport()
-        self.api = GiteaAPI(
+        self.api = ForgeAPI(
             "http://gitea.test/api/v1/",
             transport=self.transport,
             max_retries=0,
         )
-        self.publisher = GiteaCommentPublisher(
+        self.publisher = ForgeCommentPublisher(
             self.api, "xen-project", "xen", write_enabled=True, allow_inline_writes=True
         )
 
     def test_publisher_defaults_to_dry_run(self):
-        publisher = GiteaCommentPublisher(self.api, "xen-project", "xen")
+        publisher = ForgeCommentPublisher(self.api, "xen-project", "xen")
 
         result = publisher.ensure_issue_comment(
             7,
@@ -282,7 +282,7 @@ class GiteaCommentPublisherTests(unittest.TestCase):
             "source_message_id": "inline@example.test", "effect_key": "line-42",
             "body": "Review", "head_commit": self.transport.head_commit,
         }
-        publisher = GiteaCommentPublisher(self.api, "xen-project", "xen", write_enabled=True)
+        publisher = ForgeCommentPublisher(self.api, "xen-project", "xen", write_enabled=True)
         with self.assertRaisesRegex(InlineWritesDisabledError, "explicit opt-in"):
             publisher.ensure_inline_comment(7, Anchor("x.c", 0, 42), **arguments)
         self.transport.reviews.append({"id": 99, "state": "PENDING", "body": ""})
@@ -296,8 +296,8 @@ class GiteaCommentPublisherTests(unittest.TestCase):
                 return FakeResponse(200, [])
             raise URLError("connection dropped")
 
-        publisher = GiteaCommentPublisher(
-            GiteaAPI("http://gitea.test/api/v1/", transport=transport, max_retries=0),
+        publisher = ForgeCommentPublisher(
+            ForgeAPI("http://gitea.test/api/v1/", transport=transport, max_retries=0),
             "xen-project",
             "xen",
             write_enabled=True,
@@ -317,7 +317,7 @@ class GiteaCommentPublisherTests(unittest.TestCase):
             ledger.record_message("review@example.test", b"raw")
             ledger.enqueue("review@example.test", "ISSUE_COMMENT", "other/repo#7", "a", {"body": "other"})
             ledger.enqueue("review@example.test", "ISSUE_COMMENT", comment_destination(self.publisher, 7), "b", {"body": "preview"})
-            publisher = GiteaCommentPublisher(self.api, "xen-project", "xen")
+            publisher = ForgeCommentPublisher(self.api, "xen-project", "xen")
 
             result = deliver_issue_comments(ledger, publisher, 7, limit=1)
 
@@ -419,8 +419,8 @@ class GiteaCommentPublisherTests(unittest.TestCase):
         for unsafe in ("stale_head", "inline_disabled", "pending_review"):
             with self.subTest(unsafe=unsafe), tempfile.TemporaryDirectory() as directory:
                 transport = CommentTransport()
-                api = GiteaAPI("http://gitea.test/api/v1/", transport=transport, max_retries=0)
-                publisher = GiteaCommentPublisher(
+                api = ForgeAPI("http://gitea.test/api/v1/", transport=transport, max_retries=0)
+                publisher = ForgeCommentPublisher(
                     api, "xen-project", "xen", write_enabled=True,
                     allow_inline_writes=unsafe != "inline_disabled",
                 )
@@ -518,7 +518,7 @@ class GiteaCommentPublisherTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             ledger = Ledger(Path(directory) / "ledger.sqlite3")
             plan = plan_comment_delivery(ledger, self.publisher, 7, "INLINE_COMMENT")
-            without_inline = GiteaCommentPublisher(self.api, "xen-project", "xen", write_enabled=True)
+            without_inline = ForgeCommentPublisher(self.api, "xen-project", "xen", write_enabled=True)
             with self.assertRaisesRegex(ValueError, "does not match"):
                 deliver_approved_comments(ledger, without_inline, 7, "INLINE_COMMENT", approved_digest=plan.approval_digest())
             with self.assertRaisesRegex(ValueError, "does not match"):

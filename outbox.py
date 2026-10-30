@@ -10,11 +10,11 @@ from dataclasses import asdict, dataclass, replace
 from contextlib import nullcontext
 
 from anchor import Anchor
-from gitea_api import GiteaAPIError, authenticated_user
-from gitea_comments import (
-    DeliveryResult, DeliveryUncertainError, GiteaCommentPublisher, with_tool_attribution,
+from forge_api import ForgeAPIError, authenticated_user
+from forge_comments import (
+    DeliveryResult, DeliveryUncertainError, ForgeCommentPublisher, with_tool_attribution,
 )
-from gitea_pulls import _series_marker
+from forge_pulls import _series_marker
 from ledger import Delivery, DeliveryStateConflict, Ledger, MessageConflictError, PublicationConflict
 from threads import match_thread_replies
 
@@ -77,14 +77,14 @@ class LegacyThreadBinding:
     patch_message_id: str | None
 
 
-def comment_destination(publisher: GiteaCommentPublisher, pull_index: int) -> str:
+def comment_destination(publisher: ForgeCommentPublisher, pull_index: int) -> str:
     if not isinstance(pull_index, int) or isinstance(pull_index, bool) or pull_index < 1:
         raise ValueError("pull request index must be a positive integer")
     return f"{publisher.api.base_url}{publisher.repository_path}#{pull_index}"
 
 
 def plan_legacy_migration(
-    ledger: Ledger, publisher: GiteaCommentPublisher, pull_index: int, reason: str, *, limit: int = 100,
+    ledger: Ledger, publisher: ForgeCommentPublisher, pull_index: int, reason: str, *, limit: int = 100,
     scoped_delivery_ids: tuple[int, ...] | None = None,
 ) -> LegacyMigrationPlan:
     if not 1 <= limit <= 1000:
@@ -149,7 +149,7 @@ def plan_legacy_migration(
 
 
 def migrate_legacy_deliveries(
-    ledger: Ledger, publisher: GiteaCommentPublisher, pull_index: int, reason: str, *, approved_digest: str, limit: int = 100,
+    ledger: Ledger, publisher: ForgeCommentPublisher, pull_index: int, reason: str, *, approved_digest: str, limit: int = 100,
     scoped_delivery_ids: tuple[int, ...] | None = None,
 ) -> LegacyMigrationResult:
     if not isinstance(approved_digest, str) or re.fullmatch(r"[0-9a-f]{64}", approved_digest) is None:
@@ -179,7 +179,7 @@ def _attributed_delivery(delivery: Delivery, login: str) -> Delivery:
 
 
 def _publish_comment(
-    publisher: GiteaCommentPublisher, pull_index: int, delivery: Delivery,
+    publisher: ForgeCommentPublisher, pull_index: int, delivery: Delivery,
 ) -> DeliveryResult:
     body = delivery.payload.get("body")
     if not isinstance(body, str) or not body.strip():
@@ -196,7 +196,7 @@ def _publish_comment(
 
 
 def _assert_thread_sources(
-    ledger: Ledger, publisher: GiteaCommentPublisher, pull_index: int, deliveries: tuple[Delivery, ...],
+    ledger: Ledger, publisher: ForgeCommentPublisher, pull_index: int, deliveries: tuple[Delivery, ...],
 ) -> None:
     destination = publisher.api.base_url + publisher.repository_path
     cached = {}
@@ -233,7 +233,7 @@ def _assert_thread_sources(
 
 
 def _deliver_comments(
-    ledger: Ledger, publisher: GiteaCommentPublisher, pull_index: int, event_type: str,
+    ledger: Ledger, publisher: ForgeCommentPublisher, pull_index: int, event_type: str,
     *, limit: int, retry_uncertain: bool, selected: tuple[Delivery, ...] | None = None,
     lock_held: bool = False,
 ) -> CommentBatchSummary:
@@ -249,7 +249,7 @@ def _deliver_comments(
         if selected is None and pending:
             actor = authenticated_user(publisher.api)
             pending = tuple(_attributed_delivery(delivery, actor.login) for delivery in pending)
-        preview = GiteaCommentPublisher(publisher.api, publisher.owner, publisher.repo)
+        preview = ForgeCommentPublisher(publisher.api, publisher.owner, publisher.repo)
         for delivery in pending:
             try:
                 ledger.assert_unconflicted((delivery.message_id,))
@@ -262,14 +262,14 @@ def _deliver_comments(
                 try:
                     _publish_comment(preview, pull_index, delivery)
                     planned += 1
-                except (GiteaAPIError, DeliveryUncertainError, ValueError):
+                except (ForgeAPIError, DeliveryUncertainError, ValueError):
                     failed += 1
                 continue
 
             if delivery.write_state in ("sending", "uncertain"):
                 try:
                     existing = _publish_comment(preview, pull_index, delivery)
-                except (GiteaAPIError, DeliveryUncertainError, ValueError) as error:
+                except (ForgeAPIError, DeliveryUncertainError, ValueError) as error:
                     ledger.record_error(delivery.id, str(error))
                     failed += 1
                     continue
@@ -295,14 +295,14 @@ def _deliver_comments(
                     raise DeliveryUncertainError("comment delivery was not confirmed")
                 ledger.mark_delivered(delivery.id)
                 delivered += 1
-            except (GiteaAPIError, DeliveryUncertainError, ValueError) as error:
+            except (ForgeAPIError, DeliveryUncertainError, ValueError) as error:
                 ledger.mark_delivery_uncertain(delivery.id, str(error))
                 failed += 1
     return CommentBatchSummary(delivered, planned, failed)
 
 
 def plan_comment_delivery(
-    ledger: Ledger, publisher: GiteaCommentPublisher, pull_index: int, event_type: str,
+    ledger: Ledger, publisher: ForgeCommentPublisher, pull_index: int, event_type: str,
     *, limit: int = 100, retry_uncertain: bool = False,
 ) -> CommentDeliveryPlan:
     if event_type not in ("ISSUE_COMMENT", "INLINE_COMMENT"):
@@ -322,7 +322,7 @@ def plan_comment_delivery(
 
 
 def deliver_approved_comments(
-    ledger: Ledger, publisher: GiteaCommentPublisher, pull_index: int, event_type: str,
+    ledger: Ledger, publisher: ForgeCommentPublisher, pull_index: int, event_type: str,
     *, approved_digest: str, limit: int = 100, retry_uncertain: bool = False,
 ) -> CommentBatchSummary:
     if not publisher.write_enabled:
@@ -342,7 +342,7 @@ def deliver_approved_comments(
 
 
 def deliver_issue_comments(
-    ledger: Ledger, publisher: GiteaCommentPublisher, pull_index: int, *, limit: int = 100,
+    ledger: Ledger, publisher: ForgeCommentPublisher, pull_index: int, *, limit: int = 100,
     retry_uncertain: bool = False,
 ) -> CommentBatchSummary:
     """Deliver or preview one PR's queued conversation comments."""
@@ -352,7 +352,7 @@ def deliver_issue_comments(
 
 
 def deliver_inline_comments(
-    ledger: Ledger, publisher: GiteaCommentPublisher, pull_index: int, *, limit: int = 100,
+    ledger: Ledger, publisher: ForgeCommentPublisher, pull_index: int, *, limit: int = 100,
     retry_uncertain: bool = False,
 ) -> CommentBatchSummary:
     """Deliver pinned inline comments, falling back when the PR head changed."""
