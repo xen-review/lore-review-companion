@@ -66,3 +66,20 @@ class MailPresentationTests(unittest.TestCase):
                 "old", "id", "https://lore.kernel.org/xen-devel/", "mail-text-v1"
             ),
         )
+
+    def test_cover_shortlog_and_diffstat_are_removed_together(self):
+        prose = "Secure Boot support.\n\nChanges in v3:\n  Keep this explanation."
+        shortlog = "Kevin Lampis (2):\n  Pass boot params\n  Zero GPRs\n\nRoss Lagerwall (1):\n  Add digest checks"
+        diffstat = " xen/kexec.c | 3 +++\n 1 file changed, 3 insertions(+)\n create mode 100644 xen/kexec.c"
+        cover = f"{prose}\n\n{shortlog}\n\n{diffstat}\n\n-- \n2.52.0\n"
+        self.assertEqual(submission_text(cover), prose)
+        self.assertEqual(
+            submission_text(cover, strip_shortlog=False), f"{prose}\n\n{shortlog}"
+        )
+        incomplete = cover.replace("Kevin Lampis (2):", "Kevin Lampis (3):").replace(
+            "Ross Lagerwall (1):", "Ross Lagerwall (2):"
+        )
+        self.assertIn(shortlog.splitlines()[1], submission_text(incomplete))
+        self.assertEqual(
+            submission_text(f"{prose}\n\n{shortlog}"), f"{prose}\n\n{shortlog}"
+        )

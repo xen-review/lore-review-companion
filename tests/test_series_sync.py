@@ -29,7 +29,11 @@ from lore_review_companion.forge_pulls import (
     PullRequestConflict,
     _series_marker,
 )
-from lore_review_companion.forge_comments import DeliveryUncertainError
+from lore_review_companion.forge_comments import (
+    DeliveryUncertainError,
+    quote_untrusted_text,
+    submission_text,
+)
 from lore_review_companion.forge_imports import ForgeImportClient
 from lore_review_companion.ledger import (
     ArchiveSafetyBlocked,
@@ -703,6 +707,10 @@ class SeriesSyncTests(unittest.TestCase):
         self.assertEqual(accepted, {})
         self.assertFalse(any(self.branch_writes))
         self.assertEqual(preview.plan.patch_commits[0].message_id, "patch@example.test")
+        self.assertEqual(
+            preview.plan.request["title"], "Patch Author: xen: change [v1]"
+        )
+        self.assertNotIn("Revision:", preview.plan.request["body"])
         self.assertNotIn(
             "synthetic-git-token",
             json.dumps(replace(preview.plan, request={}).__dict__, default=str),
@@ -746,6 +754,49 @@ class SeriesSyncTests(unittest.TestCase):
             self.api.base_url + "repos/o/r", self.revision.series_key, 1
         )
         self.assertEqual((publication.status, publication.pull_index), ("complete", 7))
+
+    def test_imported_publication_retains_both_previous_presentations(self):
+        self.api.transport = lambda request, timeout: FakeResponse(
+            200,
+            {
+                "version": 1,
+                "repository_id": 1,
+                "importer_id": 5,
+                "importer_login": "mirror-bot",
+                "source_url": "https://lore.kernel.org/xen-devel/",
+                "operations": ["pull"],
+            },
+        )
+        source = self.revision.messages[0]
+        preview = self.imported_sync()
+        self.ledger.record_series_revision(self.revision)
+        for body in (
+            submission_text(source.body_text, strip_shortlog=False)
+            + "\n\nRevision: v1",
+            "Revision: v1\n\n" + quote_untrusted_text(source.body_text),
+        ):
+            with self.subTest(body=body):
+                old_request = {
+                    **preview.plan.request,
+                    "title": "[v1] xen: change",
+                    "body": body,
+                }
+                old_plan = replace(preview.plan, request=old_request)
+                with self.ledger._connection() as connection:
+                    connection.execute("DELETE FROM publications")
+                self.ledger.begin_publication(
+                    self.api.base_url + "repos/o/r",
+                    self.revision.series_key,
+                    1,
+                    old_plan.approval_digest(),
+                    old_plan.base_commit,
+                    old_plan.head_branch,
+                    old_plan.head_commit,
+                )
+                replay = self.imported_sync()
+                self.assertEqual(replay.plan.request, old_request)
+                self.assertEqual(replay.approval_digest, old_plan.approval_digest())
+                self.assertFalse(replay.applied)
 
     def test_imported_series_cli_uses_read_only_preview_and_separate_git_credentials(
         self,

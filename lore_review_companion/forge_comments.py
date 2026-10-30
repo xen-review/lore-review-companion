@@ -57,7 +57,7 @@ def quote_untrusted_text(text: str) -> str:
     return f"{fence}text\n{text.rstrip()}\n{fence}"
 
 
-def submission_text(text: str) -> str:
+def submission_text(text: str, *, strip_shortlog: bool = True) -> str:
     text = text.replace("\r\n", "\n").rstrip()
     text = re.sub(r"\n-- ?\n[0-9][^\n]*\Z", "", text).rstrip()
     lines = text.splitlines()
@@ -89,6 +89,28 @@ def submission_text(text: str) -> str:
             if lines and lines[-1] == "---":
                 lines.pop()
             text = "\n".join(lines).rstrip()
+            if strip_shortlog:
+                for index in range(len(lines)):
+                    position = index
+                    while position < len(lines):
+                        heading = re.fullmatch(
+                            r"\S[^\n]* \(([1-9][0-9]*)\):", lines[position]
+                        )
+                        if heading is None:
+                            break
+                        count = int(heading.group(1))
+                        subjects = lines[position + 1 : position + 1 + count]
+                        if len(subjects) != count or any(
+                            not line.startswith("  ") or not line.strip()
+                            for line in subjects
+                        ):
+                            break
+                        position += count + 1
+                        while position < len(lines) and not lines[position].strip():
+                            position += 1
+                    if position == len(lines) and position > index:
+                        text = "\n".join(lines[:index]).rstrip()
+                        break
     return text
 
 

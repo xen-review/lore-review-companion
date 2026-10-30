@@ -207,10 +207,11 @@ def sync_imported_series_revision(
             legacy_body = f"Revision: v{revision.revision}\n\n" + quote_untrusted_text(
                 source.body_text
             )
-            body = (
-                submission_text(source.body_text)
+            previous_body = (
+                submission_text(source.body_text, strip_shortlog=False)
                 + f"\n\nRevision: v{revision.revision}"
             )
+            body = submission_text(source.body_text)
             previous = ledger.list_publications(
                 destination=destination,
                 series_key=revision.series_key,
@@ -229,6 +230,7 @@ def sync_imported_series_revision(
                 link = f"\n\nEarlier revision: [v{prior.revision}]({site}/{quote(client.owner, safe='')}/{quote(client.repo, safe='')}/pulls/{prior.pull_index})"
                 body += link
                 legacy_body += link
+                previous_body += link
             request = {
                 "operation_key": operation_key,
                 "message_id": source_id,
@@ -238,7 +240,7 @@ def sync_imported_series_revision(
                 "body": body,
                 "source_time": estimate.timestamp if estimate else None,
                 "source_time_basis": "unverified" if estimate else "unknown",
-                "title": f"[v{revision.revision}] {revision.title}",
+                "title": f"{source.from_name or source.from_address}: {revision.title} [v{revision.revision}]",
                 "head_branch": refs.head.branch,
                 "base_branch": refs.base.branch,
                 "head_commit": refs.head.head_commit,
@@ -275,13 +277,29 @@ def sync_imported_series_revision(
                 and retained.approval_digest
                 != replace(plan, retry_uncertain=False).approval_digest()
             ):
-                compatible = replace(plan, request={**request, "body": legacy_body})
-                if (
-                    retained.approval_digest
-                    != replace(compatible, retry_uncertain=False).approval_digest()
-                ):
+                candidates = (
+                    replace(
+                        plan,
+                        request={
+                            **request,
+                            "body": old_body,
+                            "title": f"[v{revision.revision}] {revision.title}",
+                        },
+                    )
+                    for old_body in (previous_body, legacy_body)
+                )
+                compatible = next(
+                    (
+                        candidate
+                        for candidate in candidates
+                        if retained.approval_digest
+                        == replace(candidate, retry_uncertain=False).approval_digest()
+                    ),
+                    None,
+                )
+                if compatible is None:
                     raise PublicationConflict(
-                        "Retained publication does not match either supported presentation"
+                        "Retained publication does not match a supported presentation"
                     )
                 plan = compatible
                 request = plan.request
