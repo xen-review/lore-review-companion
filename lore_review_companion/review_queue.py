@@ -19,7 +19,7 @@ from urllib.parse import quote, urlsplit
 from lore_review_companion.anchor import DiffIndex
 from lore_review_companion.b4_adapter import B4ReviewError, assemble_local_series, extract_quoted_comments, read_local_review_drafts
 from lore_review_companion.forge_api import ForgeAPIError
-from lore_review_companion.forge_comments import ForgeCommentPublisher, StaleAnchorError, imported_mail_text, quote_untrusted_text
+from lore_review_companion.forge_comments import ForgeCommentPublisher, StaleAnchorError, imported_mail_text, quoted_parent_matches, quote_untrusted_text, reply_prose
 from lore_review_companion.forge_imports import ForgeImportClient
 from lore_review_companion.ledger import DeliveryStateConflict, Ledger, Publication, PublicationConflict
 from lore_review_companion.mail_parser import ParsedMessage, extract_quoted_remarks
@@ -198,13 +198,38 @@ def queue_imported_reply(
         }
         thread = {"series_key": match.series_key, "revision": match.revision, "patch_message_id": match.patch_message_id}
         existing = ledger.comment_effects(message.message_id, destination)
-        body_format = existing[0].payload.get("body_format") if existing else "mail-text-v1"
+        body_format = existing[0].payload.get("body_format") if existing else "mail-text-v2"
         format_fields = {"body_format": body_format} if body_format is not None else {}
+        parents = message.in_reply_to or message.references[-1:]
+        presentation = {}
+        conversation_text = message.body_text
+        existing_conversation = next((effect for effect in existing if effect.event_type == "IMPORT_CONVERSATION"), None)
+        if existing_conversation is not None and existing_conversation.payload.get("presentation_parent"):
+            presentation = {"presentation_parent": existing_conversation.payload["presentation_parent"]}
+            conversation_text = reply_prose(message.body_text)
+        if not existing and body_format == "mail-text-v2" and len(parents) == 1:
+            parent_effects = [effect for effect in ledger.comment_effects(parents[0], destination)
+                              if effect.event_type == "IMPORT_CONVERSATION" and effect.payload.get("thread") == thread]
+            if len(parent_effects) == 1:
+                parent_effect = parent_effects[0]
+                parent_request = parent_effect.payload["request"]
+                remote = client.lookup_operation(parent_request["operation_key"])
+                if remote is not None and remote.get("type") == "conversation" and remote.get("message_id") == parents[0] and remote.get("message_sha256") == parent_request["message_sha256"]:
+                    if type(remote.get("comment_id")) is not int or remote["comment_id"] <= 0:
+                        raise PublicationConflict("Imported conversation parent has no comment ID")
+                    site = client.api.base_url.rstrip("/").removesuffix("/api/v1")
+                    parent_url = f"{site}/{quote(client.owner, safe='')}/{quote(client.repo, safe='')}/pulls/{pull_index}#issuecomment-{remote['comment_id']}"
+                    conversation_text = reply_prose(message.body_text)
+                    presentation = {"presentation_parent": {"message_id": parents[0], "effect_key": parent_effect.effect_key,
+                                     "operation_key": parent_request["operation_key"], "comment_id": remote["comment_id"], "url": parent_url}}
+        conversation_body = imported_mail_text(conversation_text, message.message_id, client.source_url, body_format, message.from_name or message.from_address)
+        if presentation:
+            conversation_body += f'\n\n<small><a href="{presentation["presentation_parent"]["url"]}">In reply to the preceding review comment</a></small>'
         identity = hashlib.sha256(f"{message.message_id}\0imported-full-message-v1".encode()).hexdigest()
         conversation = ledger.enqueue(message.message_id, "IMPORT_CONVERSATION", destination, "imported-full-message-v1", {
-            "payload_version": 3, "thread": thread, **format_fields,
+            "payload_version": 3, "thread": thread, **format_fields, **presentation,
             "request": {**common, "operation_key": identity,
-                        "body": imported_mail_text(message.body_text, message.message_id, client.source_url, body_format)},
+                        "body": conversation_body},
         })
         remarks = extract_quoted_remarks(message.body_text)
         if not remarks or match.patch_message_id is None:
@@ -246,7 +271,7 @@ def queue_imported_reply(
             if anchor is None or not remark.text.strip():
                 continue
             comments.append({
-                "path": anchor.path, "body": imported_mail_text(remark.text, message.message_id, client.source_url, body_format),
+                "path": anchor.path, "body": imported_mail_text(remark.text, message.message_id, client.source_url, body_format, message.from_name or message.from_address),
                 "before_commit": patch.before_commit, "after_commit": patch.after_commit,
                 "old_position": anchor.old_position, "new_position": anchor.new_position,
                 "extra_lines_count": anchor.extra_lines_count,
@@ -264,7 +289,7 @@ def queue_imported_reply(
                 },
                 "request": {
                     **common, "operation_key": identity,
-                    "body": imported_mail_text("", message.message_id, client.source_url, body_format) if body_format else (message.subject or "Mail review"),
+                    "body": imported_mail_text("", message.message_id, client.source_url, body_format, message.from_name or message.from_address) if body_format else (message.subject or "Mail review"),
                     "head_commit": comparison[0], "base_commit": comparison[1], "merge_base": comparison[2],
                     "comments": comments,
                 },
@@ -303,7 +328,7 @@ def _queue_imported_inline_replies(ledger, client, destination, message, parent,
             targets.append((parent_remark.get("text"), identifier, comment.get("body"), effect, position))
     queued = 0
     for position, remark in enumerate(remarks):
-        candidates = [target for target in targets if "\n".join(remark.quote) == target[0]]
+        candidates = [target for target in targets if quoted_parent_matches(remark.quote, target[0], body_format)]
         if len(candidates) != 1:
             continue
         _, identifier, parent_body, parent_effect, parent_position = candidates[0]
@@ -319,7 +344,7 @@ def _queue_imported_inline_replies(ledger, client, destination, message, parent,
                          "parent_message_id": parent.message_id, "parent_effect_key": parent_effect.effect_key,
                          "parent_operation_key": parent_effect.payload["request"]["operation_key"], "parent_position": parent_position},
             "request": {**common, "operation_key": operation_key,
-                        "body": imported_mail_text(remark.text, message.message_id, client.source_url, body_format),
+                        "body": imported_mail_text(remark.text, message.message_id, client.source_url, body_format, message.from_name or message.from_address),
                         "parent_id": identifier, "parent_body_sha256": hashlib.sha256(parent_body.encode()).hexdigest()},
         })
         queued += 1

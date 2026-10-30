@@ -17,7 +17,7 @@ from urllib.parse import quote, urlsplit
 from lore_review_companion.b4_adapter import assemble_local_series
 from lore_review_companion.git_branches import GitHttpCredentials, RevisionBranchResult, RevisionRefsResult, ensure_revision_branch, ensure_revision_refs
 from lore_review_companion.forge_api import authenticated_user
-from lore_review_companion.forge_comments import DeliveryResult, quote_untrusted_text, with_tool_attribution
+from lore_review_companion.forge_comments import DeliveryResult, quote_untrusted_text, submission_text, with_tool_attribution
 from lore_review_companion.forge_pulls import ForgePullPublisher
 from lore_review_companion.forge_imports import ForgeImportClient, ImportDeliveryResult
 from lore_review_companion.ledger import Ledger, PublicationConflict
@@ -152,7 +152,8 @@ def sync_imported_series_revision(
             refs = ensure_revision_refs(prepared, remote, **refs_arguments)
             operation_key = hashlib.sha256(f"{revision.series_key}\0{revision.revision}\0{source_id}\0imported-series-v1".encode()).hexdigest()
             estimate = source.time_estimate
-            body = f"Revision: v{revision.revision}\n\n" + quote_untrusted_text(source.body_text)
+            legacy_body = f"Revision: v{revision.revision}\n\n" + quote_untrusted_text(source.body_text)
+            body = submission_text(source.body_text) + f"\n\nRevision: v{revision.revision}"
             previous = ledger.list_publications(destination=destination, series_key=revision.series_key, status="complete", limit=1000)
             if previous.next_cursor is not None:
                 raise PublicationConflict("Earlier revision links exceed the reviewed publication limit")
@@ -161,7 +162,9 @@ def sync_imported_series_revision(
                 if prior.revision >= revision.revision:
                     continue
                 site = client.api.base_url.removesuffix("/").removesuffix("/api/v1")
-                body += f"\n\nEarlier revision: [v{prior.revision}]({site}/{quote(client.owner, safe='')}/{quote(client.repo, safe='')}/pulls/{prior.pull_index})"
+                link = f"\n\nEarlier revision: [v{prior.revision}]({site}/{quote(client.owner, safe='')}/{quote(client.repo, safe='')}/pulls/{prior.pull_index})"
+                body += link
+                legacy_body += link
             request = {
                 "operation_key": operation_key, "message_id": source_id, "message_sha256": source.sha256,
                 "address": source.from_address, "name": source.from_name or "", "body": body,
@@ -177,6 +180,13 @@ def sync_imported_series_revision(
                 prepared.result.base_commit, prepared.result.head_commit, patch_commits, capabilities["repository_id"],
                 capabilities["importer_login"], capabilities["importer_id"], credentials.username, client.source_url, request, retry_uncertain,
             )
+            retained = ledger.publication(destination, revision.series_key, revision.revision)
+            if retained is not None and retained.approval_digest != replace(plan, retry_uncertain=False).approval_digest():
+                compatible = replace(plan, request={**request, "body": legacy_body})
+                if retained.approval_digest != replace(compatible, retry_uncertain=False).approval_digest():
+                    raise PublicationConflict("Retained publication does not match either supported presentation")
+                plan = compatible
+                request = plan.request
             digest = plan.approval_digest()
             if not client.write_enabled:
                 return ImportedSeriesResult(plan, digest, refs, ImportDeliveryResult({"path": f"{client.path}/pulls", **request}, planned=True), False)

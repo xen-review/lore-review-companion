@@ -15,7 +15,7 @@ from lore_review_companion.anchor import Anchor, DiffIndex, RangeAnchor
 from lore_review_companion.forge_api import ForgeAPIError, authenticated_user
 from lore_review_companion.forge_comments import (
     DeliveryResult, DeliveryUncertainError, ForgeCommentPublisher, with_tool_attribution,
-    imported_mail_text, quote_untrusted_text,
+    imported_mail_text, quoted_parent_matches, quote_untrusted_text, reply_prose,
 )
 from lore_review_companion.forge_imports import ForgeImportClient
 from lore_review_companion.forge_pulls import _series_marker
@@ -53,7 +53,7 @@ def _assert_import_payload(ledger: Ledger, delivery: Delivery, *, source_url: st
         raise PublicationConflict("Imported reply evidence exceeds the bounded ancestry limit")
     payload = delivery.payload
     body_format = payload.get("body_format")
-    if body_format not in (None, "mail-text-v1"):
+    if body_format not in (None, "mail-text-v1", "mail-text-v2"):
         raise PublicationConflict("Unsupported imported message body format")
     request = payload.get("request")
     source = ledger.messages_by_id((delivery.message_id,))[0]
@@ -72,7 +72,27 @@ def _assert_import_payload(ledger: Ledger, delivery: Delivery, *, source_url: st
     if request.get("operation_key") != expected_key:
         raise PublicationConflict("Imported operation key does not match the retained source message")
     if delivery.event_type == "IMPORT_CONVERSATION":
-        if request.get("body") != imported_mail_text(source.body_text, source.message_id, source_url, body_format):
+        text = source.body_text
+        presentation = payload.get("presentation_parent")
+        suffix = ""
+        if presentation is not None:
+            parents = source.in_reply_to or source.references[-1:]
+            if body_format != "mail-text-v2" or len(parents) != 1 or not isinstance(presentation, dict) or presentation.get("message_id") != parents[0]:
+                raise PublicationConflict("Concise reply lacks a unique explicit parent")
+            effects = [effect for effect in ledger.comment_effects(parents[0], delivery.destination)
+                       if effect.event_type == "IMPORT_CONVERSATION" and effect.effect_key == presentation.get("effect_key")]
+            if len(effects) != 1 or effects[0].payload.get("thread") != payload.get("thread") or presentation.get("operation_key") != effects[0].payload["request"]["operation_key"]:
+                raise PublicationConflict("Concise reply parent does not match this revision")
+            _assert_import_payload(ledger, effects[0], source_url=source_url, depth=depth+1)
+            identifier = presentation.get("comment_id")
+            site, index = delivery.destination.rsplit("#", 1)
+            site = site.replace("/api/v1/repos/", "/")
+            url = f"{site}/pulls/{index}#issuecomment-{identifier}"
+            if type(identifier) is not int or identifier <= 0 or presentation.get("url") != url:
+                raise PublicationConflict("Concise reply parent URL differs from its destination")
+            text = reply_prose(source.body_text)
+            suffix = f'\n\n<small><a href="{url}">In reply to the preceding review comment</a></small>'
+        if request.get("body") != imported_mail_text(text, source.message_id, source_url, body_format, source.from_name or source.from_address) + suffix:
             raise PublicationConflict("Imported conversation differs from the retained complete message")
         return
     if delivery.event_type == "IMPORT_REPLY":
@@ -102,8 +122,8 @@ def _assert_import_payload(ledger: Ledger, delivery: Delivery, *, source_url: st
         remark = next((item for item in extract_quoted_remarks(source.body_text)
                        if json.loads(json.dumps(asdict(item))) == evidence.get("remark")), None)
         if position >= len(parent_remarks) or position >= len(comments) or remark is None or (
-            "\n".join(remark.quote) != parent_remarks[position]["text"]
-            or request.get("body") != imported_mail_text(remark.text, source.message_id, source_url, body_format)
+            not quoted_parent_matches(remark.quote, parent_remarks[position]["text"], body_format)
+            or request.get("body") != imported_mail_text(remark.text, source.message_id, source_url, body_format, source.from_name or source.from_address)
             or request.get("parent_body_sha256") != hashlib.sha256(comments[position]["body"].encode()).hexdigest()
             or type(request.get("parent_id")) is not int or request["parent_id"] <= 0
         ):
@@ -121,7 +141,7 @@ def _assert_import_payload(ledger: Ledger, delivery: Delivery, *, source_url: st
         or hashlib.sha256(evidence["patch_diff"].encode()).hexdigest() != evidence.get("patch_diff_sha256")
         or not isinstance(evidence.get("remarks"), list) or not isinstance(comments, list)
         or not comments or len(evidence["remarks"]) != len(comments)
-        or request.get("body") != (imported_mail_text("", source.message_id, source_url, body_format) if body_format else (source.subject or "Mail review"))
+        or request.get("body") != (imported_mail_text("", source.message_id, source_url, body_format, source.from_name or source.from_address) if body_format else (source.subject or "Mail review"))
         or type(payload.get("max_inline_lines")) is not int or not 1 <= payload["max_inline_lines"] <= 1000
     ):
         raise PublicationConflict("Imported review lacks exact patch/quote evidence")
@@ -142,7 +162,7 @@ def _assert_import_payload(ledger: Ledger, delivery: Delivery, *, source_url: st
             or any(comment.get(field) != value for field, value in {
             "path": anchor.path, "old_position": anchor.old_position, "new_position": anchor.new_position,
             "extra_lines_count": anchor.extra_lines_count,
-            "body": imported_mail_text(remark.text, source.message_id, source_url, body_format),
+            "body": imported_mail_text(remark.text, source.message_id, source_url, body_format, source.from_name or source.from_address),
             }.items())
         ):
             raise PublicationConflict("Imported range no longer resolves exactly from the retained source")

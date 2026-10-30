@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -50,9 +51,33 @@ def quote_untrusted_text(text: str) -> str:
     return f"{fence}text\n{text.rstrip()}\n{fence}"
 
 
-def imported_mail_text(text: str, message_id: str, source_url: str, body_format: str | None) -> str:
+def submission_text(text: str) -> str:
+    text = text.replace("\r\n", "\n").rstrip()
+    text = re.sub(r"\n-- ?\n[0-9][^\n]*\Z", "", text).rstrip()
+    lines = text.splitlines()
+    summary = next((index for index in range(len(lines) - 1, -1, -1)
+                    if re.fullmatch(r"\s*\d+ files? changed(?:, \d+ (?:insertions?\(\+\)|deletions?\(-\)))*\s*", lines[index])), None)
+    if summary is not None:
+        start = summary
+        while start > 0 and re.fullmatch(r" .+\s+\|\s+(?:\d+\s*[-+]*|Bin .+)", lines[start - 1]):
+            start -= 1
+        if start < summary and all(not line.strip() or re.fullmatch(r" (?:create|delete) mode .+| (?:rename|copy) .+| mode change .+", line)
+                                   for line in lines[summary + 1:]):
+            lines = lines[:start]
+            if lines and lines[-1] == "---":
+                lines.pop()
+            text = "\n".join(lines).rstrip()
+    return text
+
+
+def imported_mail_text(text: str, message_id: str, source_url: str, body_format: str | None, author: str = "") -> str:
     if body_format is None:
         return quote_untrusted_text(text)
+    if body_format == "mail-text-v2":
+        url = html.escape(f"{source_url.rstrip('/')}/{quote(message_id, safe='@')}/", quote=True)
+        label = html.escape(f"Original review comment by {author or 'the sender'}", quote=True)
+        link = f'<small><a href="{url}" rel="nofollow noreferrer">{label}</a></small>'
+        return f"{text.rstrip()}\n\n---\n\n{link}" if text.strip() else link
     if body_format != "mail-text-v1":
         raise ValueError("Unsupported imported message body format")
     label = "lore-" + hashlib.sha256(message_id.encode()).hexdigest()[:16]
@@ -60,6 +85,17 @@ def imported_mail_text(text: str, message_id: str, source_url: str, body_format:
         label += "-source"
     footnote = f"[^{label}]\n\n[^{label}]: <{source_url.rstrip('/')}/{quote(message_id, safe='@')}/>"
     return f"{text.rstrip()}\n\n{footnote}" if text.strip() else footnote
+
+
+def reply_prose(text: str) -> str:
+    return "\n".join(line for line in text.splitlines()
+                     if not line.startswith(">") and not re.fullmatch(r"On .+ wrote:\s*", line)).strip()
+
+
+def quoted_parent_matches(quoted: tuple[str, ...], parent: str, body_format: str | None) -> bool:
+    if body_format == "mail-text-v2":
+        return tuple(line for line in quoted if line.strip()) == tuple(line for line in parent.splitlines() if line.strip())
+    return "\n".join(quoted) == parent
 
 
 def _marker(source_message_id: str, effect_key: str) -> str:

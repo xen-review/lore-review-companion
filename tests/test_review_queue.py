@@ -134,9 +134,9 @@ class ReviewQueueTests(unittest.TestCase):
         self.assertEqual((result.inline_count, result.unresolved_count), (1, 0))
         self.assertEqual([item.event_type for item in before], ["IMPORT_CONVERSATION", "IMPORT_REVIEW"])
         request = before[1].payload["request"]
-        self.assertEqual(before[0].payload["body_format"], "mail-text-v1")
-        self.assertTrue(before[0].payload["request"]["body"].startswith(reply.body_text.rstrip() + "\n\n[^lore-"))
-        self.assertEqual(request["comments"][0]["body"], imported_mail_text("Please change both lines.", reply.message_id, client.source_url, "mail-text-v1"))
+        self.assertEqual(before[0].payload["body_format"], "mail-text-v2")
+        self.assertTrue(before[0].payload["request"]["body"].startswith(reply.body_text.rstrip() + "\n\n---\n\n<small>"))
+        self.assertEqual(request["comments"][0]["body"], imported_mail_text("Please change both lines.", reply.message_id, client.source_url, "mail-text-v2", "Reviewer"))
         self.assertNotIn("Re: first", request["body"])
         self.assertNotIn("```", request["comments"][0]["body"])
         self.assertEqual(request["head_commit"], "a" * 40)
