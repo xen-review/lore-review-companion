@@ -204,6 +204,13 @@ comment narration. Existing queued or delivered effects keep their original
 request bytes so upgrades cannot invalidate replay or approval. The server hides
 only exact source-bound legacy suffixes at display time.
 
+Each quoted code block followed by a review remark is considered separately.
+When a block spans several diff hunks, every segment and quoted hunk header must
+match the pinned patch uniquely and in order; the remark is attached only to
+the final contiguous quoted segment. Ambiguous, mixed-side or mismatched
+segments remain unresolved. Newly recovered remarks use distinct, stable
+operations, so replay never rewrites or duplicates an earlier imported review.
+
 Build identity is the creating checkout's SHA and sanitized commit subject,
 stamped into source distributions and wheels. Scoped import writes send it in
 `X-Lore-Companion-Revision`, outside the canonical approved JSON payload. A replay

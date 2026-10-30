@@ -15,6 +15,30 @@ files, source snapshots and nested repositories are not part of these commits.
 
 ## Current Iteration
 
+- Multi-hunk inline review follow-up: companion resolver `4e109f2` and independently
+  approved segmented effects `ad21e9d` are pushed; companion acceptance fixture
+  `eec1287` and Forgejo fixture `f297f8dc90` are pushed. The installed companion
+  wheel is stamped `eec12875576d/test-exercise-segmented-inline-reviews-against-forgejo`.
+  Every quoted segment must match its pinned patch uniquely, in hunk order, with
+  exact quoted hunk headers; only the final contiguous segment is selected.
+  Previously accepted review payloads and IDs remain unchanged.
+- Andrew Cooper's retained PR 5 mail
+  `35fa29d5-fafc-43da-a5a5-72df8f367e3c@citrix.com` has seven quoted remarks.
+  Six were already imported; the seventh is now independently delivered at
+  https://review-forge.be.free.or.at/xen-review/xen/pulls/5#issuecomment-40
+  on `xen/arch/riscv/cpufeature.c` lines 723–745 in the pinned patch. The actual
+  PR view shows the original remark, author and source link. Requeue leaves the
+  previous six IDs unchanged, the new operation complete and no pending effects.
+  Nine quote/remark pairs in other replies remain unresolved; some do not
+  identify exactly one accepted inline parent. Their complete text remains in
+  the conversation/ledger.
+- Exact committed suite: 364 tests, 362 pass and two live-server skips. Focused
+  anchor/queue checks cover ambiguity, mixed sides, wrong hunks, replay and
+  evidence tampering. The disposable Forgejo/Git/b4 two-hunk acceptance workflow
+  passes in 21.637s. Notification/hook counts did not increase. Private paired
+  companion backup `backups/20261030-inline-review-eec1287/` preserves the prior
+  ledger, scheduler state and existing NNTP incident latch.
+
 - Presentation follow-up is deployed: Forgejo `f83fc8258a` (including audited
   correction `1adc8ba36a` and source-free inline-review binding `62a85160f3`),
   companion `ff82557` (cover/title `b3dfff9`, build/header/v3 bodies `eb8104a`).

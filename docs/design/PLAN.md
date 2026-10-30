@@ -152,8 +152,11 @@ Proposed route group: `/api/v1/repos/{owner}/{repo}/review-imports`.
 Retain quoted blocks, quote depth, source offsets, file/hunk evidence, and the
 following remark. Validate against the original patch's pinned comparison, not
 an unrelated latest PR snapshot. Publish only unique contiguous same-file,
-same-side ranges within configured limits. Mixed-side, disjoint, repeated, or
-headerless material remains unresolved unless exact retained context proves it.
+same-side ranges within configured limits. If quoted context spans hunks,
+validate every segment and hunk header uniquely in patch order, then select only
+the final contiguous quoted segment immediately above the remark. Mixed-side,
+cross-file, repeated, or headerless material remains unresolved unless exact
+retained context proves it; never fill gaps or infer a nearby line.
 
 The full source reply is a canonical conversation effect. Inline excerpts have
 separate stable keys. Losing an inline anchor does not authorize a different
@@ -171,6 +174,9 @@ exact parent remarks match, otherwise a concise conversation and parent link.
 Raw mail remains complete in the ledger; old approved effect bytes are unchanged.
 Rendering is explicitly tagged; retained old effects keep their original bytes
 and operation identities rather than being silently rewritten on replay.
+Newly resolved multi-hunk remarks receive their own deterministic, independently
+approved review effect, whose source identity and pinned patch are rechecked
+before delivery.
 Build identity is transport metadata, never part of the canonical import hash;
 replay preserves the originally recorded build. PR titles are `Sender: Subject
 [vN]`; covers omit the generated revision line and validated shortlog/diffstat
