@@ -12,7 +12,7 @@ No automatic pushes. Forgejo changes belong to the separate parent repository.
 - DOC-01 `DONE`: the implementation plan and this living ledger form the first
   commit, before implementation import. The user supplied an empty repository.
 - B01 `DONE`: current source/history/tool inventory and offline baseline recorded
-  below. B02 is next; installed b4 is unavailable, not assumed compatible.
+  below. B02 imported the unchanged source; installed b4 is still unavailable.
 - First behavioral hypothesis: an unsafe inline delivery must not silently
   become a conversation write. The existing publisher does this; B03 removes
   it and immediately runs the focused comment tests.
@@ -37,7 +37,7 @@ installed versions, historical commits and current tests are B01, not assumed.
 | --- | --- | --- | --- |
 | DOC-01 | DONE | - | PLAN and LEDGER are the first content; staged whitespace and both local document links checked. |
 | B01 | DONE | DOC-01 | Current worktrees/history/tools inspected and narrow/full offline baseline passed; source is an untracked snapshot, b4 runtime absent. See execution record. |
-| B02 | TODO | B01 | Import reviewed sources/synthetic tests and sanitized history into this repository. Exclude mail, databases, tokens, caches, virtualenvs and nested Git data; record license/origin and leave originals intact. |
+| B02 | DONE | B01 | Unchanged Python/requirements snapshot imported with checksums, legal context, provenance and ignores. Original files untouched; imported offline suite passed. Final distribution-license review remains R01. |
 | B03 | TODO | B02 | Remove inline-to-conversation fallback. Stale/disabled/unsafe inline effects make zero conversation POSTs, remain inspectable, and require a separately reviewed fallback. Run existing comment tests immediately after the edit. |
 | B04 | TODO | B03 | Rename to neutral project/modules and installable lore_review_companion package with CLI/CI. Preserve legacy replay markers, destination/effect keys and versioned preflight identity. Independent install and old-state replay must not create duplicate writes. |
 
@@ -150,3 +150,17 @@ Bring them into scope only through an explicit decision.
   and environment-based credentials were observed. No private docs/state enter
   the source import.
 - Commit subject: `docs: record verified companion baseline`.
+
+### 2026-10-29: B02 Source Snapshot
+
+- Imported only legacy Python sources/tests and requirements, plus the Gitea
+  license as source context. [ORIGIN.md](ORIGIN.md) describes history limits,
+  licensing questions, exclusions and compatibility boundaries.
+- `SOURCE.sha256` records the individual unchanged source hashes at this import.
+  Ignore rules exclude bytecode, environments, local mail and database state.
+- Imported-tree check: `python3 -m unittest discover -s lore-review-companion -p 'test_*.py'`:
+  295 run, 292 passed, 3 skipped in 20.235 seconds, with live opt-ins unset and
+  bytecode disabled. This matches the baseline without parent-source imports.
+- No operational docs, databases, mail, credentials, caches, services or nested
+  repositories were imported. The original source directory is unchanged.
+- Commit subject: `chore: import reviewed companion source snapshot`.

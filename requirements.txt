@@ -1,0 +1,1 @@
+standard-nntplib==3.13.0; python_version >= "3.13"
