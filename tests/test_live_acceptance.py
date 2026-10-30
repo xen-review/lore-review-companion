@@ -769,10 +769,11 @@ class ImportedWorkflowAcceptanceTests(unittest.TestCase):
                 (
                     "From: Reviewer <reviewer@example.test>\nMessage-ID: <acceptance-review@example.test>\nSubject: Re: first\n"
                     f"In-Reply-To: <{first_patch.message_id}>\nReceived: from relay; Thu, 22 Oct 2026 15:30:00 +0200\n\n"
+                    "> ---\nCommit description feedback.\n\n"
                     "> --- a/review-fixture.c\n> +++ b/review-fixture.c\n> -old 1\n> -old 2\n> -old 3\n"
                     "Please keep the removed context.\nIt explains the old behavior.\n\n"
                     "> --- a/review-fixture.c\n> +++ b/review-fixture.c\n> +new 1\n> +new 2\n> +new 3\n"
-                    "Please clarify the new context.\nThe name needs an explanation.\n"
+                    "Please clarify the new context.\nThe name needs an explanation.\n\n~Reviewer\n"
                 ).encode()
             )
             ledger.record_parsed_message(root)
@@ -785,7 +786,7 @@ class ImportedWorkflowAcceptanceTests(unittest.TestCase):
                 checkout,
                 (root,),
             )
-            self.assertEqual((queued.inline_count, queued.unresolved_count), (2, 0))
+            self.assertEqual((queued.inline_count, queued.unresolved_count), (2, 1))
             review_plan = plan_import_delivery(
                 ledger, writer, pull_index, "IMPORT_REVIEW"
             )
@@ -836,6 +837,16 @@ class ImportedWorkflowAcceptanceTests(unittest.TestCase):
             conversation_plan = plan_import_delivery(
                 ledger, writer, pull_index, "IMPORT_CONVERSATION"
             )
+            conversation_body = conversation_plan.deliveries[0].payload["request"][
+                "body"
+            ]
+            self.assertIn(
+                "```rust\n> ---\n```\nCommit description feedback.", conversation_body
+            )
+            self.assertIn(
+                "> --- a/review-fixture.c\n> +++ b/review-fixture.c", conversation_body
+            )
+            self.assertNotIn("~Reviewer", conversation_body)
             self.assertEqual(
                 deliver_approved_imports(
                     ledger,
