@@ -39,6 +39,27 @@ files, source snapshots and nested repositories are not part of these commits.
   these changes. The incident is not cleared by a presentation/code upgrade;
   previous P04/P05 successful rollout evidence below is historical, not a claim
   that the current source round is healthy. No failed source work is discarded.
+- Final workflow/docs commit `beab2ec` is pushed and installed in the companion
+  runtime. Fresh-wheel installation verifies all three console entry points and
+  dependency consistency; pinned b4/liblore source fingerprint remains unchanged.
+  Final full suite: 357 run, 355 pass, two explicit server skips, 15.027s;
+  `uv format --check` passes for all 48 files. Existing `uv check` type debt
+  remains 564 diagnostics. No operator prek configuration was staged or edited.
+- Forgejo footer/naming commits `ca043ab99c`, `f9e8e31ded` and `4242acdd5a`
+  are pushed; the last is built/deployed under the existing review service.
+  Template tests pass. Native timeline/files author links now show mapped
+  participant names even with username-oriented instance display settings.
+  Live desktop/mobile DOM and screenshots show content-before-metadata, small
+  footers, no repeated participant/unverified label, a separate-line PR lore
+  link, no duplicated comment provenance link and no page overflow. Ordinary
+  user display names and API source-quality fields are unchanged.
+  Existing imported bodies are deliberately not rewritten or re-approved.
+- Public/loopback health and deployed version checks pass. Private checkpoint
+  `backups/20261030-ca043ab99c/` preserves the old executable and an online
+  SQLite snapshot with verified integrity. The preexisting NNTP incident remains
+  latched; upgrading rendering did not restart source ingestion or discard it.
+  The operator's saved parent whitespace-revert diff is untouched; only the
+  explicitly confirmed footer/name edits were restored after that cleanup.
 
 - DOC-01 `DONE`: the implementation plan and this living ledger form the first
   commit, before implementation import. The user supplied an empty repository.
