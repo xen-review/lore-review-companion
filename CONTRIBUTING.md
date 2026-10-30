@@ -64,6 +64,12 @@ AI-authored contributions; a compatible license alone does not change that.
 
 ## Development
 
+Commit early and commit often: as soon as one coherent part of a feature is
+implemented and its focused checks pass, commit and push that part before
+starting the next. Do not wait for the whole feature to be complete. Keep
+formatting-only commits separate, never include unrelated operator changes,
+and do not rewrite published history.
+
 Run `uv check --no-sync`, `uv format --check` and the focused/full unit tests
 for each Python change. `uv check` runs type checking; its initial baseline is
 currently failing and must not be confused with passing unit tests. Use

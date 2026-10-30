@@ -7,6 +7,8 @@ recorded verification, not just code. Each completed companion topic gets a
 commit; record its subject here and use Git history for the resulting hash.
 The operator authorized commits and pushes in both repositories on 2026-10-30.
 Normal verified commits are pushed automatically; do not rewrite commit history.
+Commit early and often: checkpoint each coherent implemented part immediately
+after focused validation, before beginning the next part of a feature.
 Forgejo topics use incremental stacked branches; the last contains every topic.
 Forgejo changes belong to the separate parent repository. Existing operator
 files, source snapshots and nested repositories are not part of these commits.
