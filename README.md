@@ -281,6 +281,10 @@ state/config directories and provision read-only local source access before
 installation. They request no privilege escalation or SSH-key changes. A failed
 round is not automatically restarted; periodic invocations still honor the latch.
 
+[contrib/forgejo-review.service](contrib/forgejo-review.service) is the matching
+user-level server unit for the operator's checkout layout. Service examples must
+be reviewed for each deployment; they are not implicitly activated by pip.
+
 ## Production Upgrade And Recovery
 
 Identify the exact process, binary, configuration, database and all storage
@@ -305,6 +309,13 @@ existing work before changing review-only settings. A read-only plan must pass
 before an explicit expiring policy is enabled. Run and inspect one bounded round
 before enabling the user timer. Disable the timer and revoke the grant to stop
 future work; inspect uncertainty before clearing any incident latch.
+
+Tokens do not bypass account activation or mandatory password changes. If
+Forgejo returns `403` requiring a password change, the account owner must finish
+the normal password-change flow before token verification or imports continue.
+Do not clear the security flag as a deployment workaround or send passwords to
+the assistant. Keep policy disabled and the worker timer inactive meanwhile.
+Current deployed versions and explicit blockers are in the ledger.
 
 ## Develop And Test
 

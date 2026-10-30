@@ -70,6 +70,11 @@ files, source snapshots and nested repositories are not part of these commits.
   pinned b4 is enabled. The separate real-Forgejo workflow and hosted Python
   3.11/3.12/3.13 matrix pass. V01/V02 and technical R01 are complete; L01 blocks
   distribution, and P01-P05 separately track production rollout.
+- Production Forgejo is now built, backed up, migrated and healthy under its
+  enabled user service. Companion runtime and disabled scheduler/policy are
+  installed. P03-P05 are blocked by the integration account's mandatory password
+  change; do not clear that security gate administratively. L01 remains blocked
+  independently pending rights-holder licensing evidence.
 
 ## Discovery
 
@@ -145,11 +150,39 @@ post historical pending effects implicitly, or use a production DB for tests.
 
 | ID | Status | Depends On | Step And Acceptance Gate |
 | --- | --- | --- | --- |
-| P01 | IN PROGRESS | V02 | Exact manually launched instance, work path, local SQLite/storage and health identified without exposing secrets. About 327 MiB of local data and 3.4 GiB free permit a private cold backup. Backup/restore rehearsal and rollback gates must pass before migration. |
-| P02 | IN PROGRESS | P01 | Candidate built successfully with sqlite/sqlite_unlock_notify, temporary Go cache and bounded memory; embedded commit is 09401fd3c6. Running instance remains cff8e8831a. Preserve old executable, stop only the identified instance, apply normal startup migrations and verify health/version/logs after P01. Never downgrade a migrated DB. |
-| P03 | TODO | P02 | Provision separate least-privilege Git and repository-selected review-import tokens into private files, without displaying them. Verify integration account access and source-bound grant; configure review-only settings only after checking existing work. Never put tokens in Git, policy, command arguments or logs. |
-| P04 | TODO | P03, R01 | Install the independently tested companion environment and protected config/state. Review exact source/base/destinations/budgets; run read-only planning, enable an expiring local policy plus explicit server unattended grant, then execute one bounded round. Verify actual authorship, ranges, refs and absence of notifications. |
-| P05 | TODO | P04 | Install/enable the user timer only after the bounded round succeeds. Verify restart/replay, revocation, incident latch, monitoring and backup/restore instructions; record deployed versions and residual blockers without claiming full historical coverage. |
+| P01 | DONE | V02 | Exact process/work path/SQLite/storage/health verified without exposing secrets. Preserved the running cff8e8831a executable before stopping only its PID. Private cold config/data/repository archive restored into a mode-0700 scratch directory; SQLite integrity is ok. Rollback requires complete pre-migration snapshot plus old binary, not a binary downgrade. |
+| P02 | DONE | P01 | Built sqlite/sqlite_unlock_notify candidate 09401fd3c6 with temporary cache and bounded Go memory. Started the exact work/config paths under enabled forgejo-review.service. All three review migrations are present; loopback/public health and embedded API version pass. User lingering is enabled. No shared SSH configuration was changed. |
+| P03 | BLOCKED | P02 | Separate repository-selected write:review-import and write:repository credentials created directly into mode-0600 files; values never displayed. Removed importer from organization Owners, retaining operator ownership and granting repository write collaboration. Temporary admin bootstrap credential revoked in finally. Verification returns 403: account must change password. Operator must complete review-companion's required password change through Forgejo; do not clear the gate as a workaround. Review-only settings and source grant remain unconfigured until access can be verified. |
+| P04 | BLOCKED | P03, R01 | Production wheel and pinned b4/liblore installed in private ~/.local/share/lore-review-companion/.venv; pip check and source fingerprint pass. Independent assembly clone prepared. Mode-0600 bounded policy is explicitly disabled. No mail ledger/import, PR, ref or comment created. After P03, verify settings/grant and plan before enabling policy and executing the first bounded round. |
+| P05 | BLOCKED | P04 | User worker/timer installed and all three units pass systemd-analyze verification against actual paths. Worker timer remains disabled/inactive; do not enable before a successful inspected round. Linger is enabled and server alone runs under systemd. Production restart/replay/revocation/monitoring gates remain pending the account gate and P04; isolated equivalents already pass. |
+
+### Deployment State And Resume
+
+- Server: tested parent tip `09401fd3c6`, original config/work path, user unit
+  `forgejo-review.service`, public endpoint healthy. Stop/restart only that unit.
+- Private rollback directory:
+  `~/.local/state/lore-review-companion/backups/20261030-09401fd3c6/` contains
+  `gitea.previous` and `instance.tar.gz`. Keep these together; the archive
+  contains credentials and must never enter Git. This is local rollback
+  protection, not an off-host disaster-recovery backup.
+- Runtime: `~/.local/share/lore-review-companion/.venv`; protected credentials
+  and disabled policy in `~/.config/lore-review-companion/`; independent source
+  clone in `~/.local/state/lore-review-companion/xen.git`. No operational mail
+  ledger or worker scheduling DB exists yet. Trusted base is the retained mirror
+  master commit, not a guessed patch base. Policy expires seven days after
+  preparation and must be reviewed again before enablement.
+- Required operator action: sign in as `review-companion` and complete its
+  mandatory password change through the normal Forgejo flow. Do not send the
+  new password to the assistant. Then verify both private tokens, configure
+  review-only settings/source-bound grant, plan, run one bounded round and
+  only then enable the timer. Do not silently retry or relax this security gate.
+- Independent distribution blocker: obtain snapshot rights-holder origin/license
+  evidence as specified in ORIGIN. No package release was published.
+- Root space after backup/runtime installation is approximately 2.5 GiB free.
+  Keep Go cache under /tmp, bound compiler memory, and monitor free space before
+  enabling source ingestion. The initial Swagger process was killed under
+  memory pressure; GOGC=25/GOMEMLIMIT=512MiB/GOMAXPROCS=2 succeeded. Existing
+  unrelated generator/locale warnings remain documented limitations.
 
 ## Verification Rules
 
