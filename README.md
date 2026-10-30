@@ -11,7 +11,7 @@ import and lookup endpoints, non-voting review/range imports and threaded
 replies are also tested. Participant-authored PR creation with pinned refs is
 tested as well. Imported conversation/review/reply queue and approved outbox delivery
 and publication are available as Python APIs and explicit CLI commands;
-unattended discovery/coordinator setup remains pending.
+unattended coordinator setup remains pending.
 Native exact multiline
 quote matching and versioned range delivery are implemented and tested locally;
 whole-workflow acceptance remains pending. Read [PLAN.md](PLAN.md) and [LEDGER.md](LEDGER.md)
@@ -84,6 +84,33 @@ explicitly verified `--max-inline-lines` capability (default 1). The current
 Forgejo checkout supports 50 selected lines. Plans bind this limit; changing it
 requires approval again. Existing legacy inline effects are not automatically
 duplicated or migrated to the new parser.
+
+## Recent Discovery And Recovery
+
+Discovery uses TLS NNTP and a durable Message-ID queue. Configure the initial
+window explicitly, or retain the 148-hour default:
+
+```sh
+.venv/bin/lore-review-companion discover-nntp --ledger state.sqlite3 --lookback-hours 148
+.venv/bin/lore-review-companion discover-nntp-numbers --ledger state.sqlite3 --limit 128
+.venv/bin/lore-review-companion fetch-nntp --ledger state.sqlite3 --limit 128
+```
+
+The lookback is bounded to 1 through 8760 hours. It is fixed when that source's
+checkpoint is first created; repeat discovery with the same setting to resume.
+A changed duration is refused, not used to silently reset coverage or truncate
+retained mail. Discovery uses server index time, which may depend on sender
+Date, and does not establish verified receipt-time or complete thread coverage.
+
+Fetched messages queue missing older parents recursively, outside the initial
+window. `repair-nntp-parents` repairs dependencies in retained messages, and
+`discover-nntp-thread --message-id MESSAGE_ID` queues bounded thread candidates
+for subsequent group-verified NNTP fetch. `fetch-nntp --message-id MESSAGE_ID`
+retries one pending item without letting an unavailable earlier item hide it.
+Unavailable messages remain pending; they are not treated as source deletions.
+Partial downloads never acknowledge the current item. Group renumbering,
+validity changes, retention gaps and Message-ID conflicts halt discovery
+instead of guessing. Byte/disk/batch limits remain explicit command options.
 
 ## Scoped Imports
 

@@ -47,8 +47,11 @@ No automatic pushes. Forgejo changes belong to the separate parent repository.
   one participant-authored PR per revision by default. V2 links to V1 without
   rewriting V1. Protected Git/API credentials and uncertainty approvals are
   separate; the legacy lifecycle is unchanged.
+- S02 `DONE`: configurable bounded NNTP lookback is exposed, preserving the
+  148-hour default and durable fixed checkpoint. Existing numeric discovery,
+  recursive older-parent recovery, selected retries and resource guards pass.
 - Historical sample publications remain background evidence only; the current
-  baseline is 335 tests, with only the live-server acceptance test skipped
+  baseline is 337 tests, with only the live-server acceptance test skipped
   when the pinned real-b4 opt-ins are enabled.
 
 ## Discovery
@@ -102,7 +105,7 @@ revision state here; do not stage them into a companion commit.
 | ID | Status | Depends On | Step And Acceptance Gate |
 | --- | --- | --- | --- |
 | S01 | DONE | B04, C02, F04 | `sync-imported-series` uses one PR and paired immutable base/head refs per revision, pinned source/patch maps and prior-revision links. V2 leaves V1 unchanged; source-thread checks retain late replies on their recorded revision. Repeated writes reconcile the same operation/refs. Tests cover upstream movement, two revisions and approved uncertain retry; full live workflow remains V01. |
-| S02 | TODO | B04, C01 | Expose configurable recent lookback and durable resumable NNTP discovery/dependency recovery. Older ancestors work on demand; unavailable articles are not deletions; coverage and resource guards remain explicit. |
+| S02 | DONE | B04, C01 | `discover-nntp --lookback-hours` exposes a bounded 1-8760-hour initial window (148 default), fixed per durable source checkpoint. 42 NNTP tests cover restart/deduplication, older-parent recursion/repair, selected retries, unavailable items retained pending, bounded thread discovery and byte/disk/group-history guards. No verified receipt-time or full thread coverage is claimed. |
 | S03 | TODO | C05, S01, S02, F04 | Dry-run coordinator for ingest, recovery, preflight, publication/reply plans. No remote writes by default; no nested-lock deadlocks; incomplete/ambiguous/unknown-base states are visible. |
 | S04 | TODO | S03, F05, F06 | Explicit revocable repository policy and supervised unattended worker. Recheck scope/permissions/capabilities per write; bound Git credentials separately; incidents stop and restarts reconcile uncertain writes. No mail sending or blanket self-approval. |
 
@@ -631,3 +634,21 @@ Bring them into scope only through an explicit decision.
 - C05 remains in progress only for isolated whole-workflow acceptance. Discovery,
   coordinator, chronology/provenance and unattended policy tasks remain open.
 - Commit subject: `feat: route exact email replies into imported inline threads`.
+
+### 2026-10-30: S02 Configurable Recent Discovery
+
+- Exposed the existing durable bootstrap window as `discover-nntp
+  --lookback-hours`, keeping the 148-hour default and bounded 1-8760-hour range.
+  Invalid values fail before network access or checkpoint creation; an existing
+  source's window cannot silently change. No schema migration or old checkpoint
+  rewrite was needed.
+- New tests exercise the CLI at the minimum, 24 hours and maximum, durable
+  reopen/deduplication, changed-window refusal and invalid input. All 42 NNTP
+  tests pass, including older-parent recursion, repair/selected retries,
+  unavailable-parent blocking, partial/timeout resumption and source-history
+  resource guards. Documentation makes index-time/coverage limitations explicit.
+- Full Python: 337 run, 336 passed, only live-server acceptance skipped in
+  14.946 seconds. Both real pinned-b4 tests ran; editor diagnostics passed.
+- No live discovery, operational ledger access or remote writes were performed.
+  S02 is complete; multi-stage dry-run coordination is S03.
+- Commit subject: `feat: expose durable configurable recent NNTP discovery`.

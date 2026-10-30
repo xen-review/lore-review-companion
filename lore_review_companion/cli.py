@@ -24,7 +24,7 @@ from lore_review_companion.ledger import (
     NNTPIncident, PublicationConflict, WorkerBusyError,
 )
 from lore_review_companion.mail_parser import parse_mbox
-from lore_review_companion.nntp_source import DEFAULT_GROUP, DEFAULT_HOST, DEFAULT_INBOX, MAX_ARTICLE_BYTES, MAX_BATCH_BYTES, MAX_DISCOVERY_BYTES, MIN_FREE_BYTES, NNTPSourceError, discover_nntp, discover_nntp_numbers, discover_nntp_thread, fetch_nntp, inspect_nntp_window, nntp_source
+from lore_review_companion.nntp_source import DEFAULT_GROUP, DEFAULT_HOST, DEFAULT_INBOX, DEFAULT_LOOKBACK_HOURS, MAX_ARTICLE_BYTES, MAX_BATCH_BYTES, MAX_DISCOVERY_BYTES, MIN_FREE_BYTES, NNTPSourceError, discover_nntp, discover_nntp_numbers, discover_nntp_thread, fetch_nntp, inspect_nntp_window, nntp_source
 from lore_review_companion.outbox import (
     CommentBatchSummary, CommentDeliveryPlan, deliver_approved_comments, migrate_legacy_deliveries,
     plan_comment_delivery, plan_legacy_migration,
@@ -139,6 +139,7 @@ def main(argv: list[str] | None = None) -> int:
     nntp.add_argument("--ledger", type=Path, required=True)
     nntp.add_argument("--host", default=DEFAULT_HOST)
     nntp.add_argument("--group", default=DEFAULT_GROUP)
+    nntp.add_argument("--lookback-hours", type=int, default=DEFAULT_LOOKBACK_HOURS)
     nntp.add_argument("--max-discovery-bytes", type=int, default=MAX_DISCOVERY_BYTES)
     nntp_numbers = commands.add_parser("discover-nntp-numbers", help="Queue a bounded range of new NNTP article numbers")
     nntp_numbers.add_argument("--ledger", type=Path, required=True)
@@ -529,7 +530,7 @@ def main(argv: list[str] | None = None) -> int:
                 result = parse_public_inbox_manifest(args.inbox_url, compressed)
         elif args.command == "discover-nntp":
             result = discover_nntp(
-                Ledger(args.ledger), host=args.host, group=args.group,
+                Ledger(args.ledger), host=args.host, group=args.group, hours=args.lookback_hours,
                 response_bytes=args.max_discovery_bytes,
             )
         elif args.command == "discover-nntp-numbers":

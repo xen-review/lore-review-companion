@@ -6,7 +6,7 @@ import tempfile
 import traceback
 import unittest
 from contextlib import closing, redirect_stdout
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -194,6 +194,37 @@ class NNTPSourceTests(unittest.TestCase):
         summary = json.loads(output.getvalue())
         self.assertEqual(summary["newly_queued"], 1)
         self.assertEqual(summary["checkpoint"]["window_hours"], 148)
+
+    def test_configured_cli_lookback_is_durable_and_cannot_silently_change(self):
+        def discover(ledger, **options):
+            return discover_nntp(ledger, **options, client_factory=self.factory)
+
+        for hours in (1, 24, 8760):
+            with self.subTest(hours=hours):
+                path = Path(self.tempdir.name) / f"lookback-{hours}.sqlite3"
+                arguments = ["discover-nntp", "--ledger", str(path), "--lookback-hours", str(hours)]
+                with patch("lore_review_companion.cli.discover_nntp", side_effect=discover), redirect_stdout(io.StringIO()) as output:
+                    self.assertEqual(main(arguments), 0)
+                checkpoint = json.loads(output.getvalue())["checkpoint"]
+                expected_cutoff = (self.now.replace(tzinfo=timezone.utc) - timedelta(hours=hours)).isoformat()
+                self.assertEqual(checkpoint["cutoff"], expected_cutoff)
+                self.assertEqual(checkpoint["window_hours"], hours)
+                source = checkpoint["source"]
+                resumed = discover_nntp(Ledger(path), hours=hours, client_factory=self.factory)
+                self.assertEqual(resumed.newly_queued, 0)
+                before = Ledger(path).nntp_checkpoint(source)
+                with self.assertRaisesRegex(ArchiveCheckpointConflict, "already fixed"):
+                    discover_nntp(Ledger(path), hours=2, client_factory=self.factory)
+                self.assertEqual(Ledger(path).nntp_checkpoint(source), before)
+
+    def test_invalid_lookback_is_rejected_before_network_or_checkpoint(self):
+        for hours in (0, 8761, -1, True, 1.5, "24"):
+            with self.subTest(hours=hours), patch.object(self, "factory") as connect:
+                with self.assertRaisesRegex(ValueError, "Bootstrap hours"):
+                    discover_nntp(self.ledger, hours=hours, client_factory=connect)
+                connect.assert_not_called()
+        source = nntp_source("nntp.lore.kernel.org", "org.xenproject.lists.xen-devel")
+        self.assertIsNone(self.ledger.nntp_checkpoint(source))
 
     def test_cli_fetch_exposes_bounded_ingestion_progress(self):
         discover_nntp(self.ledger, client_factory=self.factory)

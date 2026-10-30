@@ -21,6 +21,7 @@ from lore_review_companion.public_inbox import MAX_THREAD_COMPRESSED, MAX_THREAD
 DEFAULT_HOST = "nntp.lore.kernel.org"
 DEFAULT_GROUP = "org.xenproject.lists.xen-devel"
 DEFAULT_INBOX = "https://lore.kernel.org/xen-devel/"
+DEFAULT_LOOKBACK_HOURS = 148
 MAX_DISCOVERY_BYTES = 8 * 1024 * 1024
 MAX_ARTICLE_BYTES = 8 * 1024 * 1024
 MAX_BATCH_BYTES = 32 * 1024 * 1024
@@ -213,10 +214,12 @@ def _group_cursor(ledger: Ledger, source: str, snapshot: tuple[int, int, int, in
 
 def discover_nntp(
     ledger: Ledger, *, host: str = DEFAULT_HOST, group: str = DEFAULT_GROUP,
-    hours: int = 148, response_bytes: int = MAX_DISCOVERY_BYTES,
+    hours: int = DEFAULT_LOOKBACK_HOURS, response_bytes: int = MAX_DISCOVERY_BYTES,
     client_factory: Callable = _client,
 ) -> NNTPDiscovery:
     source = nntp_source(host, group)
+    if type(hours) is not int or not 1 <= hours <= 8760:
+        raise ValueError("Bootstrap hours must be between 1 and 8760")
     if not isinstance(response_bytes, int) or isinstance(response_bytes, bool) or not 1024 <= response_bytes <= MAX_DISCOVERY_BYTES:
         raise ValueError("Discovery byte budget must be between 1024 and 8 * 1024 * 1024")
     with ledger.worker_lock():
