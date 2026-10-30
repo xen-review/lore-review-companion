@@ -24,10 +24,10 @@ files, source snapshots and nested repositories are not part of these commits.
   and approval digests are preserved, and new ranges use a version-2 envelope.
 - C03 `DONE`: decoded mail now preserves quoted blocks and following remarks;
   exact range resolution (C04) is also verified. Versioned delivery is next.
-- C05 `IN PROGRESS`: native quote-to-range queue, evidence preview, approval,
+- C05 `DONE`: native quote-to-range queue, evidence preview, approval,
   delivery and replay are verified, including imported-author per-patch effects.
   Explicit publication/queue/delivery CLI commands and exact email-to-inline
-  thread replies are verified; isolated whole-workflow acceptance remains. No runtime
+  thread replies and isolated whole-workflow acceptance pass. No runtime
   b4 parser is needed for native replies.
 - C02 `DONE`: exact local b4/liblore sources are installed and fingerprinted;
   real offline assembly and read-only draft checks passed.
@@ -66,8 +66,10 @@ files, source snapshots and nested repositories are not part of these commits.
   bounded worker rounds. Review-only settings and identity are rechecked; only
   worker-enrolled effects deliver, scheduling is durable and failures latch.
 - Historical sample publications remain background evidence only; the current
-  baseline is 346 tests, with only the live-server acceptance test skipped
-  when the pinned real-b4 opt-ins are enabled.
+  baseline is 347 tests, 345 passing with two server opt-ins skipped when real
+  pinned b4 is enabled. The separate real-Forgejo workflow and hosted Python
+  3.11/3.12/3.13 matrix pass. V01/V02 and technical R01 are complete; L01 blocks
+  distribution, and P01-P05 separately track production rollout.
 
 ## Discovery
 
@@ -99,7 +101,7 @@ installed versions, historical commits and current tests are B01, not assumed.
 | C02 | DONE | B04 | Verified b4 0.17.dev0/liblore 0.10.1 combined source fingerprint; same-interpreter offline assembly pins revision, disables trailers/partial rerolls and checks ordered patch content/count. 12 focused tests pass including real local b4. |
 | C03 | DONE | B04 | Added deterministic quoted-block extraction with depth/headers/source offsets, remarks and conservative signature/trailer boundaries. 13 mail-parser tests pass, including nested/trimmed and MIME/CRLF cases. Full message remains canonical. |
 | C04 | DONE | C03 | Exact contiguous same-file/side range matching added separately from legacy Anchor. All 13 anchor tests pass; full context disambiguates repeated lines, while mixed/disjoint/headerless/renamed/ambiguous cases fail closed. |
-| C05 | IN PROGRESS | C01, C04, F04 | Exact assembled patch mapping, version-3 imported conversation/review/thread-reply queue and digest-approved CLI delivery are tested. Exact parent quotes bind accepted comment IDs and body hashes, including nested replies; missing/ambiguous parents remain unresolved. Source/quote/diff identity is revalidated; changed pins/targets cause zero POSTs, response loss replays the same key, and legacy effects cannot silently change authorship. Queue 38/client 21 tests pass; isolated full workflow acceptance remains. |
+| C05 | DONE | C01, C04, F04 | Exact assembled patch mapping, version-3 imported conversation/review/thread-reply queue and digest-approved CLI delivery are tested. Exact parent quotes bind accepted comment IDs and body hashes, including nested replies; missing/ambiguous parents remain unresolved. Source/quote/diff identity is revalidated; changed pins/targets cause zero POSTs, response loss replays the same key, and legacy effects cannot silently change authorship. Isolated real-Forgejo/b4 workflow and full 347-test regression pass. |
 
 ## Forgejo Extension
 
@@ -128,9 +130,9 @@ revision state here; do not stage them into a companion commit.
 
 | ID | Status | Depends On | Step And Acceptance Gate |
 | --- | --- | --- | --- |
-| V01 | TODO | C05, F06, S04 | Isolated Forgejo fixture covers multi-patch V1/V2, reviewers, late replies, old/new ranges, chronology, identity collisions, duplicate-ID conflicts and crash-after-accept retries. Correct objects exactly once, no mail/draft leakage/shared SSH changes. |
-| V02 | TODO | V01 | Focused authorization/account-security regression and desktop/mobile browser checks. Run touched Python/Go suites, formatting/lint and Swagger generation. Record actual results and residual limitations. |
-| R01 | IN PROGRESS | V02 | Finish independent installation, API/auth/operations, migration/backup/recovery, sanitized service templates and CI. Commit and push tested topics in both repositories under the current authorization. Package distribution is separately blocked by L01. |
+| V01 | DONE | C05, F06, S04 | Real isolated Forgejo/b4 workflow covers two-patch V1/V2, distinct reviewers, late nested replies, old/new historical ranges behind head, chronology, duplicate-ID/hash conflict and accepted-response loss. Actual worker delivers only enrolled new effects and restarts without duplication; importer/participant private drafts, manual pending effects and upstream refs remain unchanged. Unavailable ancestry queues nothing. Component collision/isolation cases also pass. |
+| V02 | DONE | V01 | Eight import API cases pass (26.903s), as do affected security/model/service/converter/migration packages. Prior seven ordinary review cases and desktop/mobile screenshot/overflow checks pass. Hostile provenance is escaped. Formatting, locale/usage lint, diagnostics and structured Swagger checks pass; all existing paths/models retained. Generator needs bounded memory; existing unrelated warnings remain. |
+| R01 | DONE | V02 | Wheel installed in a fresh environment outside checkout; console/module entry points and pip check pass. Source/wheel builds retain legal context, dependency pins and operational inputs without runtime/operator state; packaging omission repaired by explicit manifest. Upgrade/backup/restore instructions and inert service templates documented. Hosted CI passes Python 3.11/3.12/3.13. Both repositories' topics committed/pushed; no public package release or upstream PR. Distribution clearance is separately blocked by L01. |
 | L01 | BLOCKED | B02 | The snapshot's rights holder must establish authorship, third-party provenance and an applicable license grant. No evidence is currently available. See the explicit distribution status in ORIGIN; do not invent a license or publish a package release. |
 
 ## Production Rollout
@@ -143,8 +145,8 @@ post historical pending effects implicitly, or use a production DB for tests.
 
 | ID | Status | Depends On | Step And Acceptance Gate |
 | --- | --- | --- | --- |
-| P01 | TODO | V02 | Inspect the exact running process/service, configuration, database/storage and repository paths without exposing secrets. Verify free space and a restorable private backup of configuration, DB, repositories and any companion ledger/state. Record rollback and stop conditions before writes. |
-| P02 | TODO | P01 | Build the tested Forgejo tip with sqlite/sqlite_unlock_notify and the temporary Go cache. Stop only the identified instance, preserve the old binary, apply migrations through normal startup, restart and verify health/version/logs. Restore backup rather than downgrade a migrated DB if rollback is necessary. |
+| P01 | IN PROGRESS | V02 | Exact manually launched instance, work path, local SQLite/storage and health identified without exposing secrets. About 327 MiB of local data and 3.4 GiB free permit a private cold backup. Backup/restore rehearsal and rollback gates must pass before migration. |
+| P02 | IN PROGRESS | P01 | Candidate built successfully with sqlite/sqlite_unlock_notify, temporary Go cache and bounded memory; embedded commit is 09401fd3c6. Running instance remains cff8e8831a. Preserve old executable, stop only the identified instance, apply normal startup migrations and verify health/version/logs after P01. Never downgrade a migrated DB. |
 | P03 | TODO | P02 | Provision separate least-privilege Git and repository-selected review-import tokens into private files, without displaying them. Verify integration account access and source-bound grant; configure review-only settings only after checking existing work. Never put tokens in Git, policy, command arguments or logs. |
 | P04 | TODO | P03, R01 | Install the independently tested companion environment and protected config/state. Review exact source/base/destinations/budgets; run read-only planning, enable an expiring local policy plus explicit server unattended grant, then execute one bounded round. Verify actual authorship, ranges, refs and absence of notifications. |
 | P05 | TODO | P04 | Install/enable the user timer only after the bounded round succeeds. Verify restart/replay, revocation, incident latch, monitoring and backup/restore instructions; record deployed versions and residual blockers without claiming full historical coverage. |
@@ -170,6 +172,29 @@ post historical pending effects implicitly, or use a production DB for tests.
   for imported authorship/provenance, range context, reload and responsive fit.
 - Live tests always need a deliberately isolated fixture and separate opt-in.
   Do not post previously pending effects or migrate operational ledgers.
+
+## Published Topic Chain
+
+All branches are pushed to the operator's Forgejo fork, not submitted upstream.
+Each branch starts at the preceding topic; the last includes all changes:
+
+| Branch | Commit | Topic |
+| --- | --- | --- |
+| lore-review/01-managed-participants | 00baaabdd3 | Non-login participant registry and account/credential isolation. |
+| lore-review/02-scoped-grants | d024a9d4df | Explicit scopes, source/owner-bound grants and transfer revocation. |
+| lore-review/03-canonical-imports | 8c6df383fc | Immutable PR/review/reply imports, chronology, audits and API. |
+| lore-review/04-provenance-views | 32062dbac7 | Web/read-API provenance and generated schemas. |
+| lore-review/05-import-acceptance | 09401fd3c6 | Security/isolation and actual companion-to-Forgejo acceptance. |
+
+Companion acceptance implementation is `088caa8`; source archive correction is
+`3200a88`. Documentation/policy authority was recorded in `2098719`. The full
+source suite passed after the implementation commits: 347 run, 345 passed,
+two deliberate server skips, 15.187s with real pinned b4. The separate eight-case
+Forgejo gate includes the actual API/Git/b4/worker workflow. Hosted workflow
+41051094904 passed all three Python versions; packaging commit CI also passed.
+Wheel installation, pip dependency check and explicit source/wheel content
+assertions passed. None of this evidence implies production rollout or license
+clearance. Existing operator files and both source snapshots remain untouched.
 
 ## Deferred Backlog
 

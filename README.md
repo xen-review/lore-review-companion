@@ -16,9 +16,9 @@ replies are also tested. Participant-authored PR creation with pinned refs is
 tested as well. Imported conversation/review/reply queue and approved outbox delivery
 and publication are available as Python APIs and explicit CLI commands;
 bounded read-only coordination and explicitly authorized unattended rounds are available.
-Native exact multiline
-quote matching and versioned range delivery are implemented and tested locally;
-whole-workflow acceptance remains pending. Read [PLAN.md](PLAN.md) and [LEDGER.md](LEDGER.md)
+Native exact multiline quote matching and versioned range delivery pass the
+isolated real-Forgejo/b4 workflow, including V1/V2, late replies and bounded
+worker replay. Production rollout is tracked separately. Read [PLAN.md](PLAN.md) and [LEDGER.md](LEDGER.md)
 for scope, current results, and next steps.
 
 ## Install
@@ -68,7 +68,8 @@ an operational database as a test fixture. Remote PR/comment publication is
 separately gated by write flags and reviewed plan digests. Do not enable the
 old live-test opt-ins against a real instance.
 
-Whole-workflow acceptance and release handoff are still pending. Stock Forgejo
+Isolated whole-workflow acceptance passes; public distribution remains blocked
+by the unresolved source license. Stock Forgejo
 does not provide the scoped participant-import endpoints. Existing legacy
 publication paths still use an integration account; no administrator/Sudo
 credential is required or recommended for the companion.
@@ -280,6 +281,31 @@ state/config directories and provision read-only local source access before
 installation. They request no privilege escalation or SSH-key changes. A failed
 round is not automatically restarted; periodic invocations still honor the latch.
 
+## Production Upgrade And Recovery
+
+Identify the exact process, binary, configuration, database and all storage
+paths first. Check space and current health. Preserve the running executable
+before replacing it, then stop only that instance and take a private cold
+backup of configuration and all data/repositories. Retain companion ledger and
+worker state together if they already exist. Validate archive integrity and
+SQLite integrity, and rehearse restoration into a private scratch directory.
+An on-host rollback snapshot is not a substitute for off-host disaster recovery.
+
+Build the tested Forgejo commit with `make TAGS="sqlite sqlite_unlock_notify" build`.
+Start with the original work path/configuration, allow normal startup migrations,
+then check health, version and migration records before enabling imports. Never
+run the old binary against a migrated database: stop the new instance and restore
+the pre-migration configuration, complete data snapshot and old binary together
+if rollback is needed. Keep failed-upgrade evidence separately for inspection.
+
+Provision separate repository-selected Git and import tokens directly into
+owner-only files; never show their values or put them in shell arguments. Verify
+the integration account, target repository, source grant and trusted base. Check
+existing work before changing review-only settings. A read-only plan must pass
+before an explicit expiring policy is enabled. Run and inspect one bounded round
+before enabling the user timer. Disable the timer and revoke the grant to stop
+future work; inspect uncertainty before clearing any incident latch.
+
 ## Develop And Test
 
 With the package installed in the virtual environment:
@@ -291,14 +317,28 @@ env -u LORE_GITEA_ACCEPTANCE -u LORE_GITEA_ACCEPTANCE_DELETIONS \
 ```
 
 For the inline-only delivery slice, use `-p test_forge_comments.py` instead.
-The default suite uses synthetic mail and fake API transports. Three optional
-tests require explicit opt-in: one disposable server and two real-b4 checks.
+The default suite uses synthetic mail and fake API transports. Four optional
+tests require explicit opt-in: the legacy disposable-server test, the new
+isolated Forgejo workflow and two real-b4 checks.
 Do not copy private mail or operational ledgers into this repository.
+
+From the parent Forgejo checkout, the full real workflow is selected with:
+
+```sh
+FORGEJO_REVIEW_IMPORT_COMPANION_PYTHON="$PWD/lore-review-companion/.venv/bin/python" \
+  GOCACHE=/tmp/forgejo-review-go-cache \
+  make 'test-sqlite#TestAPIReviewImport' TAGS='sqlite sqlite_unlock_notify' TEST_LOGGER=file
+```
+
+This wrapper creates private fixture-only tokens and disables mail/SSH in the
+disposable instance. Do not set `LORE_FORGEJO_IMPORT_FIXTURE` to production data.
+The verified local suite is 347 tests: 345 pass and two server opt-ins skip
+when real b4 is enabled. Hosted offline CI also passes Python 3.11/3.12/3.13.
 
 Runtime modules live in `lore_review_companion/`; tests live in `tests/`.
 Update the ledger with actual checks and limitations, then commit each verified
-topic separately. The operator handles pushing; no automatic push is part of
-the workflow.
+topic separately. The operator authorized pushes to both configured remotes;
+the Forgejo topic chain is recorded in the ledger. No upstream PR is opened.
 
 ## Compatibility And Provenance
 

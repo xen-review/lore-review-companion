@@ -1,6 +1,7 @@
 # Lore Review Companion: Implementation Plan
 
-Status: implementation starting. Updated: 2026-10-29.
+Status: implementation and isolated acceptance verified; production rollout
+in progress, distribution-license clearance blocked. Updated: 2026-10-30.
 
 This is living documentation. [LEDGER.md](LEDGER.md) records task status,
 dependencies, acceptance criteria, checks, and implementation commits. Update it
@@ -173,8 +174,10 @@ existing inline conversation only when source ancestry and mappings prove it.
    subjects. Commit verified companion steps in small topic-based commits.
 5. Keep Forgejo changes in the parent fork and reference their tests/files from
    this ledger. Do not claim the companion commit contains parent-fork changes.
-6. Do not push. The operator owns publication and remote management. Do not
-   rewrite history or commit unrelated changes, private state, or credentials.
+6. Under the operator's 2026-10-30 authorization, commit and push both
+  repositories in tested topics. Forgejo uses incremental stacked branches,
+  with every topic in the final branch. Do not rewrite history or commit
+  unrelated changes, private state, or credentials.
 
 ## Safety And Completion
 
@@ -182,8 +185,11 @@ Keep existing conflict stops, worker locking, immutable revision membership,
 uncertain-write reconciliation, and explicit association policies. Renaming must
 not rewrite delivered effect IDs, markers, or old commit-generation identities.
 
-No existing services, operational ledgers, source mirrors, pending live writes,
-or SSH files are changed by this plan. Disposable fixtures need independent
+Production build, backup, restart/migration, scoped credential provisioning and
+review-only deployment are now explicitly authorized and tracked as P01-P05.
+Do not silently adopt historical pending writes or change shared SSH files.
+Back up the exact instance before migration and stop on failed safety gates.
+Disposable fixtures need independent
 HOME, database, repository and SSH roots, outbound mail disabled/captured,
 `DISABLE_SSH=true`, and `SSH_CREATE_AUTHORIZED_KEYS_FILE=false`.
 
