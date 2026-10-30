@@ -5,8 +5,9 @@ Forgejo repository, starting with `xen-devel` on lore.kernel.org. The companion
 is deterministic Python software; it does not require a runtime LLM.
 
 **Status:** an independently packaged prototype, based on the previous bridge.
-Scoped Forgejo participant/import APIs and multiline quote matching are still
-planned, not implemented. Read [PLAN.md](PLAN.md) and [LEDGER.md](LEDGER.md)
+Scoped Forgejo participant/import APIs are still planned. Native exact multiline
+quote matching and versioned range delivery are implemented and tested locally;
+per-patch imported-author server acceptance remains pending. Read [PLAN.md](PLAN.md) and [LEDGER.md](LEDGER.md)
 for scope, current results, and next steps.
 
 ## Install
@@ -20,8 +21,9 @@ python3 -m venv .venv
 ```
 
 The package installs the NNTP compatibility dependency on Python 3.13 or later.
-b4 is an external optional runtime for patch assembly and the current quoted-
-reply adapter; it is not automatically installed here. Pinning and validating
+b4 is an external runtime for patch assembly and the optional legacy quoted-
+reply adapter; native reply matching does not need b4. It is not automatically
+installed here. Pinning and validating
 one supported b4 installation is tracked under C02. Installing an arbitrary b4
 version is not sufficient for its private alpha review interfaces.
 
@@ -49,6 +51,13 @@ This repository is not ready for unattended deployment. It does not yet provide
 the proposed scoped participant-import endpoints in stock Forgejo. Existing
 publication paths still use an integration account; no administrator/Sudo
 credential is required or recommended for the companion.
+
+New `queue-comments` operations use native quote blocks unless `--b4-python`
+explicitly selects legacy extraction. Range queueing and delivery require an
+explicitly verified `--max-inline-lines` capability (default 1). The current
+Forgejo checkout supports 50 selected lines. Plans bind this limit; changing it
+requires approval again. Existing legacy inline effects are not automatically
+duplicated or migrated to the new parser.
 
 ## Develop And Test
 

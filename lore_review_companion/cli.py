@@ -388,7 +388,8 @@ def main(argv: list[str] | None = None) -> int:
     queue.add_argument("--pull-index", type=int, required=True)
     queue.add_argument("--series-key", required=True)
     queue.add_argument("--revision", type=int, required=True)
-    queue.add_argument("--b4-python", required=True)
+    queue.add_argument("--b4-python", help="Use the legacy pinned b4 single-line parser instead of native quote blocks")
+    queue.add_argument("--max-inline-lines", type=int, default=1, help="Explicitly supported Forgejo range limit; default single-line only")
     queue.add_argument("--limit", type=int, default=1000, help="Maximum related replies queued per batch")
     queue.add_argument("--cursor", help="Continue a previous --related reply batch")
     queue.add_argument("--inbox-url", default="https://lore.kernel.org/xen-devel/")
@@ -416,6 +417,7 @@ def main(argv: list[str] | None = None) -> int:
     deliver.add_argument("--limit", type=int, default=100)
     deliver.add_argument("--token-env", default="LORE_GITEA_TOKEN")
     deliver.add_argument("--allow-inline-writes", action="store_true")
+    deliver.add_argument("--max-inline-lines", type=int, default=1, help="Explicitly supported Forgejo range limit; bound to approval")
     deliver.add_argument("--retry-uncertain", action="store_true")
     deliver.add_argument("--write", action="store_true")
     deliver.add_argument("--approve", help="Approval digest from the reviewed comment plan")
@@ -770,7 +772,7 @@ def main(argv: list[str] | None = None) -> int:
                     args.branch, args.reviewer_email, b4_python=args.b4_python,
                 )
             elif args.command == "queue-comments":
-                publisher = ForgeCommentPublisher(api, args.owner, args.repo)
+                publisher = ForgeCommentPublisher(api, args.owner, args.repo, max_inline_lines=args.max_inline_lines)
                 if args.related:
                     result = queue_archive_replies(
                         ledger, publisher, args.pull_index, args.series_key, args.revision,
@@ -791,7 +793,7 @@ def main(argv: list[str] | None = None) -> int:
                     raise ValueError("--allow-inline-writes applies only to inline delivery")
                 publisher = ForgeCommentPublisher(
                     api, args.owner, args.repo, write_enabled=args.write,
-                    allow_inline_writes=args.allow_inline_writes,
+                    allow_inline_writes=args.allow_inline_writes, max_inline_lines=args.max_inline_lines,
                 )
                 event_type = "ISSUE_COMMENT" if args.kind == "conversation" else "INLINE_COMMENT"
                 if args.write:

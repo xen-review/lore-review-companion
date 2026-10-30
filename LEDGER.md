@@ -17,14 +17,15 @@ No automatic pushes. Forgejo changes belong to the separate parent repository.
   Focused publisher and neighboring queue tests passed.
 - B04 `DONE`: neutral adapters, package layout, console/module entry points,
   install documentation and offline CI configuration are verified locally.
-- C01 `IN PROGRESS`: schema setup is transactional; legacy schema 18/21/22
-  payloads survive reopening unchanged. Versioned range payloads follow.
+- C01 `DONE`: schema setup is transactional; legacy schema 18/21/22 payloads
+  and approval digests are preserved, and new ranges use a version-2 envelope.
 - C03 `DONE`: decoded mail now preserves quoted blocks and following remarks;
   exact range resolution (C04) is also verified. Versioned delivery is next.
-- C05 `IN PROGRESS`: version-2 range delivery validates source hashes and
-  complete comparison snapshots, with explicitly configured range limits.
+- C05 `IN PROGRESS`: native quote-to-range queue, evidence preview, approval,
+  delivery and replay are verified. Per-patch imported-author live integration
+  still depends on F04; no runtime b4 parser is needed for native replies.
 - Historical sample publications remain background evidence only; the current
-  baseline is 295 synthetic tests, with 3 explicitly reported skips.
+  baseline is 317 tests, with 3 explicitly reported integration skips.
 
 ## Discovery
 
@@ -52,11 +53,11 @@ installed versions, historical commits and current tests are B01, not assumed.
 
 | ID | Status | Depends On | Step And Acceptance Gate |
 | --- | --- | --- | --- |
-| C01 | IN PROGRESS | B04 | Atomic schema setup and schema 18/21/22 payload preservation tested (43 ledger tests pass). Versioned range/parser/import payload contracts remain. |
+| C01 | DONE | B04 | Atomic schema setup, rollback, read-only reopen and schema 18/21/22 payload preservation tested. Version-2 ranges preserve source/parser/time/comparison evidence; legacy approval digests unchanged. Future server import mappings belong to F03/F04. |
 | C02 | TODO | B04 | Pin one b4 runtime/entrypoint; explicit offline revision assembly without added trailers or partial rerolls. Verify membership/counts; no network, user-checkout mutation, or private draft publication. |
 | C03 | DONE | B04 | Added deterministic quoted-block extraction with depth/headers/source offsets, remarks and conservative signature/trailer boundaries. 13 mail-parser tests pass, including nested/trimmed and MIME/CRLF cases. Full message remains canonical. |
 | C04 | DONE | C03 | Exact contiguous same-file/side range matching added separately from legacy Anchor. All 13 anchor tests pass; full context disambiguates repeated lines, while mixed/disjoint/headerless/renamed/ambiguous cases fail closed. |
-| C05 | IN PROGRESS | C01, C02, C04; F04 for live integration | Publisher/outbox support version-2 ranges, source hashes, base/merge-base snapshots and approval-bound limits. 30 publisher and 31 legacy queue tests pass; native extraction-to-delivery integration follows. |
+| C05 | IN PROGRESS | C01, C04; F04 for per-patch live integration | Native parse-to-API range pipeline passes 34 queue and 30 publisher tests, including response-loss/replay, source hashes, comparison snapshots, capability-bound approval and legacy migration refusal. Per-patch imported-author acceptance remains F04. |
 
 ## Forgejo Extension
 
@@ -293,3 +294,24 @@ Bring them into scope only through an explicit decision.
   synthetic transports and live opt-ins disabled. Tests cover range replay,
   source-hash mismatch, stale base, limits and legacy digest compatibility.
 - Commit subject: `feat: deliver versioned ranges with approval-bound evidence`.
+
+### 2026-10-30: C01/C05 Native Range Queue Integration
+
+- New reply queues default to deterministic native quote blocks. Explicit
+  `--b4-python` retains the legacy single-line path. Both queueing and delivery
+  expose `--max-inline-lines` with a conservative default of 1; deployments
+  explicitly select the verified supported limit (50 on this Forgejo build).
+- Each range retains parser version, complete quote/headers, source offsets,
+  raw-mail hash, source URL/time quality and pinned PR comparison. Existing
+  full-reply payloads/effect keys remain compatible. Native continuation
+  cursors bind the range limit; legacy cursors retain their original shape.
+- A message with legacy inline effects is not silently reprocessed under a
+  new parser: a separate reviewed migration is required to prevent duplicate
+  excerpts. New source-message effects are deterministic and replay-safe.
+- Immediate/adjacent checks: 34 queue tests and 30 publisher tests passed. Full
+  current-source offline suite: 317 run, 314 passed, 3 skips. Fixed two fixture
+  connection resource warnings; all 43 ledger tests then passed with resource
+  warnings promoted to errors. No operational ledger or API writes were used.
+- The native path is independent of b4's review parser. b4 pinning is still
+  required for patch assembly (C02), not for deterministic quote matching.
+- Commit subject: `feat: queue native multiline reviews with replay-safe evidence`.

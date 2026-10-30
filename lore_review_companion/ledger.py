@@ -2409,6 +2409,14 @@ class Ledger:
                 raise DeliveryStateConflict("Queued delivery already has a different payload")
             return int(row["id"])
 
+    def has_legacy_inline_effects(self, message_id: str, destination: str) -> bool:
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT payload FROM outbox WHERE message_id = ? AND destination = ? AND event_type = 'INLINE_COMMENT'",
+                (_normalize_message_id(message_id), destination),
+            )
+            return any(json.loads(row[0]).get("payload_version", 1) != 2 for row in rows)
+
     def pending(
         self, limit: int = 100, *, destination: str | None = None, event_type: str | None = None,
         after_id: int = 0, delivery_ids: tuple[int, ...] | None = None,

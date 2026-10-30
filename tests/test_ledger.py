@@ -110,14 +110,14 @@ class LedgerTests(unittest.TestCase):
 
     def test_unsupported_schema_does_not_create_or_modify_tables(self):
         path = Path(self.tempdir.name) / "future.sqlite3"
-        with sqlite3.connect(path) as connection:
+        with closing(sqlite3.connect(path)) as connection:
             connection.executescript(
                 "CREATE TABLE schema_version (version INTEGER NOT NULL);"
                 "INSERT INTO schema_version VALUES (999);"
             )
         with self.assertRaisesRegex(RuntimeError, "Unsupported ledger schema"):
             Ledger(path)
-        with sqlite3.connect(path) as connection:
+        with closing(sqlite3.connect(path)) as connection:
             self.assertEqual(connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall(), [
                 ("schema_version",),
             ])

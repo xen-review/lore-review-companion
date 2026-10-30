@@ -16,7 +16,7 @@ from lore_review_companion.b4_adapter import B4ReviewError, extract_quoted_comme
 from lore_review_companion.forge_api import ForgeAPIError
 from lore_review_companion.forge_comments import ForgeCommentPublisher, StaleAnchorError, quote_untrusted_text
 from lore_review_companion.ledger import Ledger
-from lore_review_companion.mail_parser import ParsedMessage
+from lore_review_companion.mail_parser import ParsedMessage, extract_quoted_remarks
 from lore_review_companion.outbox import comment_destination
 from lore_review_companion.series import discover_series
 from lore_review_companion.threads import ThreadMatch, match_thread_replies
@@ -51,7 +51,9 @@ class DraftQueueSummary:
     diagnostic: str | None
 
 
-def _stable_pull_diff(publisher: ForgeCommentPublisher, pull_index: int, expected_head: str) -> str:
+def _stable_pull_comparison(
+    publisher: ForgeCommentPublisher, pull_index: int, expected_head: str,
+) -> tuple[str, tuple[str, str, str]]:
     path = f"{publisher.repository_path}/pulls/{pull_index}"
 
     def snapshot() -> tuple[str, str, str]:
@@ -74,9 +76,13 @@ def _stable_pull_diff(publisher: ForgeCommentPublisher, pull_index: int, expecte
     if snapshot() != before:
         raise StaleAnchorError("PR changed while its diff was being read")
     try:
-        return diff.decode("utf-8")
+        return diff.decode("utf-8"), before
     except UnicodeDecodeError as error:
         raise ValueError("PR diff is not valid UTF-8") from error
+
+
+def _stable_pull_diff(publisher: ForgeCommentPublisher, pull_index: int, expected_head: str) -> str:
+    return _stable_pull_comparison(publisher, pull_index, expected_head)[0]
 
 
 def _validate_inbox_url(inbox_url: str) -> None:
@@ -102,7 +108,7 @@ def queue_thread_reply(
     pull_index: int,
     match: ThreadMatch,
     *,
-    b4_python: str,
+    b4_python: str | None = None,
     inbox_url: str = "https://lore.kernel.org/xen-devel/",
 ) -> ReplyQueueSummary:
     """Retain the complete reply and queue only uniquely resolved inline excerpts."""
@@ -114,7 +120,7 @@ def queue_thread_reply(
 
 def _queue_thread_reply(
     ledger: Ledger, publisher: ForgeCommentPublisher, pull_index: int, match: ThreadMatch, *,
-    b4_python: str, inbox_url: str,
+    b4_python: str | None, inbox_url: str,
 ) -> ReplyQueueSummary:
     message = match.message
     if message.kind != "reply" or not message.message_id:
@@ -146,7 +152,7 @@ def _queue_thread_reply(
 
 def _queue_verified_thread_reply(
     ledger: Ledger, publisher: ForgeCommentPublisher, pull_index: int, match: ThreadMatch, head_commit: str, *,
-    b4_python: str, inbox_url: str,
+    b4_python: str | None, inbox_url: str,
 ) -> ReplyQueueSummary:
     message = match.message
     message_id = message.message_id
@@ -183,23 +189,49 @@ def _queue_verified_thread_reply(
         return ReplyQueueSummary(conversation_id, 0, 0)
 
     try:
-        comments = extract_quoted_comments(message.body_text, python_executable=b4_python)
+        comments = (
+            extract_quoted_remarks(message.body_text) if b4_python is None
+            else extract_quoted_comments(message.body_text, python_executable=b4_python)
+        )
     except B4ReviewError as error:
         return ReplyQueueSummary(conversation_id, 0, 0, str(error))
     if not comments:
         return ReplyQueueSummary(conversation_id, 0, 0)
+    if b4_python is None and ledger.has_legacy_inline_effects(message_id, destination):
+        return ReplyQueueSummary(
+            conversation_id, 0, len(comments),
+            "Legacy inline effects exist for this message; parser migration requires a separate reviewed plan",
+        )
     try:
-        index = DiffIndex(_stable_pull_diff(publisher, pull_index, head_commit))
+        diff, comparison = _stable_pull_comparison(publisher, pull_index, head_commit)
+        index = DiffIndex(diff)
     except (ForgeAPIError, StaleAnchorError, ValueError) as error:
         return ReplyQueueSummary(conversation_id, 0, len(comments), str(error))
 
     inline_count = unresolved = 0
     for position, comment in enumerate(comments):
-        anchor = index.resolve(asdict(comment))
+        anchor = (
+            index.resolve_quote(comment, max_lines=publisher.max_inline_lines) if b4_python is None
+            else index.resolve(asdict(comment))
+        )
         if anchor is None or not comment.text.strip():
             unresolved += 1
             continue
         identity = json.dumps(asdict(comment), sort_keys=True, separators=(",", ":")).encode("utf-8")
+        if b4_python is None:
+            effect_key = f"inline-v2:{position}:{hashlib.sha256(identity).hexdigest()}"
+            evidence = {
+                **asdict(comment), "parser": "quote-blocks-v1", "source_sha256": message.sha256,
+                "source_url": source_url,
+                "source_time": asdict(message.time_estimate) if message.time_estimate else None,
+            }
+            ledger.enqueue(message_id, "INLINE_COMMENT", destination, effect_key, {
+                "payload_version": 2, "body": f"{prefix}\n\n{quote_untrusted_text(comment.text)}",
+                "head_commit": head_commit, "base_commit": comparison[1], "merge_base": comparison[2],
+                "anchor": asdict(anchor), "thread": thread, "evidence": evidence,
+            })
+            inline_count += 1
+            continue
         effect_key = f"inline:{position}:{hashlib.sha256(identity).hexdigest()}"
         inline_body = f"{prefix}\n\n{quote_untrusted_text(comment.text)}"
         ledger.enqueue(
@@ -215,7 +247,7 @@ def _queue_verified_thread_reply(
 def queue_thread_replies(
     ledger: Ledger, publisher: ForgeCommentPublisher, pull_index: int,
     series_key: str, revision: int, messages: Iterable[ParsedMessage], *,
-    b4_python: str, inbox_url: str = "https://lore.kernel.org/xen-devel/",
+    b4_python: str | None = None, inbox_url: str = "https://lore.kernel.org/xen-devel/",
 ) -> ReplyBatchSummary:
     """Queue matching replies against the previously published series membership."""
     with ledger.worker_lock():
@@ -226,7 +258,7 @@ def queue_thread_replies(
 
 def queue_archive_replies(
     ledger: Ledger, publisher: ForgeCommentPublisher, pull_index: int,
-    series_key: str, revision: int, *, b4_python: str,
+    series_key: str, revision: int, *, b4_python: str | None = None,
     inbox_url: str = "https://lore.kernel.org/xen-devel/", limit: int = 1000, cursor: str | None = None,
 ) -> ReplyBatchSummary:
     """Find and queue bounded stored replies while holding the ingestion lock."""
@@ -243,6 +275,8 @@ def queue_archive_replies(
             "series_key": series_key, "revision": revision, "snapshot": status.link_index_last_rowid,
             "inbox_url": inbox_url, "b4_python": b4_python,
         }
+        if b4_python is None:
+            scope["max_inline_lines"] = publisher.max_inline_lines
         after = ""
         if cursor is not None:
             if not isinstance(cursor, str) or not cursor or len(cursor) > 8192:
@@ -350,7 +384,7 @@ def queue_b4_drafts(
 
 def _queue_thread_replies(
     ledger: Ledger, publisher: ForgeCommentPublisher, pull_index: int,
-    series_key: str, revision: int, messages: Iterable[ParsedMessage], *, b4_python: str, inbox_url: str,
+    series_key: str, revision: int, messages: Iterable[ParsedMessage], *, b4_python: str | None, inbox_url: str,
     selected_ids: frozenset[str] | None = None, stored: bool = False,
 ) -> ReplyBatchSummary:
     _validate_inbox_url(inbox_url)

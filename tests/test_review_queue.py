@@ -4,6 +4,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from dataclasses import replace
 from unittest.mock import patch
 
 from lore_review_companion.b4_adapter import B4ReviewError, DraftSnapshot, LocalDraft, QuotedComment
@@ -51,6 +52,67 @@ class ReviewQueueTests(unittest.TestCase):
             QuotedComment("src/sample.c", 0, "Which duplicate?", "duplicate();"),
             QuotedComment(":message", 0, "General note.", None),
         )
+
+    def test_native_multiline_parse_queue_preview_deliver_and_replay(self):
+        reply = parse_message(
+            b"From: Reviewer <reviewer@example.test>\nMessage-ID: <native@example.test>\n"
+            b"Subject: Re: patch\nIn-Reply-To: <patch@example.test>\n\n"
+            b"> --- a/src/sample.c\n> +++ b/src/sample.c\n"
+            b"> +new_call();\n> +duplicate();\nPlease change both lines.\n"
+        )
+        match = replace(self.match, message=reply)
+        publisher = ForgeCommentPublisher(self.api, "xen-project", "xen", max_inline_lines=50)
+        result = queue_thread_reply(self.ledger, publisher, 7, match)
+        before = self.ledger.pending()
+        self.assertEqual((result.inline_count, result.unresolved_count), (1, 0))
+        self.assertEqual(before[1].payload["anchor"], {
+            "path": "src/sample.c", "old_position": 0, "new_position": 11, "extra_lines_count": 1,
+        })
+        self.assertEqual(before[1].payload["evidence"]["source_sha256"], reply.sha256)
+        self.assertEqual(before[1].payload["evidence"]["quote"][-2:], ["+new_call();", "+duplicate();"])
+        queue_thread_reply(self.ledger, publisher, 7, match)
+        self.assertEqual(self.ledger.pending(), before)
+        writer = ForgeCommentPublisher(
+            self.api, "xen-project", "xen", write_enabled=True, allow_inline_writes=True, max_inline_lines=50,
+        )
+        plan = plan_comment_delivery(self.ledger, writer, 7, "INLINE_COMMENT")
+        self.transport.fail_after_inline_write = True
+        self.assertEqual(deliver_approved_comments(
+            self.ledger, writer, 7, "INLINE_COMMENT", approved_digest=plan.approval_digest(),
+        ).delivered, 1)
+        queue_thread_reply(self.ledger, publisher, 7, match)
+        self.assertEqual([item.event_type for item in self.ledger.pending()], ["ISSUE_COMMENT"])
+        self.assertEqual(len(self.transport.reviews), 1)
+
+    def test_cli_native_queue_does_not_require_b4_and_passes_range_limit(self):
+        arguments = [
+            "queue-comments", "--related", "--ledger", str(self.ledger.path), "--api-url", self.api.base_url,
+            "--owner", "xen-project", "--repo", "xen", "--pull-index", "7",
+            "--series-key", self.match.series_key, "--revision", str(self.match.revision), "--max-inline-lines", "50",
+        ]
+        with (
+            patch.dict("os.environ", {"LORE_GITEA_TOKEN": "synthetic-token"}),
+            patch("lore_review_companion.cli.ForgeAPI", return_value=self.api),
+            patch("lore_review_companion.cli.queue_archive_replies") as queue,
+            patch("lore_review_companion.cli.asdict", return_value={}), redirect_stdout(StringIO()),
+        ):
+            self.assertEqual(main(arguments), 0)
+        self.assertIsNone(queue.call_args.kwargs["b4_python"])
+        self.assertEqual(queue.call_args.args[1].max_inline_lines, 50)
+
+    @patch("lore_review_companion.review_queue.extract_quoted_comments")
+    def test_native_parser_will_not_duplicate_existing_legacy_effects(self, extract):
+        extract.return_value = self.comments
+        reply = parse_message(
+            b"Message-ID: <native@example.test>\nSubject: Re: patch\nIn-Reply-To: <patch@example.test>\n\n"
+            b"> --- a/src/sample.c\n> +++ b/src/sample.c\n> +new_call();\nRemark\n"
+        )
+        match = replace(self.match, message=reply)
+        queue_thread_reply(self.ledger, self.publisher, 7, match, b4_python="legacy")
+        before = self.ledger.pending()
+        result = queue_thread_reply(self.ledger, self.publisher, 7, match)
+        self.assertIn("migration requires", result.diagnostic)
+        self.assertEqual(self.ledger.pending(), before)
 
     @patch("lore_review_companion.review_queue.extract_quoted_comments")
     def test_queues_complete_conversation_and_only_unique_inline_match(self, extract):
