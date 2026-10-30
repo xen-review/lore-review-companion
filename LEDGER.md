@@ -19,6 +19,8 @@ No automatic pushes. Forgejo changes belong to the separate parent repository.
   install documentation and offline CI configuration are verified locally.
 - C01 `IN PROGRESS`: schema setup is transactional; legacy schema 18/21/22
   payloads survive reopening unchanged. Versioned range payloads follow.
+- C03 `DONE`: decoded mail now preserves quoted blocks and following remarks;
+  exact range resolution (C04) is next.
 - Historical sample publications remain background evidence only; the current
   baseline is 295 synthetic tests, with 3 explicitly reported skips.
 
@@ -50,7 +52,7 @@ installed versions, historical commits and current tests are B01, not assumed.
 | --- | --- | --- | --- |
 | C01 | IN PROGRESS | B04 | Atomic schema setup and schema 18/21/22 payload preservation tested (43 ledger tests pass). Versioned range/parser/import payload contracts remain. |
 | C02 | TODO | B04 | Pin one b4 runtime/entrypoint; explicit offline revision assembly without added trailers or partial rerolls. Verify membership/counts; no network, user-checkout mutation, or private draft publication. |
-| C03 | TODO | B04 | Preserve complete quote blocks, depth, source offsets and remarks. Cover nested/trimmed quotes, MIME/CRLF, blank lines, preambles, signatures/trailers and multiple comments without losing text. |
+| C03 | DONE | B04 | Added deterministic quoted-block extraction with depth/headers/source offsets, remarks and conservative signature/trailer boundaries. 13 mail-parser tests pass, including nested/trimmed and MIME/CRLF cases. Full message remains canonical. |
 | C04 | TODO | C03 | Resolve exact contiguous file/side ranges using pinned patch comparisons. Full context disambiguates repeated last lines; ambiguous/mixed/disjoint cases fail closed and configured range limits apply. |
 | C05 | TODO | C01, C02, C04; F04 for live integration | Propagate ranges/evidence through queues, previews, approvals and API. Synthetic parse-to-fake-API tests cover replay, stale snapshots, multiple followups and uncertain writes with stable source-effect keys. |
 
@@ -244,3 +246,16 @@ Bring them into scope only through an explicit decision.
   Fork ownership is available to the operator's integration identity, but the
   running companion will use scoped write access rather than Owners/admin.
 - Commit subject: `fix: roll back failed ledger schema initialization`.
+
+### 2026-10-30: C03 Quoted Block Extraction
+
+- Added `QuotedRemark` and `extract_quoted_remarks` alongside MIME parsing.
+  Unlike the private b4 single-line representation, they retain full quoted
+  blocks, diff headers, depth and decoded-body line offsets for the subsequent
+  remark. Multiple paragraphs/followups retain source order.
+- Extraction does not select an anchor or lose the original full message.
+  Preambles and ambiguous/non-diff material remain in the conversation; known
+  review trailers and signature blocks are not turned into inline prose.
+- Immediate check: all 13 mail-parser tests passed, including nested/trimmed
+  markers, changed quote depth, multiple remarks and quoted-printable CRLF.
+- Commit subject: `feat: preserve quoted review blocks and source evidence`.

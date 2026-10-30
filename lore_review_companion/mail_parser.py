@@ -93,6 +93,77 @@ class ParsedMessage:
     time_estimate: MessageTimeEstimate | None
 
 
+@dataclass(frozen=True)
+class QuotedRemark:
+    quote: tuple[str, ...]
+    headers: tuple[str, ...]
+    text: str
+    quote_depth: int
+    quote_start: int
+    remark_start: int
+    remark_end: int
+
+
+def extract_quoted_remarks(body: str) -> tuple[QuotedRemark, ...]:
+    """Retain quoted context and following remarks without choosing code anchors."""
+    if not isinstance(body, str):
+        raise ValueError("A decoded text body is required")
+    results = []
+    quoted = []
+    remarks = []
+    headers_by_depth: dict[int, list[str]] = {}
+    depth = quote_start = 0
+
+    def flush() -> None:
+        nonempty = [(number, text) for number, text in remarks if text.strip()]
+        if quoted and nonempty:
+            results.append(QuotedRemark(
+                tuple(quoted), tuple(headers_by_depth.get(depth, ())),
+                "\n".join(text for _, text in remarks).strip(), depth, quote_start,
+                nonempty[0][0], nonempty[-1][0],
+            ))
+        remarks.clear()
+
+    for number, line in enumerate(body.splitlines(), start=1):
+        if not line.startswith(">"):
+            trailer = _TRAILER_RE.fullmatch(line)
+            if line == "-- " or (trailer and trailer.group("name").lower() in {
+                "reviewed-by", "acked-by", "tested-by", "signed-off-by", "reported-by",
+                "suggested-by", "co-developed-by",
+            }):
+                flush()
+                break
+            if quoted:
+                remarks.append((number, line))
+            continue
+
+        prefix_end = current_depth = 0
+        while prefix_end < len(line) and line[prefix_end] == ">":
+            current_depth += 1
+            prefix_end += 1
+            if prefix_end < len(line) and line[prefix_end] == " ":
+                prefix_end += 1
+        if any(text.strip() for _, text in remarks) or current_depth != depth:
+            flush()
+            quoted.clear()
+        remarks.clear()
+        depth = current_depth
+        if not quoted:
+            quote_start = number
+        raw = line[prefix_end:]
+        headers = headers_by_depth.setdefault(depth, [])
+        if raw.startswith("diff --git "):
+            headers[:] = [raw]
+        elif raw.startswith(("--- ", "+++ ")):
+            header_kind = raw[:4]
+            headers[:] = [header for header in headers if not header.startswith(header_kind)]
+            headers.append(raw)
+        quoted.append(raw)
+    else:
+        flush()
+    return tuple(results)
+
+
 def _message_id(header: object | None) -> str | None:
     if header is None:
         return None

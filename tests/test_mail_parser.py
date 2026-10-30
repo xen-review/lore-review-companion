@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from lore_review_companion.mail_parser import nntp_matches_source, parse_message, parse_mbox
+from lore_review_companion.mail_parser import extract_quoted_remarks, nntp_matches_source, parse_message, parse_mbox
 
 
 def make_message(
@@ -27,6 +27,53 @@ def make_message(
 
 
 class MailParserTests(unittest.TestCase):
+    def test_quote_blocks_keep_multiple_lines_remarks_and_source_offsets(self):
+        body = (
+            "Opening note.\n\n> diff --git a/x.c b/x.c\n> --- a/x.c\n> +++ b/x.c\n"
+            "> @@ -1,2 +1,2 @@\n> +first();\n> +second();\n\n"
+            "Please check both lines.\n\nAnother paragraph.\n"
+            "> +third();\nAnother remark.\n"
+        )
+        first, second = extract_quoted_remarks(body)
+        self.assertEqual(first.quote[-2:], ("+first();", "+second();"))
+        self.assertEqual(first.text, "Please check both lines.\n\nAnother paragraph.")
+        self.assertEqual((first.quote_depth, first.quote_start, first.remark_start, first.remark_end), (1, 3, 10, 12))
+        self.assertEqual(second.quote, ("+third();",))
+        self.assertEqual(second.headers, first.headers)
+        self.assertEqual(second.text, "Another remark.")
+
+    def test_nested_and_trimmed_quotes_keep_diff_markers(self):
+        for prefix in (">> ", "> > "):
+            with self.subTest(prefix=prefix):
+                body = f"{prefix}--- a/x.c\n{prefix}+++ b/x.c\n{prefix} old\n{prefix}-gone\nRemark\n"
+                (remark,) = extract_quoted_remarks(body)
+                self.assertEqual(remark.quote, ("--- a/x.c", "+++ b/x.c", " old", "-gone"))
+                self.assertEqual(remark.quote_depth, 2)
+                self.assertEqual(remark.text, "Remark")
+
+    def test_signatures_and_review_trailers_are_not_inline_remarks(self):
+        for suffix in ("-- \nReviewer signature", "Reviewed-by: Person <p@example.test>"):
+            with self.subTest(suffix=suffix):
+                (remark,) = extract_quoted_remarks("> +line\nPlease change this.\n\n" + suffix)
+                self.assertEqual(remark.text, "Please change this.")
+                self.assertEqual(extract_quoted_remarks("> +line\n\n" + suffix), ())
+
+    def test_quote_depth_changes_do_not_mix_source_blocks(self):
+        (remark,) = extract_quoted_remarks(">> +older\n> +current\nOnly current.\n")
+        self.assertEqual(remark.quote, ("+current",))
+        self.assertEqual(remark.quote_depth, 1)
+        self.assertEqual(extract_quoted_remarks("No quoted code.\n"), ())
+
+    def test_quoted_printable_crlf_mail_is_decoded_before_quote_extraction(self):
+        raw = make_message(
+            subject="Re: change", headers="Content-Transfer-Encoding: quoted-printable\n",
+            body="> +value =3D 1;\nCheck this.\n",
+        ).replace(b"\n", b"\r\n")
+        parsed = parse_message(raw)
+        (remark,) = extract_quoted_remarks(parsed.body_text)
+        self.assertEqual(remark.quote, ("+value = 1;",))
+        self.assertEqual(remark.text, "Check this.")
+
     def test_nntp_equivalence_only_accepts_known_transport_transformations(self):
         source = b"Message-ID: <mail@example.test>\nSubject: a folded\n subject\n\nbody\n"
         article = (
