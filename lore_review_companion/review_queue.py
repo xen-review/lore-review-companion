@@ -408,7 +408,7 @@ def queue_imported_reply(
             },
         )
         remarks = extract_quoted_remarks(message.body_text)
-        if not remarks or match.patch_message_id is None:
+        if not remarks:
             return ReplyQueueSummary(conversation, 0, 0)
         parents = message.in_reply_to or message.references[-1:]
         if len(parents) != 1:
@@ -433,6 +433,8 @@ def queue_imported_reply(
                     conversation,
                     body_format,
                 )
+        if match.patch_message_id is None:
+            return ReplyQueueSummary(conversation, 0, len(remarks))
         patch = next(
             (
                 item
@@ -623,6 +625,40 @@ def _queue_imported_inline_replies(
     body_format,
 ):
     targets = accepted_inline_targets(ledger, client, destination, parent, thread)
+    ordinary_targets = None
+
+    def find_ordinary_targets():
+        found = []
+        for effect in ledger.comment_effects(parent.message_id, destination):
+            if effect.event_type != "IMPORT_CONVERSATION":
+                continue
+            if effect.payload.get("thread") != thread:
+                raise PublicationConflict(
+                    "Imported parent belongs to a different revision thread"
+                )
+            request = effect.payload["request"]
+            remote = client.lookup_operation(request["operation_key"])
+            if remote is None or remote.get("type") != "conversation":
+                continue
+            if (
+                remote.get("message_id") != parent.message_id
+                or remote.get("message_sha256") != parent.sha256
+                or type(remote.get("comment_id")) is not int
+                or remote["comment_id"] <= 0
+            ):
+                raise PublicationConflict("Imported conversation parent lookup changed")
+            if "conversation-reply" not in client.capabilities()["operations"]:
+                continue
+            authored = imported_mail_text(
+                reply_prose(parent.body_text),
+                parent.message_id,
+                client.source_url,
+                effect.payload.get("body_format"),
+                parent.from_name or parent.from_address,
+            )
+            found.append((authored, remote["comment_id"], request["body"], effect, 0))
+        return found
+
     queued = 0
     for position, remark in enumerate(remarks):
         if remark.quote_depth != 1:
@@ -634,6 +670,19 @@ def _queue_imported_inline_replies(
                 remark.quote, target[0], body_format, allow_excerpt=True
             )
         ]
+        if not candidates:
+            if ordinary_targets is None:
+                ordinary_targets = find_ordinary_targets()
+            candidates = [
+                target
+                for target in ordinary_targets
+                if quoted_parent_matches(
+                    remark.quote, target[0], body_format, allow_excerpt=True
+                )
+                and quoted_parent_matches(
+                    remark.quote, target[2], body_format, allow_excerpt=True
+                )
+            ]
         if len(candidates) != 1:
             continue
         parent_text, identifier, parent_body, parent_effect, parent_position = (
@@ -641,8 +690,22 @@ def _queue_imported_inline_replies(
         )
         if not isinstance(parent_body, str):
             raise PublicationConflict("Imported parent has no retained comment body")
+        ordinary_thread = parent_effect.event_type == "IMPORT_CONVERSATION" or (
+            parent_effect.event_type == "IMPORT_REPLY"
+            and parent_effect.payload.get("evidence", {}).get("target_kind")
+            == "conversation"
+        )
+        if (
+            ordinary_thread
+            and "conversation-reply" not in client.capabilities()["operations"]
+        ):
+            continue
         parser = (
-            "quote-blocks-v1"
+            "quote-blocks-conversation-reply-v1"
+            if parent_effect.event_type == "IMPORT_CONVERSATION"
+            else "quote-blocks-reply-excerpt-v1"
+            if ordinary_thread
+            else "quote-blocks-v1"
             if quoted_parent_matches(remark.quote, parent_text, body_format)
             else "quote-blocks-reply-excerpt-v1"
         )
@@ -662,6 +725,7 @@ def _queue_imported_inline_replies(
                 **({"body_format": body_format} if body_format is not None else {}),
                 "evidence": {
                     "parser": parser,
+                    **({"target_kind": "conversation"} if ordinary_thread else {}),
                     "source_sha256": message.sha256,
                     "remark": asdict(remark),
                     "parent_message_id": parent.message_id,

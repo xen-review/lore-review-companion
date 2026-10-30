@@ -358,6 +358,7 @@ class GiteaAPITests(unittest.TestCase):
         }
         requests = []
         inline_ids = [30, 31]
+        ordinary_reply = False
 
         def transport(request, _timeout):
             requests.append(request)
@@ -375,7 +376,7 @@ class GiteaAPITests(unittest.TestCase):
                         "importer_id": 2,
                         "participant_id": 3,
                         "comment_id": 20,
-                        "review_id": 21,
+                        "review_id": 0 if ordinary_reply else 21,
                         "code_comment_ids": [] if is_reply else inline_ids,
                         "type": "pull"
                         if is_pull
@@ -427,6 +428,17 @@ class GiteaAPITests(unittest.TestCase):
         self.assertEqual(client.import_reply(2, reply).remote_object["review_id"], 21)
         self.assertTrue(requests[1].full_url.endswith("/pulls/2/reviews"))
         self.assertTrue(requests[3].full_url.endswith("/pulls/2/replies"))
+        ordinary_reply = True
+        capabilities["operations"].append("conversation-reply")
+        self.assertEqual(
+            client.import_conversation_reply(2, reply).remote_object["review_id"], 0
+        )
+        with self.assertRaises(DeliveryUncertainError):
+            client.import_reply(2, reply)
+        capabilities["operations"].remove("conversation-reply")
+        with self.assertRaisesRegex(ValueError, "not supported"):
+            client.import_conversation_reply(2, reply)
+        ordinary_reply = False
         pull = {
             "operation_key": "series:1",
             "message_id": "cover@example.test",

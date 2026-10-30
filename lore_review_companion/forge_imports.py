@@ -171,6 +171,13 @@ class ForgeImportClient:
     ) -> ImportDeliveryResult:
         return self._import(pull_index, payload, "review-reply", "replies")
 
+    def import_conversation_reply(
+        self, pull_index: int, payload: Mapping[str, Any]
+    ) -> ImportDeliveryResult:
+        return self._import(
+            pull_index, payload, "review-reply", "replies", ordinary_reply=True
+        )
+
     def import_pull(self, payload: Mapping[str, Any]) -> ImportDeliveryResult:
         return self._import(None, payload, "pull", "pulls")
 
@@ -180,6 +187,8 @@ class ForgeImportClient:
         payload: Mapping[str, Any],
         operation: str,
         route: str,
+        *,
+        ordinary_reply: bool = False,
     ) -> ImportDeliveryResult:
         if operation != "pull" and not _positive_id(pull_index):
             raise ValueError("A positive pull request index is required")
@@ -196,6 +205,13 @@ class ForgeImportClient:
                 if operation not in capabilities["operations"]:
                     raise ValueError(
                         f"{operation} imports are not supported by this repository"
+                    )
+                if (
+                    ordinary_reply
+                    and "conversation-reply" not in capabilities["operations"]
+                ):
+                    raise ValueError(
+                        "conversation-reply imports are not supported by this repository"
                     )
             except (ForgeAPIError, ValueError) as error:
                 if attempt:
@@ -260,8 +276,10 @@ class ForgeImportClient:
                 raise DeliveryUncertainError(
                     "Forgejo returned an unconfirmed imported PR comparison"
                 )
-            if operation in ("review", "review-reply") and not _positive_id(
-                result.get("review_id")
+            if operation in ("review", "review-reply") and (
+                result.get("review_id") != 0
+                if ordinary_reply
+                else not _positive_id(result.get("review_id"))
             ):
                 raise DeliveryUncertainError(
                     "Forgejo returned an unconfirmed imported review"

@@ -95,6 +95,94 @@ class ReviewQueueTests(unittest.TestCase):
             QuotedComment(":message", 0, "General note.", None),
         )
 
+    def test_imported_reply_matches_accepted_ordinary_parent(self):
+        client = ForgeImportClient(
+            self.api,
+            "xen-project",
+            "xen",
+            source_url="https://lore.kernel.org/xen-devel/",
+        )
+        parent = parse_message(
+            b"From: Reviewer <reviewer@example.test>\n"
+            b"Message-ID: <ordinary-parent@example.test>\nSubject: Re: patch\n"
+            b"In-Reply-To: <patch@example.test>\n\n"
+            b"First point.\nSecond point.\n"
+        )
+        arguments = {
+            "patch_commits": (PatchCommit("patch@example.test", "b" * 40, "a" * 40),),
+            "patch_diffs": {},
+        }
+        queue_imported_reply(
+            self.ledger, client, 7, replace(self.match, message=parent), **arguments
+        )
+        (parent_effect,) = self.ledger.pending()
+        accepted = {
+            "type": "conversation",
+            "comment_id": 20,
+            "message_id": parent.message_id,
+            "message_sha256": parent.sha256,
+            "operation_key": parent_effect.payload["request"]["operation_key"],
+        }
+        reply = parse_message(
+            b"From: Second Reviewer <second@example.test>\n"
+            b"Message-ID: <ordinary-followup@example.test>\nSubject: Re: patch\n"
+            b"In-Reply-To: <ordinary-parent@example.test>\n\n"
+            b"> Second point.\nA reply to that point.\n"
+        )
+        capabilities = {
+            "repository_id": 1,
+            "importer_id": 5,
+            "importer_login": "mirror-bot",
+            "operations": ["conversation", "review-reply", "conversation-reply"],
+            "max_inline_lines": 50,
+        }
+        with (
+            patch.object(client, "lookup_operation", return_value=accepted),
+            patch.object(client, "capabilities", return_value=capabilities),
+        ):
+            capabilities["operations"].remove("conversation-reply")
+            unsupported = queue_imported_reply(
+                self.ledger, client, 7, replace(self.match, message=reply), **arguments
+            )
+            self.assertEqual(
+                (unsupported.inline_count, unsupported.unresolved_count), (0, 1)
+            )
+            self.assertFalse(
+                any(item.event_type == "IMPORT_REPLY" for item in self.ledger.pending())
+            )
+            capabilities["operations"].append("conversation-reply")
+            result = queue_imported_reply(
+                self.ledger, client, 7, replace(self.match, message=reply), **arguments
+            )
+            replies = [
+                item
+                for item in self.ledger.pending()
+                if item.event_type == "IMPORT_REPLY"
+            ]
+            self.assertEqual((result.inline_count, result.unresolved_count), (1, 0))
+            self.assertEqual(len(replies), 1)
+            self.assertEqual(replies[0].payload["request"]["parent_id"], 20)
+            self.assertEqual(
+                replies[0].payload["evidence"]["parent_effect_key"],
+                parent_effect.effect_key,
+            )
+            plan = plan_import_delivery(self.ledger, client, 7, "IMPORT_REPLY")
+            self.assertEqual(plan.deliveries, tuple(replies))
+            before = self.ledger.pending()
+            queue_imported_reply(
+                self.ledger, client, 7, replace(self.match, message=reply), **arguments
+            )
+            self.assertEqual(self.ledger.pending(), before)
+            capabilities["operations"].remove("conversation-reply")
+            with self.assertRaisesRegex(ValueError, "not enabled"):
+                plan_import_delivery(self.ledger, client, 7, "IMPORT_REPLY")
+            capabilities["operations"].append("conversation-reply")
+            accepted["comment_id"] = 99
+            with self.assertRaisesRegex(
+                PublicationConflict, "accepted parent operation"
+            ):
+                plan_import_delivery(self.ledger, client, 7, "IMPORT_REPLY")
+
     def test_direct_submission_conversation_formats_quotes_and_revalidates(self):
         self.ledger = Ledger(Path(self.tempdir.name) / "presentation-ledger.sqlite3")
         parent = parse_message(

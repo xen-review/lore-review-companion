@@ -151,12 +151,19 @@ threading phases remain incomplete. Detailed boundaries are in
   source-owned ordinary comments and their nested replies, with parent-body
   hash checks and idempotent replay. Integration tests cover nested replies,
   conflicting replay, wrong parent hash and unowned parents. The full scoped
-  import group and the isolated Forgejo/Git/b4 companion workflow pass; the
-  current companion does not yet generate ordinary-parent effects.
+  import group and the isolated Forgejo/Git/b4 companion workflow pass.
+- The companion now resolves exact, unique depth-one quotes against accepted
+  ordinary parent prose, carries the ordinary target kind through nested
+  replies, rechecks source, parent identity and capability during approval, and
+  uses a distinct ordinary-reply delivery response contract. Existing inline
+  effects retain their prior identities and behavior. The isolated real-server
+  workflow verifies a three-level ordinary discussion, API parent IDs and
+  idempotent replay. The companion suite passes 371 tests with four skips;
+  neither this change nor the Forgejo threading commits are deployed yet.
 - These commits are not deployed. The remaining migration/backfill, tree UI and
-  reply controls, missing-parent rendering, companion ordinary-parent mapping,
-  browser verification and a new production PR remain unimplemented. Generated
-  API documentation also needs updating. Do not treat the API field or stored
+  reply controls, missing-parent rendering, further ambiguity tests, browser
+  verification and a new production PR remain unimplemented. Generated API
+  documentation also needs updating. Do not treat the API field or stored
   relationship as a completed threading feature.
 
 | Phase | Status | Dependency | Completion evidence |
@@ -165,7 +172,7 @@ threading phases remain incomplete. Detailed boundaries are in
 | T02: Forgejo parent model and user API | IN PROGRESS | T01 | Persist parent edges, safely backfill imported inline parents without confusing cross-references, and test normal-user permissions and invalid/cyclic targets. |
 | T03: scoped import API | IN PROGRESS | T02 | Support non-inline and nested parents with capability negotiation, source provenance, parent-content checks, conflict handling and replay. |
 | T04: tree presentation | TODO | T02 | Show nested reply trees and per-comment controls in timeline and inline views; verify desktop/mobile, accessibility, ordering and permalinks. |
-| T05: remark-level companion | TODO | T03, T04 | Map each unique quoted parent across inline and non-inline remarks; verify separate stable effects, complete-mail fallback, ambiguity, replay and real-server/browser behavior. |
+| T05: remark-level companion | IN PROGRESS | T03, T04 | Ordinary and nested reply matching, capability checks and real-server replay pass; ambiguity and rendered browser behavior still require verification. |
 
 ## Earlier Rollout Notes
 

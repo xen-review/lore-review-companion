@@ -857,6 +857,126 @@ class ImportedWorkflowAcceptanceTests(unittest.TestCase):
                 ).delivered,
                 1,
             )
+            ordinary_root = parse_message(
+                (
+                    "From: Reviewer <reviewer@example.test>\nMessage-ID: <ordinary-root@example.test>\n"
+                    "Subject: Re: first\n"
+                    f"In-Reply-To: <{first_patch.message_id}>\n\n"
+                    "This is a general concern about the change.\n"
+                ).encode()
+            )
+            ledger.record_parsed_message(ordinary_root)
+            queue_imported_replies(
+                ledger,
+                reader,
+                pull_index,
+                revision.series_key,
+                revision.revision,
+                checkout,
+                (ordinary_root,),
+            )
+            ordinary_plan = plan_import_delivery(
+                ledger, writer, pull_index, "IMPORT_CONVERSATION"
+            )
+            self.assertEqual(len(ordinary_plan.deliveries), 1)
+            root_request = ordinary_plan.deliveries[0].payload["request"]
+            self.assertEqual(
+                deliver_approved_imports(
+                    ledger,
+                    writer,
+                    pull_index,
+                    "IMPORT_CONVERSATION",
+                    approved_digest=ordinary_plan.approval_digest(),
+                ).delivered,
+                1,
+            )
+            root_comment = reader.lookup_operation(root_request["operation_key"])[
+                "comment_id"
+            ]
+            parent_message, parent_comment = ordinary_root, root_comment
+            ordinary_replies = []
+            for message_id, quote, answer in (
+                (
+                    "ordinary-child@example.test",
+                    "This is a general concern about the change.",
+                    "I agree with that concern.",
+                ),
+                (
+                    "ordinary-grandchild@example.test",
+                    "I agree with that concern.",
+                    "I will address it in the next revision.",
+                ),
+            ):
+                child = parse_message(
+                    (
+                        f"From: Another Reviewer <another@example.test>\nMessage-ID: <{message_id}>\n"
+                        f"Subject: Re: first\nIn-Reply-To: <{parent_message.message_id}>\n\n"
+                        f"> {quote}\n{answer}\n"
+                    ).encode()
+                )
+                ledger.record_parsed_message(child)
+                queued_child = queue_imported_replies(
+                    ledger,
+                    reader,
+                    pull_index,
+                    revision.series_key,
+                    revision.revision,
+                    checkout,
+                    (child,),
+                )
+                self.assertEqual(
+                    (queued_child.inline_count, queued_child.unresolved_count), (1, 0)
+                )
+                child_plan = plan_import_delivery(
+                    ledger, writer, pull_index, "IMPORT_REPLY"
+                )
+                self.assertEqual(len(child_plan.deliveries), 1)
+                child_request = child_plan.deliveries[0].payload["request"]
+                self.assertEqual(child_request["parent_id"], parent_comment)
+                self.assertEqual(
+                    child_plan.deliveries[0].payload["evidence"]["target_kind"],
+                    "conversation",
+                )
+                self.assertEqual(
+                    deliver_approved_imports(
+                        ledger,
+                        writer,
+                        pull_index,
+                        "IMPORT_REPLY",
+                        approved_digest=child_plan.approval_digest(),
+                    ).delivered,
+                    1,
+                )
+                accepted_child = writer.import_conversation_reply(
+                    pull_index, child_request
+                ).remote_object
+                self.assertEqual(accepted_child["review_id"], 0)
+                ordinary_replies.append((accepted_child["comment_id"], parent_comment))
+                queue_imported_replies(
+                    ledger,
+                    reader,
+                    pull_index,
+                    revision.series_key,
+                    revision.revision,
+                    checkout,
+                    (child,),
+                )
+                self.assertEqual(
+                    plan_import_delivery(
+                        ledger, writer, pull_index, "IMPORT_REPLY"
+                    ).deliveries,
+                    (),
+                )
+                parent_message, parent_comment = child, accepted_child["comment_id"]
+            ordinary = ForgeAPI(api_url)
+            issue_comments = ordinary.request_json(
+                f"repos/{owner}/{repo}/issues/{pull_index}/comments"
+            )
+            for comment_id, parent_id in ordinary_replies:
+                comment = next(
+                    item for item in issue_comments if item["id"] == comment_id
+                )
+                self.assertEqual(comment["discussion_parent_id"], parent_id)
             (root_effect,) = [
                 effect
                 for effect in ledger.comment_effects(

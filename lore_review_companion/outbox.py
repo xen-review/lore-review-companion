@@ -202,7 +202,11 @@ def _assert_import_payload(
         if (
             not isinstance(evidence, dict)
             or evidence.get("parser")
-            not in ("quote-blocks-v1", "quote-blocks-reply-excerpt-v1")
+            not in (
+                "quote-blocks-v1",
+                "quote-blocks-reply-excerpt-v1",
+                "quote-blocks-conversation-reply-v1",
+            )
             or evidence.get("source_sha256") != source.sha256
             or len(parents) != 1
             or evidence.get("parent_message_id") != parents[0]
@@ -216,7 +220,8 @@ def _assert_import_payload(
             effect
             for effect in ledger.comment_effects(parents[0], delivery.destination)
             if effect.effect_key == evidence.get("parent_effect_key")
-            and effect.event_type in ("IMPORT_REVIEW", "IMPORT_REPLY")
+            and effect.event_type
+            in ("IMPORT_REVIEW", "IMPORT_REPLY", "IMPORT_CONVERSATION")
         ]
         if len(effects) != 1:
             raise PublicationConflict("Imported reply parent effect is unavailable")
@@ -230,9 +235,31 @@ def _assert_import_payload(
         if evidence.get("parent_operation_key") != parent_request["operation_key"]:
             raise PublicationConflict("Imported reply parent operation changed")
         position = evidence["parent_position"]
+        ordinary = evidence["parser"] == "quote-blocks-conversation-reply-v1"
+        if ordinary != (parent.event_type == "IMPORT_CONVERSATION"):
+            raise PublicationConflict("Imported reply parent type changed")
+        ordinary_thread = ordinary or (
+            parent.event_type == "IMPORT_REPLY"
+            and parent.payload.get("evidence", {}).get("target_kind") == "conversation"
+        )
+        if evidence.get("target_kind") != ("conversation" if ordinary_thread else None):
+            raise PublicationConflict("Imported reply parent kind changed")
+        parent_source = ledger.messages_by_id((parents[0],))[0]
         parent_remarks = (
             parent.payload["evidence"]["remarks"]
             if parent.event_type == "IMPORT_REVIEW"
+            else [
+                {
+                    "text": imported_mail_text(
+                        reply_prose(parent_source.body_text),
+                        parent_source.message_id,
+                        source_url,
+                        parent.payload.get("body_format"),
+                        parent_source.from_name or parent_source.from_address,
+                    )
+                }
+            ]
+            if ordinary
             else [parent.payload["evidence"]["remark"]]
         )
         comments = (
@@ -253,7 +280,11 @@ def _assert_import_payload(
             or position >= len(comments)
             or remark is None
             or (
-                evidence["parser"] == "quote-blocks-reply-excerpt-v1"
+                evidence["parser"]
+                in (
+                    "quote-blocks-reply-excerpt-v1",
+                    "quote-blocks-conversation-reply-v1",
+                )
                 and remark.quote_depth != 1
             )
             or (
@@ -261,9 +292,23 @@ def _assert_import_payload(
                     remark.quote,
                     comments[position]["body"]
                     if parent.payload.get("body_format") == "mail-text-v4"
+                    and not ordinary
                     else parent_remarks[position]["text"],
                     body_format,
-                    allow_excerpt=evidence["parser"] == "quote-blocks-reply-excerpt-v1",
+                    allow_excerpt=evidence["parser"]
+                    in (
+                        "quote-blocks-reply-excerpt-v1",
+                        "quote-blocks-conversation-reply-v1",
+                    ),
+                )
+                or (
+                    ordinary
+                    and not quoted_parent_matches(
+                        remark.quote,
+                        comments[position]["body"],
+                        body_format,
+                        allow_excerpt=True,
+                    )
                 )
                 or request.get("body")
                 != imported_mail_text(
@@ -524,7 +569,11 @@ def plan_import_delivery(
             )
             position = evidence["parent_position"]
             expected_type = (
-                "review" if parent.event_type == "IMPORT_REVIEW" else "review-reply"
+                "review"
+                if parent.event_type == "IMPORT_REVIEW"
+                else "conversation"
+                if parent.event_type == "IMPORT_CONVERSATION"
+                else "review-reply"
             )
             if (
                 remote is None
@@ -538,6 +587,29 @@ def plan_import_delivery(
                 raise PublicationConflict(
                     "Imported reply target no longer matches the accepted parent operation"
                 )
+            if evidence.get("target_kind") == "conversation":
+                if "conversation-reply" not in capabilities["operations"]:
+                    raise ValueError("Ordinary conversation replies are not enabled")
+            if evidence["parser"] == "quote-blocks-conversation-reply-v1":
+                targets = accepted_inline_targets(
+                    ledger,
+                    client,
+                    destination,
+                    parent_source,
+                    delivery.payload["thread"],
+                )
+                if any(
+                    quoted_parent_matches(
+                        tuple(evidence["remark"]["quote"]),
+                        target[0],
+                        delivery.payload.get("body_format"),
+                        allow_excerpt=True,
+                    )
+                    for target in targets
+                ):
+                    raise PublicationConflict(
+                        "Imported conversation reply now matches an inline parent"
+                    )
             if evidence["parser"] == "quote-blocks-reply-excerpt-v1":
                 targets = accepted_inline_targets(
                     ledger,
@@ -669,7 +741,14 @@ def deliver_approved_imports(
                 method = {
                     "IMPORT_CONVERSATION": client.import_conversation,
                     "IMPORT_REVIEW": client.import_review,
-                    "IMPORT_REPLY": client.import_reply,
+                    "IMPORT_REPLY": (
+                        client.import_conversation_reply
+                        if delivery.payload["evidence"].get("target_kind")
+                        == "conversation"
+                        else client.import_reply
+                    )
+                    if event_type == "IMPORT_REPLY"
+                    else client.import_reply,
                 }[event_type]
                 result = method(pull_index, delivery.payload["request"])
                 if result.planned:
