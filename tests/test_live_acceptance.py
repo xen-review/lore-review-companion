@@ -770,9 +770,9 @@ class ImportedWorkflowAcceptanceTests(unittest.TestCase):
                     "From: Reviewer <reviewer@example.test>\nMessage-ID: <acceptance-review@example.test>\nSubject: Re: first\n"
                     f"In-Reply-To: <{first_patch.message_id}>\nReceived: from relay; Thu, 22 Oct 2026 15:30:00 +0200\n\n"
                     "> --- a/review-fixture.c\n> +++ b/review-fixture.c\n> -old 1\n> -old 2\n> -old 3\n"
-                    "Please keep the removed context.\n\n"
+                    "Please keep the removed context.\nIt explains the old behavior.\n\n"
                     "> --- a/review-fixture.c\n> +++ b/review-fixture.c\n> +new 1\n> +new 2\n> +new 3\n"
-                    "Please clarify the new context.\n"
+                    "Please clarify the new context.\nThe name needs an explanation.\n"
                 ).encode()
             )
             ledger.record_parsed_message(root)
@@ -878,7 +878,9 @@ class ImportedWorkflowAcceptanceTests(unittest.TestCase):
                 self.assertEqual(comment["extra_lines_count"], 2)
             response = parse_message(
                 b"From: Second Reviewer <second@example.test>\nMessage-ID: <acceptance-response@example.test>\nSubject: Re: first\n"
-                b"In-Reply-To: <acceptance-review@example.test>\n\n> Please keep the removed context.\nAgreed with that context.\n"
+                b"In-Reply-To: <acceptance-review@example.test>\n\n"
+                b">> -old 1\n> Please keep the removed context. \nAgreed with that context.\n\n"
+                b"> The name needs an explanation.\nI will clarify the name.\n"
             )
             ledger.record_parsed_message(response)
             queued = queue_imported_replies(
@@ -890,13 +892,16 @@ class ImportedWorkflowAcceptanceTests(unittest.TestCase):
                 checkout,
                 (response,),
             )
-            self.assertEqual((queued.inline_count, queued.unresolved_count), (1, 0))
+            self.assertEqual((queued.inline_count, queued.unresolved_count), (2, 0))
             reply_plan = plan_import_delivery(
                 ledger, writer, pull_index, "IMPORT_REPLY"
             )
             self.assertEqual(
-                reply_plan.deliveries[0].payload["request"]["parent_id"],
-                accepted_root["code_comment_ids"][0],
+                [
+                    item.payload["request"]["parent_id"]
+                    for item in reply_plan.deliveries
+                ],
+                accepted_root["code_comment_ids"],
             )
             self.assertEqual(
                 deliver_approved_imports(
@@ -906,12 +911,12 @@ class ImportedWorkflowAcceptanceTests(unittest.TestCase):
                     "IMPORT_REPLY",
                     approved_digest=reply_plan.approval_digest(),
                 ).delivered,
-                1,
+                2,
             )
             comments = ordinary.request_json(
                 f"{reviews_path}/{accepted_root['review_id']}/comments"
             )
-            self.assertEqual(len(comments), 3)
+            self.assertEqual(len(comments), 4)
             (imported_response,) = [
                 comment
                 for comment in comments
