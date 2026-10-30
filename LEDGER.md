@@ -29,6 +29,10 @@ No automatic pushes. Forgejo changes belong to the separate parent repository.
 - F01 `DONE`: explicit import scopes, repository/source grants, authorization
   gates and transfer revocation are implemented in the Forgejo worktree and
   verified with model/scope tests and two isolated API integration tests.
+- F02 `DONE`: repository/source-isolated participant profiles are created
+  transactionally without account adoption. Shared login/session, reset,
+  OAuth/linking, credentials, email changes, Sudo and admin edits are blocked
+  and covered by affected-package tests and an isolated API case.
 - Historical sample publications remain background evidence only; the current
   baseline is 317 tests, with 3 explicitly reported integration skips.
 
@@ -72,7 +76,7 @@ revision state here; do not stage them into a companion commit.
 | ID | Status | Depends On | Step And Acceptance Gate |
 | --- | --- | --- | --- |
 | F01 | DONE | B01 | Opt-in import scopes (not implied by legacy all), source-bound repository grants, current token-reduced code/PR write checks and owner-bound/transfer revocation implemented. Scope/model tests and authorization/real-transfer API tests pass. Object/author checks follow with F03/F04 operations. |
-| F02 | TODO | F01 | Atomic managed participant registry/profile creation and shared non-login invariants. Race-safe collisions cannot adopt existing users; no login/reset/OAuth/key/token/promotion/admin-edit bypass or participant mail. |
+| F02 | DONE | F01 | Atomic repository/source participant registry, deterministic collision-safe names, inactive/restricted/passwordless private-email profiles. Replay revalidates safety flags; shared authentication, sessions, OAuth/linking, reset, tokens/SSH/GPG, password/email changes, Sudo, activation/admin edits and inactive cleanup are guarded. Rollback, collision, affected-package and isolated API tests pass. |
 | F03 | TODO | F01, F02 | First vertical slice: conversation import onto existing PR with mapped author, importer provenance, source time/hash and unique operation key. Atomic rollback; replay returns same IDs; differing payload conflicts. |
 | F04 | TODO | F03 | Add submitter-authored PRs, explicit non-voting COMMENT reviews/ranges and reviewer replies. Reuse services; verify exact patch parent context and no draft theft. Extend before-commit API only when a test proves necessary. |
 | F05 | TODO | F03, F04 | Restricted original timestamp initialization/correction with audited actual import/edit time and source quality. Validate UTC/unknown/invalid times; no duplicate notifications or silent reauthoring of legacy content. |
@@ -365,3 +369,32 @@ Bring them into scope only through an explicit decision.
   passed. Generated schema adds only the three new operations/types; generator
   warnings concern existing unrelated definitions. Live binary not restarted.
 - Commit subject: `docs: record tested Forgejo import authorization contract`.
+
+### 2026-10-30: F02 Managed Participant Isolation
+
+- Changes remain uncommitted in the parent Forgejo worktree. Added `IsImported`
+  and a unique repository/source/email participant registry with a migration.
+  The source address remains an unverified claim, never a login credential;
+  account email is private under `review-import.invalid` with mail disabled.
+- Creation wraps the user and registry in one transaction, preserves local-part
+  case while normalizing domain case, and never adopts occupied usernames or
+  ordinary accounts. Reuse checks the persisted safety invariants and cannot
+  silently promote a profile. Failed imports roll back both records.
+- Blocked shared HTTP authentication, session/OAuth completion before key/team
+  synchronization, reset token verification and reset mail, external linking
+  and updates, password and email mutation, token/SSH/GPG issuance, ordinary
+  activation/admin edits, and post-authentication Sudo. Inactive-user cleanup
+  excludes these intentionally inactive profiles. Profile changes must use a
+  future dedicated import operation rather than ordinary account editing.
+- Full affected package checks pass for `models/user`, `models/auth`,
+  `models/asymkey`, `services/user`, `routers/common` and `routers/web/auth`;
+  `services/externalaccount` compiles and its guards are tested from auth tests.
+  Regression cases include collisions, transaction rollback, domain-case
+  replay, repository separation, unsafe reuse, successful upstream-auth
+  rejection and mail-free recovery. One test import was corrected and rerun.
+- `make 'test-sqlite#TestAPIReviewImport' TAGS='sqlite sqlite_unlock_notify'
+  TEST_LOGGER=file`: all three API tests pass (3.226 seconds with fixture
+  startup), including admin token/promotion/Sudo rejection and unchanged
+  profile flags/email. `make fmt` and editor diagnostics passed. No live
+  database/content writes or binary restart occurred.
+- Commit subject: `docs: record tested managed participant isolation`.

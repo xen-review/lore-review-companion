@@ -5,7 +5,9 @@ Forgejo repository, starting with `xen-devel` on lore.kernel.org. The companion
 is deterministic Python software; it does not require a runtime LLM.
 
 **Status:** an independently packaged prototype, based on the previous bridge.
-Scoped Forgejo participant/import APIs are still planned. Native exact multiline
+Scoped import authorization and non-login participant profiles are implemented
+and tested in the separate Forgejo worktree; content import endpoints are still
+pending. Native exact multiline
 quote matching and versioned range delivery are implemented and tested locally;
 per-patch imported-author server acceptance remains pending. Read [PLAN.md](PLAN.md) and [LEDGER.md](LEDGER.md)
 for scope, current results, and next steps.
