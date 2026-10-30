@@ -182,6 +182,25 @@ class DiffIndexTests(unittest.TestCase):
         )
         self.assertIsNone(index.resolve_segmented_quote(wrong_hunk))
 
+    def test_segmented_review_rejects_ambiguous_and_mixed_quotes(self):
+        index = DiffIndex(
+            "diff --git a/x b/x\n--- a/x\n+++ b/x\n"
+            "@@ -1 +1,2 @@\n context\n+repeat\n"
+            "@@ -5 +6,3 @@\n later\n+repeat\n+repeat\n"
+        )
+        bodies = (
+            "> --- a/x\n> +++ b/x\n>  context\n> +repeat\n"
+            "> @@ -5 +6,3 @@\n> +repeat\nRemark\n",
+            "> --- a/x\n> +++ b/x\n>  context\n> +repeat\n"
+            "> @@ -5 +6,3 @@\n> -later\n> +repeat\nRemark\n",
+            "> --- a/x\n> +++ b/other\n>  context\n> +repeat\n"
+            "> @@ -5 +6,3 @@\n>  later\n> +repeat\nRemark\n",
+        )
+        for body in bodies:
+            with self.subTest(body=body):
+                (remark,) = extract_quoted_remarks(body)
+                self.assertIsNone(index.resolve_segmented_quote(remark))
+
     def test_range_context_only_defaults_to_right_and_renames_fail_closed(self):
         (remark,) = extract_quoted_remarks(
             "> --- a/src/sample.c\n> +++ b/src/sample.c\n>  duplicate();\n>  tail();\nRemark\n",

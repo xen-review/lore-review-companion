@@ -5,9 +5,11 @@
 from __future__ import annotations
 
 import ast
+import hashlib
+import json
 import re
 from collections import defaultdict
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from typing import Iterable
 
 from lore_review_companion.mail_parser import QuotedRemark
@@ -26,6 +28,11 @@ class Anchor:
 @dataclass(frozen=True)
 class RangeAnchor(Anchor):
     extra_lines_count: int
+
+
+def segmented_review_effect_key(remark: QuotedRemark, position: int) -> str:
+    serialized = json.dumps(asdict(remark), sort_keys=True, separators=(",", ":"))
+    return f"imported-review-segment-v1:{position}:{hashlib.sha256(serialized.encode()).hexdigest()}"
 
 
 def _header_path(value: str, prefix: str) -> str:

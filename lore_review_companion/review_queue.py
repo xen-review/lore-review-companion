@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Iterable
 from urllib.parse import quote, urlsplit
 
-from lore_review_companion.anchor import DiffIndex
+from lore_review_companion.anchor import DiffIndex, segmented_review_effect_key
 from lore_review_companion.b4_adapter import (
     B4ReviewError,
     assemble_local_series,
@@ -472,29 +472,36 @@ def queue_imported_reply(
         except (ForgeAPIError, StaleAnchorError, ValueError) as error:
             return ReplyQueueSummary(conversation, 0, len(remarks), str(error))
         index = DiffIndex(diff)
-        comments, evidence = [], []
-        for remark in remarks:
+        comments, evidence, segmented = [], [], []
+        for position, remark in enumerate(remarks):
             anchor = index.resolve_quote(remark, max_lines=max_inline_lines)
+            is_segmented = anchor is None
+            if is_segmented:
+                anchor = index.resolve_segmented_quote(
+                    remark, max_lines=max_inline_lines
+                )
             if anchor is None or not remark.text.strip():
                 continue
-            comments.append(
-                {
-                    "path": anchor.path,
-                    "body": imported_mail_text(
-                        remark.text,
-                        message.message_id,
-                        client.source_url,
-                        body_format,
-                        message.from_name or message.from_address,
-                    ),
-                    "before_commit": patch.before_commit,
-                    "after_commit": patch.after_commit,
-                    "old_position": anchor.old_position,
-                    "new_position": anchor.new_position,
-                    "extra_lines_count": anchor.extra_lines_count,
-                }
-            )
-            evidence.append(asdict(remark))
+            comment = {
+                "path": anchor.path,
+                "body": imported_mail_text(
+                    remark.text,
+                    message.message_id,
+                    client.source_url,
+                    body_format,
+                    message.from_name or message.from_address,
+                ),
+                "before_commit": patch.before_commit,
+                "after_commit": patch.after_commit,
+                "old_position": anchor.old_position,
+                "new_position": anchor.new_position,
+                "extra_lines_count": anchor.extra_lines_count,
+            }
+            if is_segmented:
+                segmented.append((position, remark, comment))
+            else:
+                comments.append(comment)
+                evidence.append(asdict(remark))
         if comments:
             identity = hashlib.sha256(
                 f"{message.message_id}\0imported-review-v1".encode()
@@ -543,8 +550,58 @@ def queue_imported_reply(
                     },
                 },
             )
+        for position, remark, comment in segmented:
+            effect_key = segmented_review_effect_key(remark, position)
+            identity = hashlib.sha256(
+                f"{message.message_id}\0{effect_key}".encode()
+            ).hexdigest()
+            ledger.enqueue(
+                message.message_id,
+                "IMPORT_REVIEW",
+                destination,
+                effect_key,
+                {
+                    "payload_version": 3,
+                    "thread": thread,
+                    "max_inline_lines": max_inline_lines,
+                    **format_fields,
+                    "evidence": {
+                        "parser": "quote-blocks-segmented-v1",
+                        "source_sha256": message.sha256,
+                        "patch_message_id": patch.message_id,
+                        "patch_source_sha256": next(
+                            member.sha256
+                            for member in members
+                            if member.message_id == patch.message_id
+                        ),
+                        "patch_diff": diff,
+                        "patch_diff_sha256": hashlib.sha256(
+                            diff.encode("utf-8")
+                        ).hexdigest(),
+                        "remarks": [asdict(remark)],
+                    },
+                    "request": {
+                        **common,
+                        "operation_key": identity,
+                        "body": imported_mail_text(
+                            "",
+                            message.message_id,
+                            client.source_url,
+                            body_format,
+                            message.from_name or message.from_address,
+                        )
+                        if body_format
+                        else (message.subject or "Mail review"),
+                        "head_commit": comparison[0],
+                        "base_commit": comparison[1],
+                        "merge_base": comparison[2],
+                        "comments": [comment],
+                    },
+                },
+            )
+        inline_count = len(comments) + len(segmented)
         return ReplyQueueSummary(
-            conversation, len(comments), len(remarks) - len(comments)
+            conversation, inline_count, len(remarks) - inline_count
         )
 
 

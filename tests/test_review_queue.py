@@ -11,6 +11,7 @@ from dataclasses import replace
 from unittest.mock import patch
 from urllib.error import URLError
 
+from lore_review_companion.anchor import DiffIndex
 from lore_review_companion.b4_adapter import (
     B4ReviewError,
     DraftSnapshot,
@@ -24,7 +25,7 @@ from lore_review_companion.forge_comments import (
     imported_mail_text,
     quote_untrusted_text,
 )
-from lore_review_companion.forge_imports import ForgeImportClient
+from lore_review_companion.forge_imports import ForgeImportClient, ImportDeliveryResult
 from lore_review_companion.forge_pulls import _series_marker
 from lore_review_companion.ledger import (
     DeliveryStateConflict,
@@ -35,6 +36,7 @@ from lore_review_companion.ledger import (
 )
 from lore_review_companion.mail_parser import parse_message
 from lore_review_companion.outbox import (
+    _assert_import_payload,
     deliver_approved_comments,
     deliver_approved_imports,
     migrate_legacy_deliveries,
@@ -710,6 +712,126 @@ class ReviewQueueTests(unittest.TestCase):
             self.assertEqual(
                 main(["deliver-imports", *arguments, "--kind", "review", "--write"]), 1
             )
+
+    def test_segmented_review_adds_only_missing_remark_and_replays(self):
+        diff = (
+            "diff --git a/x b/x\n--- a/x\n+++ b/x\n"
+            "@@ -1,1 +1,2 @@\n context\n+first();\n"
+            "@@ -9,1 +10,3 @@\n later\n+log_start();\n+log_finish();\n"
+        )
+        reply = parse_message(
+            b"From: Reviewer <reviewer@example.test>\nMessage-ID: <segmented@example.test>\n"
+            b"Subject: Re: patch\nIn-Reply-To: <patch@example.test>\n\n"
+            b"> --- a/x\n> +++ b/x\n> +first();\nFirst remark.\n"
+            b"> +first();\n> @@ -9,1 +10,3 @@\n>  later\n"
+            b"> +log_start();\n> +log_finish();\nSecond remark.\n"
+        )
+        match = replace(self.match, message=reply)
+        client = ForgeImportClient(
+            self.api,
+            "xen-project",
+            "xen",
+            source_url="https://lore.kernel.org/xen-devel/",
+            write_enabled=True,
+        )
+        capabilities = {
+            "repository_id": 1,
+            "importer_id": 5,
+            "importer_login": "mirror-bot",
+            "operations": ["conversation", "review"],
+            "max_inline_lines": 50,
+        }
+        snapshot = {
+            "head_commit": "a" * 40,
+            "base_commit": "b" * 40,
+            "merge_base": "b" * 40,
+            "before_commit": "b" * 40,
+            "after_commit": "a" * 40,
+            "diff": diff,
+            "diff_sha256": hashlib.sha256(diff.encode()).hexdigest(),
+        }
+        arguments = {
+            "patch_commits": (PatchCommit("patch@example.test", "b" * 40, "a" * 40),),
+            "patch_diffs": {"patch@example.test": diff},
+        }
+        with (
+            patch.object(client, "capabilities", return_value=capabilities),
+            patch.object(client, "comparison", return_value=snapshot),
+        ):
+            with patch.object(DiffIndex, "resolve_segmented_quote", return_value=None):
+                old = queue_imported_reply(self.ledger, client, 7, match, **arguments)
+            self.assertEqual((old.inline_count, old.unresolved_count), (1, 1))
+            original = self.ledger.pending()
+            for effect in original:
+                self.ledger.begin_delivery(effect.id)
+                self.ledger.mark_delivered(effect.id)
+            result = queue_imported_reply(self.ledger, client, 7, match, **arguments)
+            self.assertEqual((result.inline_count, result.unresolved_count), (2, 0))
+            (new_effect,) = self.ledger.pending()
+            self.assertTrue(
+                new_effect.effect_key.startswith("imported-review-segment-v1:1:")
+            )
+            self.assertEqual(
+                new_effect.payload["request"]["comments"][0]["body"], "Second remark."
+            )
+            self.assertEqual(
+                new_effect.payload["request"]["comments"][0]["new_position"], 10
+            )
+            self.assertEqual(
+                new_effect.payload["request"]["comments"][0]["extra_lines_count"], 2
+            )
+            queue_imported_reply(self.ledger, client, 7, match, **arguments)
+            self.assertEqual(self.ledger.pending(), [new_effect])
+            old_review = next(
+                effect for effect in original if effect.event_type == "IMPORT_REVIEW"
+            )
+            retained = self.ledger.comment_effects(
+                reply.message_id, new_effect.destination
+            )
+            self.assertEqual(
+                next(
+                    effect for effect in retained if effect.id == old_review.id
+                ).payload,
+                old_review.payload,
+            )
+            plan = plan_import_delivery(self.ledger, client, 7, "IMPORT_REVIEW")
+            altered = json.loads(json.dumps(new_effect.payload))
+            altered["request"]["comments"][0]["new_position"] += 1
+            with self.assertRaises(PublicationConflict):
+                _assert_import_payload(
+                    self.ledger,
+                    replace(new_effect, payload=altered),
+                    source_url=client.source_url,
+                )
+            altered = json.loads(json.dumps(new_effect.payload))
+            altered["evidence"]["remarks"][0]["quote"][2] = "+changed();"
+            with self.assertRaises(PublicationConflict):
+                _assert_import_payload(
+                    self.ledger,
+                    replace(new_effect, payload=altered),
+                    source_url=client.source_url,
+                )
+            with self.assertRaises(PublicationConflict):
+                _assert_import_payload(
+                    self.ledger,
+                    replace(new_effect, effect_key="imported-review-v1"),
+                    source_url=client.source_url,
+                )
+            with patch.object(
+                client, "import_review", return_value=ImportDeliveryResult({"id": 1})
+            ) as send:
+                delivered = deliver_approved_imports(
+                    self.ledger,
+                    client,
+                    7,
+                    "IMPORT_REVIEW",
+                    approved_digest=plan.approval_digest(),
+                )
+            self.assertEqual(
+                (delivered.delivered, delivered.failed, send.call_count), (1, 0, 1)
+            )
+            queue_imported_reply(self.ledger, client, 7, match, **arguments)
+            self.assertEqual(self.ledger.pending(), [])
 
     def test_import_queue_reconstruction_checks_head_before_creating_effects(self):
         client = ForgeImportClient(

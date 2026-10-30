@@ -11,7 +11,12 @@ import re
 from dataclasses import asdict, dataclass, replace
 from contextlib import nullcontext
 
-from lore_review_companion.anchor import Anchor, DiffIndex, RangeAnchor
+from lore_review_companion.anchor import (
+    Anchor,
+    DiffIndex,
+    RangeAnchor,
+    segmented_review_effect_key,
+)
 from lore_review_companion.forge_api import ForgeAPIError, authenticated_user
 from lore_review_companion.forge_comments import (
     DeliveryResult,
@@ -97,6 +102,7 @@ def _assert_import_payload(
         if delivery.event_type == "IMPORT_CONVERSATION"
         else delivery.effect_key
         if delivery.event_type == "IMPORT_REPLY"
+        or delivery.effect_key.startswith("imported-review-segment-v1:")
         else "imported-review-v1"
     )
     expected_key = hashlib.sha256(
@@ -262,7 +268,8 @@ def _assert_import_payload(
     evidence, comments = payload.get("evidence"), request.get("comments")
     if (
         not isinstance(evidence, dict)
-        or evidence.get("parser") != "quote-blocks-v1"
+        or evidence.get("parser")
+        not in ("quote-blocks-v1", "quote-blocks-segmented-v1")
         or evidence.get("source_sha256") != source.sha256
         or not isinstance(evidence.get("patch_diff"), str)
         or len(evidence["patch_diff"]) > 8 * 1024 * 1024
@@ -298,6 +305,11 @@ def _assert_import_payload(
         raise PublicationConflict("Imported review patch source changed")
     index = DiffIndex(evidence["patch_diff"])
     remarks = extract_quoted_remarks(source.body_text)
+    segmented = evidence["parser"] == "quote-blocks-segmented-v1"
+    if (segmented and len(comments) != 1) or (
+        not segmented and delivery.effect_key != "imported-review-v1"
+    ):
+        raise PublicationConflict("Imported review effect identity is invalid")
     for retained, comment in zip(evidence["remarks"], comments, strict=True):
         remark = next(
             (
@@ -312,6 +324,16 @@ def _assert_import_payload(
             if remark is not None
             else None
         )
+        if segmented and remark is not None:
+            if anchor is not None or delivery.effect_key != segmented_review_effect_key(
+                remark, remarks.index(remark)
+            ):
+                raise PublicationConflict(
+                    "Imported segmented review effect identity changed"
+                )
+            anchor = index.resolve_segmented_quote(
+                remark, max_lines=payload["max_inline_lines"]
+            )
         if (
             anchor is None
             or not isinstance(comment, dict)
