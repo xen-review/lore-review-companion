@@ -141,9 +141,17 @@ threading phases remain incomplete. Detailed boundaries are in
   missing, cross-PR, cyclic and over-depth parent chains at creation. Focused
   SQLite model and existing-table migration tests pass. Both commits are pushed;
   neither is deployed. The migration does not yet backfill old inline replies.
-- No normal-user reply API, import extension, tree UI, companion mapping,
-  deletion policy, browser verification or new production PR is implemented by
-  these commits. Do not treat the stored field as a completed threading feature.
+- Forgejo `585e359488` adds an optional ordinary-comment parent to the existing
+  PR comment API; integration tests cover nested comments, missing and cross-PR
+  parents and anonymous requests. It does not accept inline parents. Forgejo
+  `802ebfeba8` stores dedicated parents on new imported inline replies and
+  rejects replay if a nonzero dedicated parent changes, while allowing older
+  zero-valued imports. The focused review-import integration test passes.
+- These commits are not deployed. Ordinary-comment imports, migration/backfill,
+  tree UI and reply controls, missing-parent rendering, companion mapping,
+  browser verification and a new production PR remain unimplemented. Generated
+  API documentation also needs updating. Do not treat the API field or stored
+  relationship as a completed threading feature.
 
 | Phase | Status | Dependency | Completion evidence |
 | --- | --- | --- | --- |
