@@ -50,6 +50,18 @@ def quote_untrusted_text(text: str) -> str:
     return f"{fence}text\n{text.rstrip()}\n{fence}"
 
 
+def imported_mail_text(text: str, message_id: str, source_url: str, body_format: str | None) -> str:
+    if body_format is None:
+        return quote_untrusted_text(text)
+    if body_format != "mail-text-v1":
+        raise ValueError("Unsupported imported message body format")
+    label = "lore-" + hashlib.sha256(message_id.encode()).hexdigest()[:16]
+    while f"[^{label}]" in text:
+        label += "-source"
+    footnote = f"[^{label}]\n\n[^{label}]: <{source_url.rstrip('/')}/{quote(message_id, safe='@')}/>"
+    return f"{text.rstrip()}\n\n{footnote}" if text.strip() else footnote
+
+
 def _marker(source_message_id: str, effect_key: str) -> str:
     if not source_message_id.strip() or not effect_key.strip():
         raise ValueError("source message ID and effect key must be non-empty")

@@ -14,7 +14,7 @@ from urllib.error import URLError
 from lore_review_companion.b4_adapter import B4ReviewError, DraftSnapshot, LocalDraft, QuotedComment
 from lore_review_companion.cli import main
 from lore_review_companion.forge_api import ForgeAPI
-from lore_review_companion.forge_comments import ForgeCommentPublisher
+from lore_review_companion.forge_comments import ForgeCommentPublisher, imported_mail_text, quote_untrusted_text
 from lore_review_companion.forge_imports import ForgeImportClient
 from lore_review_companion.forge_pulls import _series_marker
 from lore_review_companion.ledger import DeliveryStateConflict, Ledger, MessageConflictError, PublicationConflict, WorkerBusyError
@@ -134,6 +134,11 @@ class ReviewQueueTests(unittest.TestCase):
         self.assertEqual((result.inline_count, result.unresolved_count), (1, 0))
         self.assertEqual([item.event_type for item in before], ["IMPORT_CONVERSATION", "IMPORT_REVIEW"])
         request = before[1].payload["request"]
+        self.assertEqual(before[0].payload["body_format"], "mail-text-v1")
+        self.assertTrue(before[0].payload["request"]["body"].startswith(reply.body_text.rstrip() + "\n\n[^lore-"))
+        self.assertEqual(request["comments"][0]["body"], imported_mail_text("Please change both lines.", reply.message_id, client.source_url, "mail-text-v1"))
+        self.assertNotIn("Re: first", request["body"])
+        self.assertNotIn("```", request["comments"][0]["body"])
         self.assertEqual(request["head_commit"], "a" * 40)
         self.assertEqual(request["comments"][0]["before_commit"], "b" * 40)
         self.assertEqual(request["comments"][0]["after_commit"], "c" * 40)
@@ -267,6 +272,35 @@ class ReviewQueueTests(unittest.TestCase):
             self.assertEqual((result.inline_count, result.unresolved_count), (0, 1))
             self.assertIsNotNone(result.diagnostic)
         self.assertFalse(any(effect.event_type == "IMPORT_REPLY" for effect in self.ledger.pending()))
+
+    def test_imported_legacy_conversation_requeues_without_changing_approved_bytes(self):
+        client = ForgeImportClient(self.api, "xen-project", "xen", source_url="https://lore.kernel.org/xen-devel/")
+        source = self.match.message
+        self.ledger.record_parsed_message(source)
+        destination = self.api.base_url + client.repository_path + "#7"
+        effect_key = "imported-full-message-v1"
+        payload = {
+            "payload_version": 3,
+            "thread": {"series_key": self.match.series_key, "revision": self.match.revision,
+                       "patch_message_id": self.match.patch_message_id},
+            "request": {
+                "operation_key": hashlib.sha256(f"{source.message_id}\0{effect_key}".encode()).hexdigest(),
+                "message_id": source.message_id, "message_sha256": source.sha256,
+                "address": source.from_address, "name": source.from_name or "",
+                "source_time": source.time_estimate.timestamp if source.time_estimate else None,
+                "source_time_basis": "unverified" if source.time_estimate else "unknown",
+                "body": quote_untrusted_text(source.body_text),
+            },
+        }
+        self.ledger.enqueue(source.message_id, "IMPORT_CONVERSATION", destination, effect_key, payload)
+        original = self.ledger.pending()
+        queue_imported_reply(self.ledger, client, 7, self.match,
+                             patch_commits=(PatchCommit("patch@example.test", "b" * 40, "a" * 40),), patch_diffs={})
+        self.assertEqual(self.ledger.pending(), original)
+        capabilities = {"repository_id": 1, "importer_id": 5, "importer_login": "mirror-bot",
+                        "operations": ["conversation"], "max_inline_lines": 50}
+        with patch.object(client, "capabilities", return_value=capabilities):
+            self.assertEqual(plan_import_delivery(self.ledger, client, 7, "IMPORT_CONVERSATION").deliveries, tuple(original))
 
     def test_cli_native_queue_does_not_require_b4_and_passes_range_limit(self):
         arguments = [

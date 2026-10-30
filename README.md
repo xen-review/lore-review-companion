@@ -180,6 +180,12 @@ truncation made explicit. Ordinary issue/PR/comment/review read APIs expose the
 same `review_import` metadata and audit history under normal repository read
 permissions; no import credential is needed merely to inspect provenance.
 
+New imported conversations and inline remarks retain the original source prose
+with only a lore source footnote; the review header contains that footnote alone.
+Identity and chronology appear in the server's provenance UI, not generated
+comment narration. Existing queued or delivered effects keep their original
+rendering and request bytes so upgrades cannot invalidate replay or approval.
+
 ## Coordinated Dry Run
 
 `plan-sync` composes source recovery, exact preflight/publication and reply
@@ -342,7 +348,7 @@ FORGEJO_REVIEW_IMPORT_COMPANION_PYTHON="$PWD/lore-review-companion/.venv/bin/pyt
 
 This wrapper creates private fixture-only tokens and disables mail/SSH in the
 disposable instance. Do not set `LORE_FORGEJO_IMPORT_FIXTURE` to production data.
-The verified local suite is 348 tests: 346 pass and two server opt-ins skip
+The verified local suite is 349 tests: 347 pass and two server opt-ins skip
 when real b4 is enabled. Hosted offline CI also passes Python 3.11/3.12/3.13.
 
 Runtime modules live in `lore_review_companion/`; tests live in `tests/`.

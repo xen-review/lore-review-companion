@@ -19,7 +19,7 @@ from urllib.parse import quote, urlsplit
 from lore_review_companion.anchor import DiffIndex
 from lore_review_companion.b4_adapter import B4ReviewError, assemble_local_series, extract_quoted_comments, read_local_review_drafts
 from lore_review_companion.forge_api import ForgeAPIError
-from lore_review_companion.forge_comments import ForgeCommentPublisher, StaleAnchorError, quote_untrusted_text
+from lore_review_companion.forge_comments import ForgeCommentPublisher, StaleAnchorError, imported_mail_text, quote_untrusted_text
 from lore_review_companion.forge_imports import ForgeImportClient
 from lore_review_companion.ledger import DeliveryStateConflict, Ledger, Publication, PublicationConflict
 from lore_review_companion.mail_parser import ParsedMessage, extract_quoted_remarks
@@ -197,10 +197,14 @@ def queue_imported_reply(
             "source_time_basis": "unverified" if estimate else "unknown",
         }
         thread = {"series_key": match.series_key, "revision": match.revision, "patch_message_id": match.patch_message_id}
+        existing = ledger.comment_effects(message.message_id, destination)
+        body_format = existing[0].payload.get("body_format") if existing else "mail-text-v1"
+        format_fields = {"body_format": body_format} if body_format is not None else {}
         identity = hashlib.sha256(f"{message.message_id}\0imported-full-message-v1".encode()).hexdigest()
         conversation = ledger.enqueue(message.message_id, "IMPORT_CONVERSATION", destination, "imported-full-message-v1", {
-            "payload_version": 3, "thread": thread,
-            "request": {**common, "operation_key": identity, "body": quote_untrusted_text(message.body_text)},
+            "payload_version": 3, "thread": thread, **format_fields,
+            "request": {**common, "operation_key": identity,
+                        "body": imported_mail_text(message.body_text, message.message_id, client.source_url, body_format)},
         })
         remarks = extract_quoted_remarks(message.body_text)
         if not remarks or match.patch_message_id is None:
@@ -212,7 +216,7 @@ def queue_imported_reply(
             parent_source = ledger.messages_by_id(parents)[0]
             if parent_source.kind == "reply":
                 return _queue_imported_inline_replies(ledger, client, destination, message, parent_source, remarks,
-                                                      common, thread, conversation)
+                                                      common, thread, conversation, body_format)
         patch = next((item for item in patch_commits if item.message_id == match.patch_message_id), None)
         diff = patch_diffs.get(match.patch_message_id)
         if patch is None or not isinstance(diff, str):
@@ -242,7 +246,7 @@ def queue_imported_reply(
             if anchor is None or not remark.text.strip():
                 continue
             comments.append({
-                "path": anchor.path, "body": quote_untrusted_text(remark.text),
+                "path": anchor.path, "body": imported_mail_text(remark.text, message.message_id, client.source_url, body_format),
                 "before_commit": patch.before_commit, "after_commit": patch.after_commit,
                 "old_position": anchor.old_position, "new_position": anchor.new_position,
                 "extra_lines_count": anchor.extra_lines_count,
@@ -251,7 +255,7 @@ def queue_imported_reply(
         if comments:
             identity = hashlib.sha256(f"{message.message_id}\0imported-review-v1".encode()).hexdigest()
             ledger.enqueue(message.message_id, "IMPORT_REVIEW", destination, "imported-review-v1", {
-                "payload_version": 3, "thread": thread, "max_inline_lines": max_inline_lines,
+                "payload_version": 3, "thread": thread, "max_inline_lines": max_inline_lines, **format_fields,
                 "evidence": {
                     "parser": "quote-blocks-v1", "source_sha256": message.sha256,
                     "patch_message_id": patch.message_id,
@@ -259,7 +263,8 @@ def queue_imported_reply(
                     "patch_diff": diff, "patch_diff_sha256": hashlib.sha256(diff.encode("utf-8")).hexdigest(), "remarks": evidence,
                 },
                 "request": {
-                    **common, "operation_key": identity, "body": message.subject or "Mail review",
+                    **common, "operation_key": identity,
+                    "body": imported_mail_text("", message.message_id, client.source_url, body_format) if body_format else (message.subject or "Mail review"),
                     "head_commit": comparison[0], "base_commit": comparison[1], "merge_base": comparison[2],
                     "comments": comments,
                 },
@@ -267,7 +272,7 @@ def queue_imported_reply(
         return ReplyQueueSummary(conversation, len(comments), len(remarks) - len(comments))
 
 
-def _queue_imported_inline_replies(ledger, client, destination, message, parent, remarks, common, thread, conversation):
+def _queue_imported_inline_replies(ledger, client, destination, message, parent, remarks, common, thread, conversation, body_format):
     targets = []
     for effect in ledger.comment_effects(parent.message_id, destination):
         if effect.event_type not in ("IMPORT_REVIEW", "IMPORT_REPLY"):
@@ -309,10 +314,12 @@ def _queue_imported_inline_replies(ledger, client, destination, message, parent,
         operation_key = hashlib.sha256(f"{message.message_id}\0{effect_key}".encode()).hexdigest()
         ledger.enqueue(message.message_id, "IMPORT_REPLY", destination, effect_key, {
             "payload_version": 3, "thread": thread,
+            **({"body_format": body_format} if body_format is not None else {}),
             "evidence": {"parser": "quote-blocks-v1", "source_sha256": message.sha256, "remark": asdict(remark),
                          "parent_message_id": parent.message_id, "parent_effect_key": parent_effect.effect_key,
                          "parent_operation_key": parent_effect.payload["request"]["operation_key"], "parent_position": parent_position},
-            "request": {**common, "operation_key": operation_key, "body": quote_untrusted_text(remark.text),
+            "request": {**common, "operation_key": operation_key,
+                        "body": imported_mail_text(remark.text, message.message_id, client.source_url, body_format),
                         "parent_id": identifier, "parent_body_sha256": hashlib.sha256(parent_body.encode()).hexdigest()},
         })
         queued += 1

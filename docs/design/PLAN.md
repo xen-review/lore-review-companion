@@ -159,6 +159,13 @@ separate stable keys. Losing an inline anchor does not authorize a different
 write; conversation fallback must be a separately planned effect. Reply to an
 existing inline conversation only when source ancestry and mappings prove it.
 
+For new imported effects in this dedicated review-only repository, display the
+reviewer's original message or exact remark text with only a footnote linking
+to the source mail on lore. Do not add sender/time/tool narration or surround
+the prose with a generated code fence. Server provenance remains separate.
+Rendering is explicitly tagged; retained old effects keep their original bytes
+and operation identities rather than being silently rewritten on replay.
+
 ## Working Method
 
 1. Commit this plan and ledger before importing implementation sources.
@@ -183,7 +190,8 @@ uncertain-write reconciliation, and explicit association policies. Renaming must
 not rewrite delivered effect IDs, markers, or old commit-generation identities.
 
 Production build, backup, restart/migration, scoped credential provisioning and
-review-only deployment are now explicitly authorized and tracked as P01-P05.
+review-only deployment are now explicitly authorized and tracked as P01-P08,
+including a bounded initial population of actual Xen threads and live review.
 Do not silently adopt historical pending writes or change shared SSH files.
 Back up the exact instance before migration and stop on failed safety gates.
 Disposable fixtures need independent
