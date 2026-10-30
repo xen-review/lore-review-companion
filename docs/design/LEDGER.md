@@ -15,9 +15,35 @@ files, source snapshots and nested repositories are not part of these commits.
 
 ## Current Iteration
 
+- Inline reply excerpt follow-up: companion matching/revalidation `3e2920b` and
+  disposable Forgejo acceptance `f8a018d` are pushed. The installed wheel is
+  stamped `f8a018d1d279/test-exercise-inline-reply-excerpts-against-forgejo`.
+  Nonempty contiguous lines from the immediate depth-one quote match exactly one
+  accepted parent remark after ignoring blank lines and surrounding whitespace;
+  approval rechecks the accepted parent mapping and body hash. Existing exact
+  evidence retains its original validation and immutable operation identities.
+- Jan Beulich's retained reply
+  `a3c4926f-9e69-441b-bb4e-0f8324e17f02@suse.com` produced three approved
+  inline replies. PR 5 shows comments
+  [41](https://review-forge.be.free.or.at/xen-review/xen/pulls/5#issuecomment-41)
+  and [42](https://review-forge.be.free.or.at/xen-review/xen/pulls/5#issuecomment-42)
+  under Andrew's comment 25, and
+  [43](https://review-forge.be.free.or.at/xen-review/xen/pulls/5#issuecomment-43)
+  under his comment 40. All display Jan's original remark, author and source.
+  A message-scoped requeue created no duplicates and the reply delivery preview
+  has no pending effects. Three additional matches from a different mail were
+  previewed but not queued or delivered as part of this demonstration.
+- The clean committed suite passed 366 tests with real b4, with two optional
+  server tests skipped. The isolated Forgejo/Git/b4 import suite passed with two
+  excerpt replies to different parents. The ledger now has 27 completed effects;
+  server import records increased from 29 to 32, while notification/hook counts
+  remained 1/0. Private checkpoint `backups/20261030-inline-replies-f8a018d/`
+  retains the preceding ledger, scheduler and NNTP incident. The timer remains
+  active and the pre-existing incident remains latched.
+
 - Multi-hunk inline review follow-up: companion resolver `4e109f2` and independently
   approved segmented effects `ad21e9d` are pushed; companion acceptance fixture
-  `eec1287` and Forgejo fixture `f297f8dc90` are pushed. The installed companion
+  `eec1287` and Forgejo fixture `f297f8dc90` are pushed. The then-installed companion
   wheel is stamped `eec12875576d/test-exercise-segmented-inline-reviews-against-forgejo`.
   Every quoted segment must match its pinned patch uniquely, in hunk order, with
   exact quoted hunk headers; only the final contiguous segment is selected.
@@ -84,6 +110,19 @@ files, source snapshots and nested repositories are not part of these commits.
   check reports the concurrent series-formatting edit. Latest `uv check --no-sync`
   reports 458 diagnostics in the concurrent worktree, still a failing type gate,
   not a claimed improvement over the historical 564 baseline.
+
+## Remark-Level Threading Follow-up
+
+These phases are planned, not implemented. Detailed boundaries are in
+[PLAN.md](PLAN.md#planned-remark-level-discussion-trees).
+
+| Phase | Status | Dependency | Completion evidence |
+| --- | --- | --- | --- |
+| T01: tree contract | TODO | None | Define normal/inline parent types, chronology, deletion, nesting limits, permissions and migration behavior. |
+| T02: Forgejo parent model and user API | TODO | T01 | Persist parent edges, safely backfill imported inline parents without confusing cross-references, and test normal-user permissions and invalid/cyclic targets. |
+| T03: scoped import API | TODO | T02 | Support non-inline and nested parents with capability negotiation, source provenance, parent-content checks, conflict handling and replay. |
+| T04: tree presentation | TODO | T02 | Show nested reply trees and per-comment controls in timeline and inline views; verify desktop/mobile, accessibility, ordering and permalinks. |
+| T05: remark-level companion | TODO | T03, T04 | Map each unique quoted parent across inline and non-inline remarks; verify separate stable effects, complete-mail fallback, ambiguity, replay and real-server/browser behavior. |
 
 ## Earlier Rollout Notes
 

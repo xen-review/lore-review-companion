@@ -174,6 +174,11 @@ exact parent remarks match, otherwise a concise conversation and parent link.
 Raw mail remains complete in the ledger; old approved effect bytes are unchanged.
 Rendering is explicitly tagged; retained old effects keep their original bytes
 and operation identities rather than being silently rewritten on replay.
+For newly resolved inline replies, match nonempty contiguous quoted lines from
+the immediately preceding depth-one block to exactly one accepted inline remark
+from the explicit parent mail, ignoring blank lines and surrounding whitespace.
+Recheck uniqueness, parent identity and body hash at approval. Keep the legacy
+exact-match parser for earlier effects and leave ambiguous excerpts unresolved.
 Newly resolved multi-hunk remarks receive their own deterministic, independently
 approved review effect, whose source identity and pinned patch are rechecked
 before delivery.
@@ -182,6 +187,37 @@ replay preserves the originally recorded build. PR titles are `Sender: Subject
 [vN]`; covers omit the generated revision line and validated shortlog/diffstat
 tail. Existing PR presentation changes require an explicit scoped, audited
 compare-and-swap rather than silently changing the original import request.
+
+### Planned Remark-Level Discussion Trees
+
+The current imported reply endpoint accepts only code-review parents. Its
+timeline and diff templates render each inline conversation as a flat list;
+ordinary PR comments have no equivalent per-comment reply control. Import code
+stores an inline parent in `RefCommentID`, a field also used by cross-reference
+events. Do not treat that field alone as a general discussion-parent relation.
+
+1. Specify a PR comment tree covering ordinary comments, inline comments and
+  replies to replies. Establish stable parent identity, source chronology,
+  deletion/edit behavior, bounded depth, cycle prevention, permissions and
+  accessibility. Preserve existing permalinks and the current flat display
+  for comments that have no parent.
+2. Implement and test a durable parent relation and normal-user reply API. Plan
+  an explicit, verified backfill for already imported inline reply edges;
+  distinguish them from cross-reference events and preserve existing data.
+  Reject cross-PR targets and unauthorized, archived or invalid writes.
+3. Add a capability-advertised, scoped import operation for a reply to an
+  accepted non-inline or nested parent, retaining raw source identity, exact
+  parent body hash, immutable operation key and idempotent replay. Keep normal
+  user permissions separate from importer grants.
+4. Render actual parent/child trees and per-comment reply controls in the PR
+  timeline and inline discussion views. Preserve source and import timestamps,
+  stable ordering, keyboard access, mobile usability and comment permalinks.
+5. Extend the companion to match each remark's immediate quoted parent against
+  accepted inline and non-inline remark effects in the explicit mail ancestry.
+  Only unique exact matches may create separate stable reply effects; retain
+  unresolved text in the complete source conversation and never silently
+  rewrite existing approved effects. Add real-server and browser coverage for
+  branching, nested replies, ambiguity, replay and changed/deleted parents.
 
 ## Working Method
 

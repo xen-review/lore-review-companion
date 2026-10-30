@@ -211,6 +211,14 @@ the final contiguous quoted segment. Ambiguous, mixed-side or mismatched
 segments remain unresolved. Newly recovered remarks use distinct, stable
 operations, so replay never rewrites or duplicates an earlier imported review.
 
+For a reply to an accepted inline remark, match the immediately preceding
+depth-one quote as a nonempty contiguous excerpt of exactly one inline parent
+from the explicitly replied-to mail. Blank lines and surrounding whitespace are
+ignored; ambiguous, deeper-only, changed or unavailable parents remain
+unresolved. Every reply remark has its own operation and the parent mapping is
+rechecked at approval. Previously accepted exact-match operations retain their
+original evidence and validation rules.
+
 Build identity is the creating checkout's SHA and sanitized commit subject,
 stamped into source distributions and wheels. Scoped import writes send it in
 `X-Lore-Companion-Revision`, outside the canonical approved JSON payload. A replay
