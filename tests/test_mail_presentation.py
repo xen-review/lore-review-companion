@@ -9,14 +9,131 @@ from lore_review_companion.build_identity import checkout_revision
 from lore_review_companion.forge_api import ForgeAPI
 
 from lore_review_companion.forge_comments import (
+    format_direct_submission_reply,
+    format_submission_quotes,
     imported_mail_text,
     quoted_parent_matches,
     reply_prose,
     submission_text,
 )
+from lore_review_companion.mail_parser import parse_message
 
 
 class MailPresentationTests(unittest.TestCase):
+    def test_submission_quotes_require_a_direct_recorded_parent(self):
+        parent = parse_message(
+            b"From: Author <author@example.test>\nMessage-ID: <patch@example.test>\n"
+            b"Subject: [PATCH 1/1] change\n\nCommit explanation.\n"
+            b"diff --git a/file.c b/file.c\n+new\n"
+        )
+        reply = parse_message(
+            b"From: Reviewer <reviewer@example.test>\nMessage-ID: <reply@example.test>\n"
+            b"Subject: Re: patch\nIn-Reply-To: <patch@example.test>\n\n"
+            b"> Commit explanation.\nAnswer.\n"
+        )
+        self.assertEqual(
+            format_direct_submission_reply(reply, (parent,)),
+            "```rust\n> Commit explanation.\n```\nAnswer.\n",
+        )
+        self.assertEqual(format_direct_submission_reply(reply, ()), reply.body_text)
+        parent_reply = parse_message(
+            b"From: Reviewer <reviewer@example.test>\nMessage-ID: <parent@example.test>\n"
+            b"Subject: Re: patch\nIn-Reply-To: <patch@example.test>\n\nCommit explanation.\n"
+        )
+        indirect = parse_message(
+            b"From: Other <other@example.test>\nMessage-ID: <indirect@example.test>\n"
+            b"Subject: Re: patch\nIn-Reply-To: <parent@example.test>\n\n"
+            b"> Commit explanation.\nAnswer.\n"
+        )
+        self.assertEqual(
+            format_direct_submission_reply(indirect, (parent, parent_reply)),
+            indirect.body_text,
+        )
+
+    def test_submission_quotes_format_only_matched_noncode_lines(self):
+        parent = (
+            "From: Author\n\nCommit explanation.\n\nSigned-off-by: Author\n---\n"
+            " file.c | 1 +\n\ndiff --git a/file.c b/file.c\n"
+            "--- a/file.c\n+++ b/file.c\n@@ -1 +1 @@\n-old\n+new\n"
+        )
+        reply = (
+            "On Monday, Author wrote:\n"
+            "> From: Author\n>\n> Commit explanation.\n>\n"
+            "> Signed-off-by: Author\n> ---\n>  file.c | 1 +\n\n"
+            "Please reconsider.\n\n"
+            "> diff --git a/file.c b/file.c\n> --- a/file.c\n"
+            "> +++ b/file.c\n> @@ -1 +1 @@\n> -old\n> +new\n"
+            "Please fix the code.\n"
+        )
+        expected = (
+            "On Monday, Author wrote:\n```rust\n"
+            "> From: Author\n>\n> Commit explanation.\n>\n"
+            "> Signed-off-by: Author\n> ---\n>  file.c | 1 +\n```\n\n"
+            "Please reconsider.\n\n"
+            "> diff --git a/file.c b/file.c\n> --- a/file.c\n"
+            "> +++ b/file.c\n> @@ -1 +1 @@\n> -old\n> +new\n"
+            "Please fix the code.\n"
+        )
+        self.assertEqual(format_submission_quotes(reply, parent, "patch"), expected)
+        self.assertEqual(
+            format_submission_quotes(
+                "> Commit explanation.\nAnswer.\n", "Commit explanation.\n", "cover"
+            ),
+            "```rust\n> Commit explanation.\n```\nAnswer.\n",
+        )
+        self.assertEqual(
+            format_submission_quotes(
+                "> Not from the parent.\nAnswer.\n", parent, "patch"
+            ),
+            "> Not from the parent.\nAnswer.\n",
+        )
+        mixed = ">  file.c | 1 +\n>\n> diff --git a/file.c b/file.c\n> --- a/file.c\n"
+        self.assertEqual(
+            format_submission_quotes(mixed, parent, "patch"),
+            "```rust\n>  file.c | 1 +\n>\n```\n> diff --git a/file.c b/file.c\n> --- a/file.c\n",
+        )
+        ambiguous = "Repeated.\ndiff --git a/file.c b/file.c\nRepeated.\n"
+        self.assertEqual(
+            format_submission_quotes("> Repeated.\nAnswer.\n", ambiguous, "patch"),
+            "> Repeated.\nAnswer.\n",
+        )
+        self.assertEqual(
+            format_submission_quotes(
+                "> ```code```\nAnswer.\n", "```code```\n", "cover"
+            ),
+            "````rust\n> ```code```\n````\nAnswer.\n",
+        )
+        self.assertEqual(format_submission_quotes(">\n", parent, "patch"), ">\n")
+
+    def test_v4_omits_only_a_final_sender_name_signoff(self):
+        source_url = "https://lore.kernel.org/xen-devel/"
+        for signature in ("~Andrew", "Andrew", "Cooper", "Andrew Cooper"):
+            with self.subTest(signature=signature):
+                self.assertEqual(
+                    imported_mail_text(
+                        f"Please change this.\n\n{signature}\n",
+                        "id",
+                        source_url,
+                        "mail-text-v4",
+                        "Andrew Cooper",
+                    ),
+                    "Please change this.",
+                )
+        for text in ("Please change this.\n\nJan", "Andrew", "Please ask Andrew"):
+            with self.subTest(text=text):
+                self.assertEqual(
+                    imported_mail_text(
+                        text, "id", source_url, "mail-text-v4", "Andrew Cooper"
+                    ),
+                    text,
+                )
+        self.assertEqual(
+            imported_mail_text(
+                "Text.\n\n~Andrew", "id", source_url, "mail-text-v3", "Andrew Cooper"
+            ),
+            "Text.\n\n~Andrew",
+        )
+
     def test_source_free_body_and_build_header_do_not_change_payload(self):
         body = imported_mail_text(
             "Original prose.\n",

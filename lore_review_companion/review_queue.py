@@ -27,6 +27,7 @@ from lore_review_companion.forge_api import ForgeAPIError
 from lore_review_companion.forge_comments import (
     ForgeCommentPublisher,
     StaleAnchorError,
+    format_direct_submission_reply,
     imported_mail_text,
     quoted_parent_matches,
     quote_untrusted_text,
@@ -295,12 +296,16 @@ def queue_imported_reply(
         }
         existing = ledger.comment_effects(message.message_id, destination)
         body_format = (
-            existing[0].payload.get("body_format") if existing else "mail-text-v3"
+            existing[0].payload.get("body_format") if existing else "mail-text-v4"
         )
         format_fields = {"body_format": body_format} if body_format is not None else {}
         parents = message.in_reply_to or message.references[-1:]
         presentation = {}
-        conversation_text = message.body_text
+        conversation_text = (
+            format_direct_submission_reply(message, recorded.messages)
+            if body_format == "mail-text-v4"
+            else message.body_text
+        )
         existing_conversation = next(
             (
                 effect
@@ -320,7 +325,7 @@ def queue_imported_reply(
             conversation_text = reply_prose(message.body_text)
         if (
             not existing
-            and body_format in ("mail-text-v2", "mail-text-v3")
+            and body_format in ("mail-text-v2", "mail-text-v3", "mail-text-v4")
             and len(parents) == 1
         ):
             parent_source = ledger.messages_by_id(parents)[0]

@@ -95,6 +95,57 @@ class ReviewQueueTests(unittest.TestCase):
             QuotedComment(":message", 0, "General note.", None),
         )
 
+    def test_direct_submission_conversation_formats_quotes_and_revalidates(self):
+        self.ledger = Ledger(Path(self.tempdir.name) / "presentation-ledger.sqlite3")
+        parent = parse_message(
+            b"From: Patch Author <author@example.test>\nMessage-ID: <format-patch@example.test>\n"
+            b"Subject: [PATCH 1/1] change\n\nCommit explanation.\n"
+            b"diff --git a/file.c b/file.c\n+new\n"
+        )
+        (revision,) = discover_series((parent,))
+        self.ledger.record_parsed_message(parent)
+        self.ledger.record_series_revision(revision)
+        destination = self.api.base_url + self.publisher.repository_path
+        key = (destination, revision.series_key, revision.revision)
+        self.ledger.begin_publication(*key, "digest", "b" * 40, "lore/branch", "a" * 40)
+        self.ledger.transition_publication(
+            *key, expected=("prepared",), status="complete", pull_index=7
+        )
+        reply = parse_message(
+            b"From: Andrew Cooper <reviewer@example.test>\nMessage-ID: <format-reply@example.test>\n"
+            b"Subject: Re: patch\nIn-Reply-To: <format-patch@example.test>\n\n"
+            b"On Monday, Author wrote:\n> Commit explanation.\n\nPlease change this.\n\n~Andrew\n"
+        )
+        (match,) = match_thread_replies((parent, reply), (revision,)).matched
+        client = ForgeImportClient(
+            self.api,
+            "xen-project",
+            "xen",
+            source_url="https://lore.kernel.org/xen-devel/",
+        )
+        arguments = {
+            "patch_commits": (PatchCommit(parent.message_id, "b" * 40, "a" * 40),),
+            "patch_diffs": {},
+        }
+        queue_imported_reply(self.ledger, client, 7, match, **arguments)
+        (effect,) = self.ledger.pending()
+        self.assertEqual(effect.payload["body_format"], "mail-text-v4")
+        self.assertEqual(
+            effect.payload["request"]["body"],
+            "On Monday, Author wrote:\n```rust\n> Commit explanation.\n```\n\nPlease change this.",
+        )
+        _assert_import_payload(self.ledger, effect, source_url=client.source_url)
+        tampered = json.loads(json.dumps(effect.payload))
+        tampered["request"]["body"] += " Altered."
+        with self.assertRaisesRegex(PublicationConflict, "retained complete message"):
+            _assert_import_payload(
+                self.ledger,
+                replace(effect, payload=tampered),
+                source_url=client.source_url,
+            )
+        queue_imported_reply(self.ledger, client, 7, match, **arguments)
+        self.assertEqual(self.ledger.pending(), [effect])
+
     def test_native_multiline_parse_queue_preview_deliver_and_replay(self):
         reply = parse_message(
             b"From: Reviewer <reviewer@example.test>\nMessage-ID: <native@example.test>\n"
@@ -235,7 +286,7 @@ class ReviewQueueTests(unittest.TestCase):
             ["IMPORT_CONVERSATION", "IMPORT_REVIEW"],
         )
         request = before[1].payload["request"]
-        self.assertEqual(before[0].payload["body_format"], "mail-text-v3")
+        self.assertEqual(before[0].payload["body_format"], "mail-text-v4")
         self.assertEqual(before[0].payload["request"]["body"], reply.body_text.rstrip())
         self.assertEqual(
             request["comments"][0]["body"],
@@ -243,7 +294,7 @@ class ReviewQueueTests(unittest.TestCase):
                 "Please change both lines.",
                 reply.message_id,
                 client.source_url,
-                "mail-text-v3",
+                "mail-text-v4",
                 "Reviewer",
             ),
         )
@@ -487,7 +538,7 @@ class ReviewQueueTests(unittest.TestCase):
             b"From: Reviewer <reviewer@example.test>\nMessage-ID: <parent-excerpts@example.test>\nSubject: Re: patch\n"
             b"In-Reply-To: <patch@example.test>\n\n"
             b"> --- a/src/sample.c\n> +++ b/src/sample.c\n> +new_call();\n"
-            b"First line of review.\nSecond line of review.\nLast line of review.\n\n"
+            b"First line of review.\nSecond line of review.\nLast line of review.\n\n~Reviewer\n\n"
             b"> +duplicate();\nAnother parent remark.\nA final sentence.\n"
         )
         commits = (PatchCommit("patch@example.test", "b" * 40, "a" * 40),)
@@ -523,6 +574,7 @@ class ReviewQueueTests(unittest.TestCase):
             b">> +new_call();\n> First line of review. \n> Second line of review.\nFirst reply.\n\n"
             b"> Last line of review.\nSecond reply.\n\n"
             b">> Another parent remark.\nThis quotes an older level.\n"
+            b"> ~Reviewer\nThis quotes an omitted signature.\n"
         )
         remote = {
             "type": "review",
@@ -550,7 +602,7 @@ class ReviewQueueTests(unittest.TestCase):
                 patch_diffs={"patch@example.test": PATCH},
             )
         self.assertEqual(self.ledger.pending(), original)
-        self.assertEqual((result.inline_count, result.unresolved_count), (2, 1))
+        self.assertEqual((result.inline_count, result.unresolved_count), (2, 2))
         replies = [item for item in original if item.event_type == "IMPORT_REPLY"]
         self.assertEqual(
             [

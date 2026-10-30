@@ -22,6 +22,7 @@ from lore_review_companion.forge_comments import (
     DeliveryResult,
     DeliveryUncertainError,
     ForgeCommentPublisher,
+    format_direct_submission_reply,
     with_tool_attribution,
     imported_mail_text,
     quoted_parent_matches,
@@ -76,7 +77,13 @@ def _assert_import_payload(
         )
     payload = delivery.payload
     body_format = payload.get("body_format")
-    if body_format not in (None, "mail-text-v1", "mail-text-v2", "mail-text-v3"):
+    if body_format not in (
+        None,
+        "mail-text-v1",
+        "mail-text-v2",
+        "mail-text-v3",
+        "mail-text-v4",
+    ):
         raise PublicationConflict("Unsupported imported message body format")
     request = payload.get("request")
     source = ledger.messages_by_id((delivery.message_id,))[0]
@@ -114,12 +121,20 @@ def _assert_import_payload(
         )
     if delivery.event_type == "IMPORT_CONVERSATION":
         text = source.body_text
+        if body_format == "mail-text-v4":
+            thread = payload.get("thread", {})
+            recorded = ledger.series_revision(
+                thread.get("series_key"), thread.get("revision")
+            )
+            if recorded is None:
+                raise PublicationConflict("Imported conversation series is unavailable")
+            text = format_direct_submission_reply(source, recorded.messages)
         presentation = payload.get("presentation_parent")
         suffix = ""
         if presentation is not None:
             parents = source.in_reply_to or source.references[-1:]
             if (
-                body_format not in ("mail-text-v2", "mail-text-v3")
+                body_format not in ("mail-text-v2", "mail-text-v3", "mail-text-v4")
                 or len(parents) != 1
                 or not isinstance(presentation, dict)
                 or presentation.get("message_id") != parents[0]
@@ -244,7 +259,9 @@ def _assert_import_payload(
             or (
                 not quoted_parent_matches(
                     remark.quote,
-                    parent_remarks[position]["text"],
+                    comments[position]["body"]
+                    if parent.payload.get("body_format") == "mail-text-v4"
+                    else parent_remarks[position]["text"],
                     body_format,
                     allow_excerpt=evidence["parser"] == "quote-blocks-reply-excerpt-v1",
                 )
@@ -424,7 +441,9 @@ def accepted_inline_targets(ledger, client, destination, parent, thread):
                 )
             targets.append(
                 (
-                    parent_remark.get("text"),
+                    comment.get("body")
+                    if effect.payload.get("body_format") == "mail-text-v4"
+                    else parent_remark.get("text"),
                     identifier,
                     comment.get("body"),
                     effect,

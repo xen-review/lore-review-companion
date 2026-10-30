@@ -7,12 +7,14 @@ from __future__ import annotations
 import hashlib
 import html
 import re
+from bisect import bisect_right
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote
 
 from lore_review_companion.anchor import Anchor, RangeAnchor
 from lore_review_companion.forge_api import ForgeAPI, ForgeAPIError
+from lore_review_companion.mail_parser import ParsedMessage
 
 
 class DeliveryUncertainError(RuntimeError):
@@ -142,6 +144,112 @@ def submission_text(text: str, *, strip_shortlog: bool = True) -> str:
     return text
 
 
+def format_submission_quotes(text: str, parent: str, parent_kind: str) -> str:
+    parent_lines = tuple(line.rstrip() for line in parent.splitlines())
+    if parent_kind == "patch":
+        boundary = next(
+            (
+                index
+                for index, line in enumerate(parent_lines)
+                if line.startswith("diff --git ")
+            ),
+            None,
+        )
+        if boundary is None:
+            return text
+    elif parent_kind == "cover":
+        boundary = len(parent_lines)
+    else:
+        return text
+
+    searchable = "\n" + "\n".join(parent_lines) + "\n"
+    offsets = []
+    offset = 1
+    for line in parent_lines:
+        offsets.append(offset)
+        offset += len(line) + 1
+
+    lines = text.splitlines(keepends=True)
+    output = []
+    position = 0
+    while position < len(lines):
+        if not lines[position].startswith(">"):
+            output.append(lines[position])
+            position += 1
+            continue
+        end = position
+        while end < len(lines) and lines[end].startswith(">"):
+            end += 1
+        block = lines[position:end]
+        quoted = []
+        for line in block:
+            value = line[1:]
+            if value.startswith(" "):
+                value = value[1:]
+            quoted.append(value.rstrip())
+        if not any(quoted):
+            output.extend(block)
+            position = end
+            continue
+        needle = "\n" + "\n".join(quoted) + "\n"
+        matched_boundary = None
+        ambiguous = False
+        cursor = searchable.find(needle)
+        while cursor >= 0:
+            start = bisect_right(offsets, cursor + 1) - 1
+            candidate = min(max(boundary - start, 0), len(block))
+            if matched_boundary is not None and candidate != matched_boundary:
+                ambiguous = True
+                break
+            matched_boundary = candidate
+            cursor = searchable.find(needle, cursor + 1)
+        if matched_boundary is None or ambiguous:
+            output.extend(block)
+            position = end
+            continue
+        split = 0
+        while split < len(block):
+            next_split = split + 1
+            while next_split < len(block) and (next_split < matched_boundary) == (
+                split < matched_boundary
+            ):
+                next_split += 1
+            segment = block[split:next_split]
+            if split < matched_boundary and any(quoted[split:next_split]):
+                longest = max(
+                    (
+                        len(match.group())
+                        for match in re.finditer(r"`+", "".join(segment))
+                    ),
+                    default=0,
+                )
+                fence = "`" * max(3, longest + 1)
+                output.append(f"{fence}rust\n")
+                output.extend(segment)
+                if not segment[-1].endswith(("\n", "\r")):
+                    output.append("\n")
+                output.append(f"{fence}\n")
+            else:
+                output.extend(segment)
+            split = next_split
+        position = end
+    return "".join(output)
+
+
+def format_direct_submission_reply(
+    message: ParsedMessage, members: tuple[ParsedMessage, ...]
+) -> str:
+    parents = message.in_reply_to or message.references[-1:]
+    if len(parents) != 1:
+        return message.body_text
+    parent = next(
+        (member for member in members if member.message_id == parents[0]), None
+    )
+    if parent is None or parent.kind not in ("patch", "cover"):
+        return message.body_text
+    return format_submission_quotes(message.body_text, parent.body_text, parent.kind)
+
+
 def imported_mail_text(
     text: str,
     message_id: str,
@@ -151,6 +259,21 @@ def imported_mail_text(
 ) -> str:
     if body_format is None:
         return quote_untrusted_text(text)
+    if body_format == "mail-text-v4":
+        text = text.rstrip()
+        before, separator, last = text.rpartition("\n")
+        signature = last.strip()
+        if signature and not signature[0].isalnum() and signature[0] not in "><`":
+            signature = signature[1:].strip()
+        words = author.casefold().split()
+        name_parts = {
+            " ".join(words[start:end])
+            for start in range(len(words))
+            for end in range(start + 1, len(words) + 1)
+        }
+        if separator and before.strip() and signature.casefold() in name_parts:
+            return before.rstrip()
+        return text
     if body_format == "mail-text-v3":
         return text.rstrip()
     if body_format == "mail-text-v2":
@@ -186,7 +309,10 @@ def quoted_parent_matches(
     *,
     allow_excerpt: bool = False,
 ) -> bool:
-    if body_format in ("mail-text-v2", "mail-text-v3") and allow_excerpt:
+    if (
+        body_format in ("mail-text-v2", "mail-text-v3", "mail-text-v4")
+        and allow_excerpt
+    ):
         quote_lines = tuple(line.strip() for line in quoted if line.strip())
         parent_lines = tuple(
             line.strip() for line in parent.splitlines() if line.strip()
@@ -195,7 +321,7 @@ def quoted_parent_matches(
             parent_lines[position : position + len(quote_lines)] == quote_lines
             for position in range(len(parent_lines) - len(quote_lines) + 1)
         )
-    if body_format in ("mail-text-v2", "mail-text-v3"):
+    if body_format in ("mail-text-v2", "mail-text-v3", "mail-text-v4"):
         return tuple(line for line in quoted if line.strip()) == tuple(
             line for line in parent.splitlines() if line.strip()
         )
