@@ -14,15 +14,17 @@ from unittest.mock import patch
 from lore_review_companion.cli import main
 from lore_review_companion.git_branches import GitHttpCredentials
 from lore_review_companion.forge_api import ForgeAPI, ForgeAPIError
+from lore_review_companion.forge_imports import ForgeImportClient
 from lore_review_companion.forge_comments import ForgeCommentPublisher
 from lore_review_companion.forge_pulls import ForgePullPublisher, PullRequestConflict
 from lore_review_companion.ingest import sync_public_inbox
-from lore_review_companion.ledger import Ledger
+from lore_review_companion.import_worker import run_import_worker_round
+from lore_review_companion.ledger import Ledger, PublicationConflict
 from lore_review_companion.mail_parser import parse_mbox, parse_message
-from lore_review_companion.outbox import deliver_approved_comments, plan_comment_delivery
-from lore_review_companion.review_queue import queue_archive_replies, queue_b4_drafts
+from lore_review_companion.outbox import deliver_approved_comments, deliver_approved_imports, plan_comment_delivery, plan_import_delivery
+from lore_review_companion.review_queue import queue_archive_replies, queue_b4_drafts, queue_imported_replies
 from lore_review_companion.series import discover_series
-from lore_review_companion.series_sync import sync_series_revision
+from lore_review_companion.series_sync import sync_imported_series_revision, sync_series_revision
 
 
 @unittest.skipUnless(os.environ.get("LORE_GITEA_ACCEPTANCE") == "1", "requires explicit disposable-server opt-in")
@@ -335,6 +337,236 @@ class LiveAcceptanceTests(unittest.TestCase):
                 with self.assertRaises(ForgeAPIError) as error:
                     api.request_json(f"repos/{owner}/{repo}/pulls/{second_index}")
                 self.assertEqual(error.exception.status, 404)
+
+
+@unittest.skipUnless(os.environ.get("LORE_FORGEJO_IMPORT_FIXTURE"), "requires the isolated Forgejo integration fixture")
+class ImportedWorkflowAcceptanceTests(unittest.TestCase):
+    def test_two_patch_publication_and_replay_use_real_scoped_endpoints(self):
+        config_path = Path(os.environ["LORE_FORGEJO_IMPORT_FIXTURE"])
+        self.assertEqual(config_path.stat().st_mode & 0o777, 0o600)
+        configuration = json.loads(config_path.read_text())
+        self.assertEqual(configuration["fixture"], "isolated-forgejo-integration-v1")
+        api_url = configuration["api_url"]
+        parsed = urlsplit(api_url)
+        self.assertIn(parsed.hostname, ("127.0.0.1", "localhost", "::1"))
+        self.assertEqual(parsed.port, 3003)
+        owner, repo = "user2", "repo1"
+        remote = f"{parsed.scheme}://{parsed.netloc}/{owner}/{repo}.git"
+        credentials = GitHttpCredentials(owner, configuration["git_token"])
+        api = ForgeAPI(api_url, token=configuration["import_token"], max_retries=0)
+        reader = ForgeImportClient(api, owner, repo, source_url="https://lore.kernel.org/xen-devel/")
+        writer = ForgeImportClient(api, owner, repo, source_url=reader.source_url, write_enabled=True)
+        with tempfile.TemporaryDirectory(prefix="lore-import-acceptance-") as temporary:
+            environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+            environment.update({"HOME": temporary, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+                                "GIT_TERMINAL_PROMPT": "0", **credentials.environment(remote)})
+
+            def git(*arguments):
+                return subprocess.run(["git", "-c", "core.hooksPath=" + os.devnull, "-c", "commit.gpgsign=false",
+                                       "-c", "user.name=Acceptance Author", "-c", "user.email=author@example.test", *arguments],
+                                      check=True, capture_output=True, env=environment).stdout
+
+            checkout = Path(temporary) / "checkout"
+            git("clone", "--", remote, str(checkout))
+            base = configuration["base_commit"]
+            git("-C", str(checkout), "checkout", "-B", "acceptance-patches", base)
+            (checkout / "review-fixture.c").write_text("new 1\nnew 2\nnew 3\n")
+            git("-C", str(checkout), "add", ".")
+            git("-C", str(checkout), "commit", "-qm", "First acceptance patch")
+            (checkout / "second-fixture.txt").write_text("second patch\n")
+            git("-C", str(checkout), "add", ".")
+            git("-C", str(checkout), "commit", "-qm", "Second acceptance patch")
+            mailbox_path = Path(temporary) / "series.mbox"
+            mailbox_path.write_bytes(git("-C", str(checkout), "format-patch", "--stdout", "--numbered", "--thread", "--no-signature", f"{base}..HEAD"))
+            revision, = discover_series(parse_mbox(mailbox_path))
+            self.assertTrue(revision.complete)
+            self.assertEqual(revision.expected_patch_count, 2)
+            ledger = Ledger(Path(temporary) / "mail.sqlite3")
+            for message in revision.messages:
+                ledger.record_parsed_message(message)
+            arguments = {"revision": revision, "repository": checkout, "base_ref": base, "remote": remote,
+                         "target_branch": "branch2", "ledger": ledger, "credentials": credentials}
+            preview = sync_imported_series_revision(client=reader, **arguments)
+            self.assertFalse(preview.applied)
+            self.assertEqual(len(preview.plan.patch_commits), 2)
+            published = sync_imported_series_revision(client=writer, approved_digest=preview.approval_digest, **arguments)
+            replay = sync_imported_series_revision(client=writer, approved_digest=preview.approval_digest, **arguments)
+            self.assertEqual(published.pull_request.remote_object, replay.pull_request.remote_object)
+            self.assertEqual(published.plan.base_commit, base)
+            self.assertTrue(git("ls-remote", "--heads", remote, "refs/heads/branch2").decode().startswith(base))
+            pull_index = published.pull_request.remote_object["pull_index"]
+            first_patch = next(message for message in revision.messages if message.patch_index == 1)
+            root = parse_message((
+                "From: Reviewer <reviewer@example.test>\nMessage-ID: <acceptance-review@example.test>\nSubject: Re: first\n"
+                f"In-Reply-To: <{first_patch.message_id}>\nReceived: from relay; Thu, 22 Oct 2026 15:30:00 +0200\n\n"
+                "> --- a/review-fixture.c\n> +++ b/review-fixture.c\n> -old 1\n> -old 2\n> -old 3\n"
+                "Please keep the removed context.\n\n"
+                "> --- a/review-fixture.c\n> +++ b/review-fixture.c\n> +new 1\n> +new 2\n> +new 3\n"
+                "Please clarify the new context.\n"
+            ).encode())
+            ledger.record_parsed_message(root)
+            queued = queue_imported_replies(ledger, reader, pull_index, revision.series_key, revision.revision, checkout, (root,))
+            self.assertEqual((queued.inline_count, queued.unresolved_count), (2, 0))
+            review_plan = plan_import_delivery(ledger, writer, pull_index, "IMPORT_REVIEW")
+            review_request = review_plan.deliveries[0].payload["request"]
+            self.assertEqual([(comment["old_position"], comment["new_position"], comment["extra_lines_count"])
+                              for comment in review_request["comments"]], [(1, 0, 2), (0, 1, 2)])
+            self.assertNotEqual(review_request["comments"][0]["after_commit"], review_request["head_commit"])
+            transport = api.transport
+            accepted_requests = []
+
+            def lose_accepted_response(request, timeout):
+                response = transport(request, timeout)
+                if request.get_method() == "POST" and urlsplit(request.full_url).path.endswith("/reviews"):
+                    accepted_requests.append(json.loads(request.data))
+                    if len(accepted_requests) == 1:
+                        response.read()
+                        response.close()
+                        raise TimeoutError("synthetic response loss after server acceptance")
+                return response
+
+            with patch.object(api, "transport", side_effect=lose_accepted_response):
+                outcome = deliver_approved_imports(ledger, writer, pull_index, "IMPORT_REVIEW", approved_digest=review_plan.approval_digest())
+            self.assertEqual((outcome.delivered, outcome.failed), (1, 0))
+            self.assertEqual(len(accepted_requests), 2)
+            self.assertEqual(*accepted_requests)
+            conversation_plan = plan_import_delivery(ledger, writer, pull_index, "IMPORT_CONVERSATION")
+            self.assertEqual(deliver_approved_imports(ledger, writer, pull_index, "IMPORT_CONVERSATION",
+                                                    approved_digest=conversation_plan.approval_digest()).delivered, 1)
+            root_effect, = [effect for effect in ledger.comment_effects(root.message_id, f"{api.base_url}{reader.repository_path}#{pull_index}")
+                            if effect.event_type == "IMPORT_REVIEW"]
+            accepted_root = reader.lookup_operation(root_effect.payload["request"]["operation_key"])
+            ordinary = ForgeAPI(api_url)
+            reviews_path = f"repos/{owner}/{repo}/pulls/{pull_index}/reviews"
+            reviews = ordinary.request_json(reviews_path)
+            self.assertEqual(len(reviews), 1)
+            self.assertFalse(reviews[0]["official"])
+            self.assertEqual(reviews[0]["state"], "COMMENT")
+            comments = ordinary.request_json(f"{reviews_path}/{accepted_root['review_id']}/comments")
+            self.assertEqual(len(comments), 2)
+            for comment in comments:
+                self.assertEqual(comment["review_import"]["importer_login"], "user2")
+                self.assertEqual(comment["review_import"]["participant_name"], "Reviewer")
+                self.assertEqual(comment["review_import"]["source_time"], "2026-10-22T13:30:00Z")
+                self.assertEqual(comment["extra_lines_count"], 2)
+            response = parse_message(
+                b"From: Second Reviewer <second@example.test>\nMessage-ID: <acceptance-response@example.test>\nSubject: Re: first\n"
+                b"In-Reply-To: <acceptance-review@example.test>\n\n> Please keep the removed context.\nAgreed with that context.\n"
+            )
+            ledger.record_parsed_message(response)
+            queued = queue_imported_replies(ledger, reader, pull_index, revision.series_key, revision.revision, checkout, (response,))
+            self.assertEqual((queued.inline_count, queued.unresolved_count), (1, 0))
+            reply_plan = plan_import_delivery(ledger, writer, pull_index, "IMPORT_REPLY")
+            self.assertEqual(reply_plan.deliveries[0].payload["request"]["parent_id"], accepted_root["code_comment_ids"][0])
+            self.assertEqual(deliver_approved_imports(ledger, writer, pull_index, "IMPORT_REPLY", approved_digest=reply_plan.approval_digest()).delivered, 1)
+            comments = ordinary.request_json(f"{reviews_path}/{accepted_root['review_id']}/comments")
+            self.assertEqual(len(comments), 3)
+            imported_response, = [comment for comment in comments if comment["body"] == reply_plan.deliveries[0].payload["request"]["body"]]
+            self.assertNotEqual(accepted_root["participant_id"], imported_response["user"]["id"])
+            self.assertEqual(imported_response["review_import"]["participant_name"], "Second Reviewer")
+            same_reviewer = parse_message((
+                "From: Reviewer <reviewer@example.test>\nMessage-ID: <acceptance-repeat-review@example.test>\nSubject: Re: first\n"
+                f"In-Reply-To: <{first_patch.message_id}>\n\n> --- a/review-fixture.c\n> +++ b/review-fixture.c\n"
+                "> +new 2\n> +new 3\nA second independent remark.\n"
+            ).encode())
+            ledger.record_parsed_message(same_reviewer)
+            queued = queue_imported_replies(ledger, reader, pull_index, revision.series_key, revision.revision, checkout, (same_reviewer,))
+            self.assertEqual(queued.inline_count, 1)
+            plan = plan_import_delivery(ledger, writer, pull_index, "IMPORT_REVIEW")
+            self.assertEqual(deliver_approved_imports(ledger, writer, pull_index, "IMPORT_REVIEW", approved_digest=plan.approval_digest()).delivered, 1)
+            self.assertEqual(len(ordinary.request_json(reviews_path)), 2)
+            queue_imported_replies(ledger, reader, pull_index, revision.series_key, revision.revision, checkout, (root, response, same_reviewer))
+            self.assertEqual(plan_import_delivery(ledger, writer, pull_index, "IMPORT_REVIEW").deliveries, ())
+            self.assertEqual(plan_import_delivery(ledger, writer, pull_index, "IMPORT_REPLY").deliveries, ())
+            original_pull = ordinary.request_json(f"repos/{owner}/{repo}/pulls/{pull_index}")
+            original_refs = git("ls-remote", "--heads", remote, f"refs/heads/{published.plan.head_branch}", f"refs/heads/{published.plan.base_branch}")
+            git("-C", str(checkout), "checkout", "-B", "acceptance-v2", base)
+            (checkout / "review-fixture.c").write_text("revision two 1\nrevision two 2\nrevision two 3\n")
+            git("-C", str(checkout), "add", ".")
+            git("-C", str(checkout), "commit", "-qm", "First acceptance patch, revised")
+            (checkout / "second-fixture.txt").write_text("second revision patch\n")
+            git("-C", str(checkout), "add", ".")
+            git("-C", str(checkout), "commit", "-qm", "Second acceptance patch, revised")
+            mailbox_path.write_bytes(git("-C", str(checkout), "format-patch", "--stdout", "--numbered", "--thread", "--no-signature", "-v2", f"{base}..HEAD"))
+            second_revision, = discover_series(parse_mbox(mailbox_path))
+            for message in second_revision.messages:
+                ledger.record_parsed_message(message)
+            linking = ["link-revision", "--ledger", str(ledger.path), "--series-key", revision.series_key,
+                       "--canonical-revision", "1", "--candidate-seed", second_revision.messages[0].message_id,
+                       "--candidate-revision", "2", "--actor", "acceptance operator", "--reason", "Synthetic explicit revision relationship",
+                       "--allow-unmatched-change-id"]
+            with redirect_stdout(StringIO()) as output:
+                self.assertEqual(main(linking), 0)
+            link_digest = json.loads(output.getvalue())["approval_digest"]
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main([*linking, "--write", "--approve", link_digest]), 0)
+            second_revision, = [current for current in ledger.discover_related_series(second_revision.messages[0].message_id) if current.revision == 2]
+            second_arguments = {**arguments, "revision": second_revision}
+            second_preview = sync_imported_series_revision(client=reader, **second_arguments)
+            self.assertIn(f"/pulls/{pull_index}", second_preview.plan.request["body"])
+            second_published = sync_imported_series_revision(client=writer, approved_digest=second_preview.approval_digest, **second_arguments)
+            second_index = second_published.pull_request.remote_object["pull_index"]
+            self.assertNotEqual(second_index, pull_index)
+            self.assertNotEqual(second_published.plan.head_branch, published.plan.head_branch)
+            self.assertEqual(ordinary.request_json(f"repos/{owner}/{repo}/pulls/{pull_index}")["body"], original_pull["body"])
+            self.assertEqual(git("ls-remote", "--heads", remote, f"refs/heads/{published.plan.head_branch}", f"refs/heads/{published.plan.base_branch}"), original_refs)
+            late = parse_message(
+                b"From: Late Reviewer <late@example.test>\nMessage-ID: <acceptance-late@example.test>\nSubject: Re: first\n"
+                b"In-Reply-To: <acceptance-response@example.test>\n\n> Agreed with that context.\nA late reply to revision one.\n"
+            )
+            ledger.record_parsed_message(late)
+            queued = queue_imported_replies(ledger, reader, pull_index, revision.series_key, 1, checkout, (late,))
+            self.assertEqual((queued.inline_count, queued.unresolved_count), (1, 0))
+            plan = plan_import_delivery(ledger, writer, pull_index, "IMPORT_REPLY")
+            self.assertEqual(plan.deliveries[0].payload["thread"]["revision"], 1)
+            self.assertEqual(plan.deliveries[0].payload["request"]["parent_id"], imported_response["id"])
+            self.assertEqual(deliver_approved_imports(ledger, writer, pull_index, "IMPORT_REPLY", approved_digest=plan.approval_digest()).delivered, 1)
+            self.assertEqual(ordinary.request_json(f"repos/{owner}/{repo}/pulls/{second_index}/reviews"), [])
+            conflicting = {**root_effect.payload["request"], "operation_key": "source-conflict", "message_sha256": "f" * 64}
+            with self.assertRaises(ForgeAPIError) as conflict:
+                writer.import_review(pull_index, conflicting)
+            self.assertEqual(conflict.exception.status, 409)
+            self.assertEqual(len(ordinary.request_json(reviews_path)), 2)
+            manual_pending = {effect.id for effect in ledger.pending()}
+            worker_message = parse_message((
+                "From: Scheduled Reviewer <scheduled@example.test>\nMessage-ID: <acceptance-worker@example.test>\nSubject: Re: second revision\n"
+                f"In-Reply-To: <{second_revision.messages[0].message_id}>\n\n"
+                "> --- a/review-fixture.c\n> +++ b/review-fixture.c\n> +revision two 1\n> +revision two 2\n"
+                "Worker-created exact remark.\n"
+            ).encode())
+            ledger.record_parsed_message(worker_message)
+            capabilities = reader.capabilities()
+            policy = {"version": 1, "enabled": True, "expires_at": "2099-01-01T00:00:00+00:00", "api_url": api_url,
+                      "owner": owner, "repository": repo, "repository_id": capabilities["repository_id"],
+                      "importer_id": capabilities["importer_id"], "importer_login": capabilities["importer_login"],
+                      "source_url": reader.source_url, "nntp_host": "nntp.lore.kernel.org", "nntp_group": "org.xenproject.lists.xen-devel",
+                      "git_remote": remote, "git_username": owner, "base_commit": base, "target_branch": "branch2",
+                      "message_limit": 100, "revision_limit": 8, "max_inline_lines": 50, "lookback_hours": 148,
+                      "notifications": "disabled", "identity_rule": "isolated-unverified", "retry_uncertain": False}
+            policy_path = Path(temporary) / "policy.json"
+            policy_path.write_text(json.dumps(policy))
+            policy_path.chmod(0o600)
+            state_path = Path(temporary) / "worker.sqlite3"
+            worker_round = run_import_worker_round(ledger, checkout, policy_path, state_path, api, credentials, refresh_source=False)
+            self.assertEqual(worker_round.published, 0)
+            self.assertEqual(worker_round.delivered, 2)
+            self.assertEqual({effect.id for effect in ledger.pending()}, manual_pending)
+            replay_round = run_import_worker_round(ledger, checkout, policy_path, state_path, api, credentials, refresh_source=False)
+            self.assertEqual((replay_round.published, replay_round.delivered), (0, 0))
+            second_reviews = ordinary.request_json(f"repos/{owner}/{repo}/pulls/{second_index}/reviews")
+            self.assertEqual(len(second_reviews), 1)
+            self.assertEqual(second_reviews[0]["review_import"]["participant_name"], "Scheduled Reviewer")
+            unavailable = parse_message((
+                "From: Unavailable Reviewer <unavailable@example.test>\nMessage-ID: <acceptance-unavailable@example.test>\nSubject: Re: first\n"
+                f"References: <{first_patch.message_id}> <unavailable-parent@example.test>\n"
+                "In-Reply-To: <unavailable-parent@example.test>\n\nRetain this reply until its parent can be verified.\n"
+            ).encode())
+            ledger.record_parsed_message(unavailable)
+            before_effects = ledger.pending()
+            with self.assertRaises(PublicationConflict):
+                queue_imported_replies(ledger, reader, pull_index, revision.series_key, 1, checkout, (unavailable,))
+            self.assertEqual(ledger.pending(), before_effects)
+            self.assertTrue(git("ls-remote", "--heads", remote, "refs/heads/branch2").decode().startswith(base))
 
 
 if __name__ == "__main__":
