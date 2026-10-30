@@ -58,6 +58,29 @@ class AssembleLocalSeriesTests(unittest.TestCase):
 
     @patch("lore_review_companion.b4_adapter.inspect_b4_runtime")
     @patch("lore_review_companion.b4_adapter.subprocess.run")
+    def test_assembly_normalizes_mail_line_endings_and_preserves_in_body_patch_author(self, run, _inspect):
+        self.mailbox.write_bytes(
+            b"From: Sender <sender@example.test>\r\nMessage-ID: <patch@example.test>\r\n"
+            b"Subject: [PATCH 1/1] change\r\n\r\nFrom: Author <author@example.test>\r\n\r\n"
+            b"Original patch.\r\n\r\ndiff --git a/x b/x\r\n--- a/x\r\n+++ b/x\r\n@@ -1 +1 @@\r\n-old\r\n+new\r\n"
+        )
+        output = self.mailbox.read_bytes().replace(b"\r\n", b"\n").replace(
+            b"From: Sender <sender@example.test>", b"From: Author <author@example.test>", 1,
+        ).replace(b"\n\nFrom: Author <author@example.test>\n", b"\n", 1)
+
+        def fake_run(command, **kwargs):
+            output_dir = Path(command[command.index("--outdir") + 1])
+            (output_dir / "series.mbx").write_bytes(output)
+            return subprocess.CompletedProcess(command, 0, "summary", "")
+
+        run.side_effect = fake_run
+        self.assertEqual(assemble_local_series(self.mailbox).patch_mailbox, output)
+        output = output.replace(b"+new\n", b"+different\n")
+        with self.assertRaisesRegex(B4AssemblyError, "membership"):
+            assemble_local_series(self.mailbox)
+
+    @patch("lore_review_companion.b4_adapter.inspect_b4_runtime")
+    @patch("lore_review_companion.b4_adapter.subprocess.run")
     def test_reports_b4_failure(self, run, _inspect):
         run.return_value = subprocess.CompletedProcess(
             [], 1, "", "could not parse thread"

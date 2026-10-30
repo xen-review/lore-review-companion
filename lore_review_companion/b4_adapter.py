@@ -366,9 +366,17 @@ def assemble_local_series(
         output_patches = parse_mbox(outputs[0])
 
         def patch_identity(message) -> tuple[str, str | None, str]:
-            _, separator, diff = message.body_text.partition("diff --git ")
+            from email.utils import parseaddr
+
+            body = message.body_text.replace("\r\n", "\n")
+            author = message.from_address
+            if body.startswith("From: "):
+                _, author = parseaddr(body.split("\n", 1)[0][6:])
+                if not author:
+                    raise B4AssemblyError("Source patch contains an invalid in-body author")
+            _, separator, diff = body.partition("diff --git ")
             diff = diff.split("\n-- \n", 1)[0].rstrip()
-            return message.subject_title, message.from_address, separator + diff
+            return message.subject_title, author, separator + diff
 
         if len(output_patches) != selected.expected_patch_count or tuple(
             patch_identity(message) for message in output_patches
