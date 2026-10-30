@@ -5,6 +5,7 @@ import unittest
 import sqlite3
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import replace
+from datetime import datetime, timezone
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +13,7 @@ from unittest.mock import patch
 
 from lore_review_companion.b4_adapter import AssemblyResult
 from lore_review_companion.cli import main
+from lore_review_companion.coordinator import plan_imported_sync
 from lore_review_companion.git_branches import GitHttpCredentials, RevisionBranchResult, RevisionRefsResult, revision_branch_name
 from lore_review_companion.forge_api import ForgeAPI
 from lore_review_companion.forge_pulls import ForgePullPublisher, PullRequestConflict, _series_marker
@@ -19,7 +21,7 @@ from lore_review_companion.forge_comments import DeliveryUncertainError
 from lore_review_companion.forge_imports import ForgeImportClient
 from lore_review_companion.ledger import ArchiveSafetyBlocked, Ledger, MessageConflictError, PublicationConflict
 from lore_review_companion.mail_parser import parse_message
-from lore_review_companion.preflight import PatchCommit, PreflightResult
+from lore_review_companion.preflight import GitPreflightError, PatchCommit, PreflightResult
 from lore_review_companion.series import discover_series
 from lore_review_companion.series_sync import PublicationUncertain, sync_imported_series_revision, sync_series_revision
 from test_forge_comments import FakeResponse
@@ -69,6 +71,135 @@ class SeriesSyncTests(unittest.TestCase):
             return sync_imported_series_revision(self.revision, self.repository, "HEAD", self.remote, client,
                                                  target_branch="main", ledger=self.ledger,
                                                  credentials=GitHttpCredentials("mirror-bot", "synthetic-git-token"), **kwargs)
+
+    def test_read_only_snapshot_is_private_independent_and_refuses_existing_files(self):
+        self.ledger.record_parsed_message(self.revision.messages[0])
+        before = self.ledger.path.read_bytes()
+        snapshot_path = self.repository / "snapshot.sqlite3"
+        snapshot = Ledger(self.ledger.path, read_only=True).snapshot(snapshot_path)
+        self.assertEqual(snapshot.status().messages, self.ledger.status().messages)
+        self.assertEqual(snapshot_path.stat().st_mode & 0o777, 0o600)
+        snapshot.record_message("copy-only@example.test", b"Message-ID: <copy-only@example.test>\n\nCopy only")
+        self.assertEqual(self.ledger.path.read_bytes(), before)
+        self.assertEqual(snapshot.status().messages, self.ledger.status().messages + 1)
+        copied = snapshot_path.read_bytes()
+        with self.assertRaises(FileExistsError):
+            self.ledger.snapshot(snapshot_path)
+        self.assertEqual(snapshot_path.read_bytes(), copied)
+
+    def test_coordinator_reports_unknown_base_incomplete_series_and_refuses_writers(self):
+        for source in self.revision.messages:
+            self.ledger.record_parsed_message(source)
+        client = ForgeImportClient(self.api, "o", "r", source_url="https://lore.kernel.org/xen-devel/")
+        arguments = {"series_seed": self.revision.messages[0].message_id, "target_branch": "main",
+                     "credentials": GitHttpCredentials("mirror-bot", "synthetic-git-token")}
+        before = self.ledger.path.read_bytes()
+        result = plan_imported_sync(self.ledger, client, self.repository, self.remote, **arguments)
+        self.assertEqual(result.revisions[0].status, "unknown_base")
+        self.assertEqual(self.ledger.path.read_bytes(), before)
+        self.assertFalse(result.remote_writes or result.ledger_writes)
+        self.assertEqual(self.transport.requests, [])
+        incomplete = message("partial@example.test", "[PATCH 1/2] xen: partial")
+        self.ledger.record_parsed_message(incomplete)
+        arguments["series_seed"] = incomplete.message_id
+        result = plan_imported_sync(self.ledger, client, self.repository, self.remote, **arguments)
+        self.assertEqual(result.revisions[0].status, "incomplete")
+        client.write_enabled = True
+        with self.assertRaisesRegex(ValueError, "read-only"):
+            plan_imported_sync(self.ledger, client, self.repository, self.remote, **arguments)
+
+    def test_coordinator_composes_publication_plan_in_private_snapshot(self):
+        for source in self.revision.messages:
+            self.ledger.record_parsed_message(source)
+        client = ForgeImportClient(self.api, "o", "r", source_url="https://lore.kernel.org/xen-devel/")
+        before = self.ledger.path.read_bytes()
+
+        def preview(current, _repository, _base, _remote, importer, **options):
+            self.assertFalse(importer.write_enabled)
+            self.assertNotEqual(options["ledger"].path, self.ledger.path)
+            self.assertIsNotNone(options["ledger"].series_revision(current.series_key, current.revision))
+            return "verified publication preview"
+
+        with patch("lore_review_companion.coordinator.sync_imported_series_revision", side_effect=preview):
+            result = plan_imported_sync(self.ledger, client, self.repository, self.remote,
+                                        series_seed=self.revision.messages[0].message_id, target_branch="main", base_ref="HEAD",
+                                        credentials=GitHttpCredentials("mirror-bot", "synthetic-git-token"))
+        self.assertEqual(result.revisions[0].status, "publication_ready")
+        self.assertEqual(result.revisions[0].publication, "verified publication preview")
+        self.assertEqual(self.ledger.path.read_bytes(), before)
+        self.assertEqual(self.transport.requests, [])
+
+    def test_coordinator_refreshes_only_the_snapshot_with_bounded_source_calls(self):
+        client = ForgeImportClient(self.api, "o", "r", source_url="https://lore.kernel.org/xen-devel/")
+        before = self.ledger.path.read_bytes()
+
+        def discover(working, **options):
+            self.assertEqual(options["hours"], 24)
+            from lore_review_companion.nntp_source import nntp_source
+            working.begin_nntp_bootstrap(nntp_source(options["host"], options["group"]), datetime(2026, 10, 30, tzinfo=timezone.utc), hours=24)
+            return "discovered"
+
+        def fetch(working, **options):
+            self.assertEqual(options["limit"], 2)
+            working.record_parsed_message(self.revision.messages[0])
+            return "fetched"
+
+        with (
+            patch("lore_review_companion.coordinator.discover_nntp", side_effect=discover),
+            patch("lore_review_companion.coordinator.discover_nntp_numbers", return_value="number scan") as numbers,
+            patch("lore_review_companion.coordinator.fetch_nntp", side_effect=fetch),
+        ):
+            result = plan_imported_sync(self.ledger, client, self.repository, self.remote,
+                                        series_seed=self.revision.messages[0].message_id, target_branch="main",
+                                        credentials=GitHttpCredentials("mirror-bot", "synthetic-git-token"),
+                                        refresh_source=True, lookback_hours=24, message_limit=2)
+        self.assertEqual(result.revisions[0].status, "unknown_base")
+        self.assertIsNotNone(result.queue)
+        self.assertEqual(numbers.call_args.kwargs["limit"], 2)
+        self.assertEqual(self.ledger.path.read_bytes(), before)
+
+    def test_coordinator_previews_all_delivery_kinds_and_stops_pending_publications(self):
+        for source in self.revision.messages:
+            self.ledger.record_parsed_message(source)
+        self.ledger.record_series_revision(self.revision)
+        destination = self.api.base_url + "repos/o/r"
+        key = destination, self.revision.series_key, self.revision.revision
+        self.ledger.begin_publication(*key, "digest", "b" * 40, "lore/revision", "a" * 40)
+        client = ForgeImportClient(self.api, "o", "r", source_url="https://lore.kernel.org/xen-devel/")
+        options = {"series_seed": self.revision.messages[0].message_id, "target_branch": "main",
+                   "credentials": GitHttpCredentials("mirror-bot", "synthetic-git-token")}
+        pending = plan_imported_sync(self.ledger, client, self.repository, self.remote, **options)
+        self.assertEqual(pending.revisions[0].status, "publication_pending")
+        self.ledger.transition_publication(*key, expected=("prepared",), status="complete", pull_index=7)
+        before = self.ledger.path.read_bytes()
+        refs = SimpleNamespace(head=SimpleNamespace(planned=False), base=SimpleNamespace(planned=False))
+        with patch("lore_review_companion.coordinator.sync_imported_series_revision", return_value=SimpleNamespace(refs=refs)), patch(
+            "lore_review_companion.coordinator.plan_import_delivery", return_value=SimpleNamespace(deliveries=())
+        ) as delivery:
+            result = plan_imported_sync(self.ledger, client, self.repository, self.remote, **options)
+        self.assertEqual(result.revisions[0].status, "up_to_date")
+        self.assertEqual([call.args[3] for call in delivery.call_args_list], ["IMPORT_CONVERSATION", "IMPORT_REVIEW", "IMPORT_REPLY"])
+        self.assertEqual(self.ledger.path.read_bytes(), before)
+
+    def test_coordinator_reports_missing_ambiguous_and_failed_preflight_states(self):
+        client = ForgeImportClient(self.api, "o", "r", source_url="https://lore.kernel.org/xen-devel/")
+        options = {"series_seed": self.revision.messages[0].message_id, "target_branch": "main", "base_ref": "HEAD",
+                   "credentials": GitHttpCredentials("mirror-bot", "synthetic-git-token")}
+        missing = plan_imported_sync(self.ledger, client, self.repository, self.remote, **options)
+        self.assertEqual(missing.revisions, ())
+        self.assertIn("selection blocked", missing.diagnostics[0])
+        self.ledger.record_parsed_message(self.revision.messages[0])
+        with patch("lore_review_companion.coordinator.sync_imported_series_revision", side_effect=GitPreflightError("Patch does not apply to the selected base")):
+            blocked = plan_imported_sync(self.ledger, client, self.repository, self.remote, **options)
+        self.assertEqual(blocked.revisions[0].status, "blocked")
+        self.assertIn("Patch does not apply", blocked.revisions[0].diagnostics[0])
+        with patch.object(Ledger, "discover_related_series", return_value=(self.revision, replace(self.revision, series_key="other"))):
+            ambiguous = plan_imported_sync(self.ledger, client, self.repository, self.remote, **options)
+        self.assertEqual([item.status for item in ambiguous.revisions], ["ambiguous", "ambiguous"])
+        with self.assertRaisesRegex(ValueError, "exceed the sync limit"), patch.object(
+            Ledger, "discover_related_series", return_value=(self.revision, replace(self.revision, revision=2))
+        ):
+            plan_imported_sync(self.ledger, client, self.repository, self.remote, revision_limit=1, **options)
 
     def test_imported_publication_preview_approval_replay_and_uncertain_retry(self):
         requests, accepted = [], {}
@@ -140,6 +271,11 @@ class SeriesSyncTests(unittest.TestCase):
             self.assertEqual(main(arguments), 0)
         self.assertFalse(sync.call_args.args[4].write_enabled)
         self.assertEqual(sync.call_args.kwargs["credentials"].username, "git-bot")
+        self.assertEqual(self.ledger.path.read_bytes(), before)
+        with patch("lore_review_companion.cli.plan_imported_sync") as coordinated, patch("lore_review_companion.cli.asdict", return_value={}), redirect_stdout(StringIO()):
+            self.assertEqual(main(["plan-sync", *arguments[1:]]), 0)
+        self.assertFalse(coordinated.call_args.args[1].write_enabled)
+        self.assertEqual(coordinated.call_args.kwargs["credentials"].username, "git-bot")
         self.assertEqual(self.ledger.path.read_bytes(), before)
         with redirect_stderr(StringIO()):
             self.assertEqual(main([*arguments, "--write"]), 1)

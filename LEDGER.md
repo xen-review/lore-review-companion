@@ -50,8 +50,11 @@ No automatic pushes. Forgejo changes belong to the separate parent repository.
 - S02 `DONE`: configurable bounded NNTP lookback is exposed, preserving the
   148-hour default and durable fixed checkpoint. Existing numeric discovery,
   recursive older-parent recovery, selected retries and resource guards pass.
+- S03 `DONE`: bounded `plan-sync` composes optional source refresh/recovery,
+  pinned publication/preflight and independent reply delivery previews in a
+  private SQLite snapshot. Original-ledger bytes and remote objects are unchanged.
 - Historical sample publications remain background evidence only; the current
-  baseline is 337 tests, with only the live-server acceptance test skipped
+  baseline is 343 tests, with only the live-server acceptance test skipped
   when the pinned real-b4 opt-ins are enabled.
 
 ## Discovery
@@ -106,7 +109,7 @@ revision state here; do not stage them into a companion commit.
 | --- | --- | --- | --- |
 | S01 | DONE | B04, C02, F04 | `sync-imported-series` uses one PR and paired immutable base/head refs per revision, pinned source/patch maps and prior-revision links. V2 leaves V1 unchanged; source-thread checks retain late replies on their recorded revision. Repeated writes reconcile the same operation/refs. Tests cover upstream movement, two revisions and approved uncertain retry; full live workflow remains V01. |
 | S02 | DONE | B04, C01 | `discover-nntp --lookback-hours` exposes a bounded 1-8760-hour initial window (148 default), fixed per durable source checkpoint. 42 NNTP tests cover restart/deduplication, older-parent recursion/repair, selected retries, unavailable items retained pending, bounded thread discovery and byte/disk/group-history guards. No verified receipt-time or full thread coverage is claimed. |
-| S03 | TODO | C05, S01, S02, F04 | Dry-run coordinator for ingest, recovery, preflight, publication/reply plans. No remote writes by default; no nested-lock deadlocks; incomplete/ambiguous/unknown-base states are visible. |
+| S03 | DONE | C05, S01, S02, F04 | Bounded `plan-sync` previews discovery/recovery, exact publication/preflight and all three imported delivery kinds using a private SQLite backup. Original ledger and remote refs/content stay unchanged; no write flags or blanket approval. Tests cover fixed resource bounds, snapshot isolation, retained-mail/no-NNTP state, missing/incomplete/ambiguous/unknown-base/preflight/pending-publication blockers and independent child plans. |
 | S04 | TODO | S03, F05, F06 | Explicit revocable repository policy and supervised unattended worker. Recheck scope/permissions/capabilities per write; bound Git credentials separately; incidents stop and restarts reconcile uncertain writes. No mail sending or blanket self-approval. |
 
 ## Acceptance And Handoff
@@ -652,3 +655,27 @@ Bring them into scope only through an explicit decision.
 - No live discovery, operational ledger access or remote writes were performed.
   S02 is complete; multi-stage dry-run coordination is S03.
 - Commit subject: `feat: expose durable configurable recent NNTP discovery`.
+
+### 2026-10-30: S03 Read-Only Sync Coordinator
+
+- Added a create-only mode-0600 SQLite backup helper; source bytes remain
+  unchanged when the copy is modified, and an existing destination is never
+  overwritten. The bounded `plan-sync` coordinator uses only this private
+  temporary ledger for optional recent discovery, numeric continuation, parent
+  repair, thread recovery, ingestion, indexing and reply queue simulation.
+- Existing exact publication/preflight and conversation/review/reply planners
+  are composed without a write-enabled client or an encompassing worker lock.
+  Published revisions use their retained base. Missing immutable refs and
+  pending/uncertain publications block progress; new PR previews do not invent
+  a pull index for replies. Independent child digests are not blanket approval.
+- Missing/incomplete/ambiguous series, absent NNTP coverage, unknown bases,
+  preflight errors and resource limits are explicit results. Refused write
+  clients, original-ledger byte equality, snapshot permissions, CLI credential
+  separation, bounded source calls and delivery-kind composition are tested.
+- Focused lifecycle/coordinator tests: 29 passed. Full Python: 343 run, 342
+  passed, only live-server acceptance skipped in 15.132 seconds; real pinned-b4
+  tests ran. Editor diagnostics and whitespace checks passed. No live state,
+  credentials, services or remote refs/content were changed.
+- S03 is complete. C05 whole-workflow acceptance, F05/F06 chronology/provenance,
+  S04 unattended authorization and V/R handoff remain open.
+- Commit subject: `feat: add snapshot-isolated import sync planning`.

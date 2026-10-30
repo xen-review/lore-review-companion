@@ -24,6 +24,7 @@ from lore_review_companion.ledger import (
     NNTPIncident, PublicationConflict, WorkerBusyError,
 )
 from lore_review_companion.mail_parser import parse_mbox
+from lore_review_companion.coordinator import plan_imported_sync
 from lore_review_companion.nntp_source import DEFAULT_GROUP, DEFAULT_HOST, DEFAULT_INBOX, DEFAULT_LOOKBACK_HOURS, MAX_ARTICLE_BYTES, MAX_BATCH_BYTES, MAX_DISCOVERY_BYTES, MIN_FREE_BYTES, NNTPSourceError, discover_nntp, discover_nntp_numbers, discover_nntp_thread, fetch_nntp, inspect_nntp_window, nntp_source
 from lore_review_companion.outbox import (
     CommentBatchSummary, CommentDeliveryPlan, deliver_approved_comments, migrate_legacy_deliveries,
@@ -477,6 +478,30 @@ def main(argv: list[str] | None = None) -> int:
     imported_series.add_argument("--write", action="store_true")
     imported_series.add_argument("--approve")
     imported_series.add_argument("--retry-uncertain", action="store_true")
+    sync_plan = commands.add_parser("plan-sync", help="Plan bounded source recovery, publication and replies without writes")
+    sync_plan.add_argument("--ledger", type=Path, required=True)
+    sync_plan.add_argument("--api-url", required=True)
+    sync_plan.add_argument("--owner", required=True)
+    sync_plan.add_argument("--repo", required=True)
+    sync_plan.add_argument("--inbox-url", default=DEFAULT_INBOX)
+    sync_plan.add_argument("--series-seed", required=True)
+    sync_plan.add_argument("--series-key")
+    sync_plan.add_argument("--revision", type=int)
+    sync_plan.add_argument("--repository", type=Path, required=True)
+    sync_plan.add_argument("--base")
+    sync_plan.add_argument("--target-branch", required=True)
+    sync_plan.add_argument("--remote", required=True)
+    sync_plan.add_argument("--token-file", type=Path, required=True)
+    sync_plan.add_argument("--git-token-file", type=Path, required=True)
+    sync_plan.add_argument("--git-username", required=True)
+    sync_plan.add_argument("--host", default=DEFAULT_HOST)
+    sync_plan.add_argument("--group", default=DEFAULT_GROUP)
+    sync_plan.add_argument("--lookback-hours", type=int, default=DEFAULT_LOOKBACK_HOURS)
+    sync_plan.add_argument("--refresh-source", action="store_true")
+    sync_plan.add_argument("--recover-thread", action="store_true")
+    sync_plan.add_argument("--message-limit", type=int, default=100)
+    sync_plan.add_argument("--revision-limit", type=int, default=8)
+    sync_plan.add_argument("--max-inline-lines", type=int, default=50)
     args = parser.parse_args(argv)
 
     try:
@@ -501,6 +526,18 @@ def main(argv: list[str] | None = None) -> int:
                     plan = plan_import_delivery(ledger, client, args.pull_index, event_type,
                                                 limit=args.limit, retry_uncertain=args.retry_uncertain)
                     result = RetentionPreview(plan, plan.approval_digest())
+        elif args.command == "plan-sync":
+            ledger = Ledger(args.ledger, read_only=True)
+            client = ForgeImportClient(ForgeAPI(args.api_url, token=read_private_token(args.token_file)), args.owner, args.repo,
+                                       source_url=args.inbox_url)
+            result = plan_imported_sync(
+                ledger, client, args.repository, args.remote, series_seed=args.series_seed, target_branch=args.target_branch,
+                credentials=GitHttpCredentials(args.git_username, read_private_token(args.git_token_file)),
+                base_ref=args.base, series_key=args.series_key, revision=args.revision,
+                host=args.host, group=args.group, lookback_hours=args.lookback_hours,
+                refresh_source=args.refresh_source, recover_thread=args.recover_thread,
+                message_limit=args.message_limit, revision_limit=args.revision_limit, max_inline_lines=args.max_inline_lines,
+            )
         elif args.command == "sync-imported-series":
             if bool(args.write) != bool(args.approve):
                 raise ValueError("--write and --approve must be supplied together")

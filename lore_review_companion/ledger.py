@@ -804,6 +804,21 @@ class Ledger:
         finally:
             connection.close()
 
+    def snapshot(self, path: Path) -> Ledger:
+        with path.open("xb"):
+            path.chmod(0o600)
+        destination = sqlite3.connect(path)
+        try:
+            with self._connection() as source:
+                source.backup(destination)
+        except BaseException:
+            destination.close()
+            path.unlink(missing_ok=True)
+            raise
+        finally:
+            destination.close()
+        return Ledger(path)
+
     def status(self) -> LedgerStatus:
         with self._connection() as connection:
             connection.execute("BEGIN")

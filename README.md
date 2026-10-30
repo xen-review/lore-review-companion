@@ -11,7 +11,7 @@ import and lookup endpoints, non-voting review/range imports and threaded
 replies are also tested. Participant-authored PR creation with pinned refs is
 tested as well. Imported conversation/review/reply queue and approved outbox delivery
 and publication are available as Python APIs and explicit CLI commands;
-unattended coordinator setup remains pending.
+bounded read-only coordination is available; unattended policy/setup remains pending.
 Native exact multiline
 quote matching and versioned range delivery are implemented and tested locally;
 whole-workflow acceptance remains pending. Read [PLAN.md](PLAN.md) and [LEDGER.md](LEDGER.md)
@@ -159,6 +159,40 @@ or ambiguous text stays unresolved in the full-message conversation; it never
 becomes an unrelated new review. Delivery binds the parent body hash, so a
 locally edited parent is not silently reused.
 Uncertain earlier writes need a newly reviewed `--retry-uncertain` plan.
+
+## Coordinated Dry Run
+
+`plan-sync` composes source recovery, exact preflight/publication and reply
+delivery previews for one explicitly selected thread:
+
+```sh
+.venv/bin/lore-review-companion plan-sync \
+  --ledger state.sqlite3 --api-url https://forge.example/api/v1/ \
+  --owner review --repo xen --series-seed cover@example.test \
+  --repository /path/to/xen --base BASE_COMMIT --target-branch staging \
+  --remote https://forge.example/review/xen.git \
+  --token-file /private/import-token --git-token-file /private/git-token \
+  --git-username review-companion
+```
+
+The original ledger is opened read-only. SQLite's backup API creates a private
+temporary copy for discovery, indexing and queue simulation, then removes it.
+No refs, PRs or comments are written; this command accepts no write/approve
+flags. Tokens are private files and never appear in plans. Individual approved
+write commands remain separate; regenerate their current plans after retaining
+real source/queue changes rather than treating this preview as blanket approval.
+
+Use `--refresh-source --lookback-hours HOURS` to preview bounded recent NNTP
+discovery, numeric continuation, parent repair and fetching in that copy.
+`--recover-thread` previews older thread candidates and a bounded fetch.
+Neither option retains newly fetched mail in the original ledger. Message and
+revision limits default to 100 and 8 (maximum 1000 and 32).
+
+Output distinguishes missing/incomplete/ambiguous series, unknown bases,
+pending/uncertain publication, blocked preflight and ready publication/delivery.
+Published revisions use their recorded base, not a moving configured base.
+Reply plans require a confirmed publication and retained immutable refs; a new
+PR preview does not invent an index to plan replies against.
 
 ## Develop And Test
 
