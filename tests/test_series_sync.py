@@ -236,6 +236,15 @@ class SeriesSyncTests(unittest.TestCase):
         destination = self.api.base_url + "repos/o/r#7"
         manual = self.ledger.enqueue(reply.message_id, "IMPORT_CONVERSATION", destination, "manual-effect", {"manual": True})
 
+        with patch("lore_review_companion.import_worker.sync_imported_series_revision",
+                   side_effect=GitPreflightError("Patch does not apply to the trusted base")) as blocked:
+            skipped = run_import_worker_round(self.ledger, self.repository, path, state, self.api, credentials, refresh_source=False)
+        self.assertEqual((skipped.considered, skipped.published, skipped.delivered), (1, 0, 0))
+        self.assertIn("Preflight blocked:", skipped.diagnostics[0])
+        self.assertFalse(blocked.call_args.args[4].write_enabled)
+        self.assertFalse(state.with_name(state.name + ".incident").exists())
+        self.assertIsNone(self.ledger.publication(self.api.base_url + "repos/o/r", self.revision.series_key, self.revision.revision))
+
         def publication(current, _repository, _base, _remote, client, **options):
             if not client.write_enabled:
                 return SimpleNamespace(approval_digest="reviewed plan", refs=SimpleNamespace(head=SimpleNamespace(planned=False), base=SimpleNamespace(planned=False)))

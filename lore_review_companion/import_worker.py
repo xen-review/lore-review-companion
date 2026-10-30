@@ -24,6 +24,7 @@ from lore_review_companion.nntp_source import (
     discover_nntp, discover_nntp_numbers, fetch_nntp, nntp_source,
 )
 from lore_review_companion.outbox import deliver_approved_imports, plan_import_delivery
+from lore_review_companion.preflight import GitPreflightError
 from lore_review_companion.review_queue import queue_imported_replies
 from lore_review_companion.series_sync import sync_imported_series_revision
 
@@ -169,9 +170,15 @@ def _run_import_worker_round(
             if previous is not None and previous.status in ("pr_pending", "uncertain") and not policy.retry_uncertain:
                 raise ValueError("Uncertain publication needs explicit policy authorization for same-key reconciliation")
             base = previous.base_commit if previous else policy.base_commit
-            preview = sync_imported_series_revision(current, repository, base, policy.git_remote, reader,
-                                                    target_branch=policy.target_branch, ledger=ledger, credentials=credentials,
-                                                    retry_uncertain=policy.retry_uncertain)
+            try:
+                preview = sync_imported_series_revision(current, repository, base, policy.git_remote, reader,
+                                                        target_branch=policy.target_branch, ledger=ledger, credentials=credentials,
+                                                        retry_uncertain=policy.retry_uncertain)
+            except GitPreflightError as error:
+                if previous is not None:
+                    raise
+                diagnostics.append(f"Preflight blocked: {current.series_key} v{current.revision}: {str(error).splitlines()[0]}")
+                continue
             if previous is not None and previous.status == "complete" and (preview.refs.head.planned or preview.refs.base.planned):
                 raise ValueError("Retained publication refs are missing; stop for operator recovery")
             reader.capabilities()
