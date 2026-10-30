@@ -43,6 +43,9 @@ No automatic pushes. Forgejo changes belong to the separate parent repository.
   replies are tested with pinned refs, exact historical patch-parent ranges,
   stable inline IDs and no draft consumption or notifications. Companion
   per-patch publication/outbox wiring remains under C05, S01 and S03.
+- F05 `DONE`: validated original chronology initializes only new imported
+  objects; actual import/update times remain separate in UTC. Scoped corrections
+  are evidence-bound, idempotent and audited without changing bodies/authors/edits.
 - S01 `DONE`: new imported publication uses paired immutable base/head refs and
   one participant-authored PR per revision by default. V2 links to V1 without
   rewriting V1. Protected Git/API credentials and uncertainty approvals are
@@ -100,7 +103,7 @@ revision state here; do not stage them into a companion commit.
 | F02 | DONE | F01 | Atomic repository/source participant registry, deterministic collision-safe names, inactive/restricted/passwordless private-email profiles. Replay revalidates safety flags; shared authentication, sessions, OAuth/linking, reset, tokens/SSH/GPG, password/email changes, Sudo, activation/admin edits and inactive cleanup are guarded. Rollback, collision, affected-package and isolated API tests pass. |
 | F03 | DONE | F01, F02 | Existing-PR conversation import and scoped operation lookup preserve mapped author, importer, source time/hash and atomic operation keys. Replay keeps IDs; changed payload/target/local content or reused Message-ID with different bytes/author conflicts. No notifications, mentions or cross-reference actions. Opt-in companion client rechecks capabilities, safely replays uncertain POSTs and never uses ordinary mutation APIs. |
 | F04 | DONE | F03 | Participant-authored PRs retain pinned branches/commits, use CAS-only pull refs and reject duplicate revision-message claims. Fresh non-voting reviews/replies validate exact historical patch parents and old/new ranges without draft theft or notifications. Scoped clients preserve uncertain replay and validate returned IDs/pins. Real-Git API cases pass; per-patch companion wiring is C05/S01/S03. No ordinary before-commit API extension was necessary. |
-| F05 | TODO | F03, F04 | Restricted original timestamp initialization/correction with audited actual import/edit time and source quality. Validate UTC/unknown/invalid times; no duplicate notifications or silent reauthoring of legacy content. |
+| F05 | DONE | F03, F04 | New imported PRs, conversations, reviews/ranges and replies receive validated original creation chronology; actual import/update timestamps remain separate in UTC. Scoped original-importer corrections bind prior payload/time/basis, retain body/author/edit time and append idempotent reason/actor/time audits. All six isolated import API tests and affected model/service/migration packages pass; unknown/UTC/future/unsupported quality/stale evidence/revocation/replay cases are covered. |
 | F06 | TODO | F03, F04, F05 | API and web render both participant and importer, lore link and source chronology/quality. Reuse existing UI; no forged identity verification or layout regressions. |
 
 ## Publication And Automation
@@ -679,3 +682,32 @@ Bring them into scope only through an explicit decision.
 - S03 is complete. C05 whole-workflow acceptance, F05/F06 chronology/provenance,
   S04 unattended authorization and V/R handoff remain open.
 - Commit subject: `feat: add snapshot-isolated import sync planning`.
+
+### 2026-10-30: F05 Imported Source Chronology
+
+- The separate Forgejo worktree now initializes canonical creation/update
+  timestamps from validated source evidence for new imported PRs, conversations,
+  root reviews/ranges and replies. Unknown source time retains actual creation
+  time. Provenance keeps actual import/update times separately and returns UTC.
+  A reply never changes its parent review's chronology.
+- Added the scoped `PATCH operations/{operation}/source-time` endpoint and
+  advertised capability. Corrections require the original importer/current grant,
+  matching prior payload hash/source time/basis, unique correction key and a
+  reason. A transaction CAS-updates creation chronology and provenance and
+  appends an audit with old/new quality/time, actor and actual correction time.
+  Body, author and existing edit time are unchanged. Replay appends no duplicate
+  audit; original import replay cannot reset corrected chronology.
+- Tests cover all object types, offset-to-UTC normalization, unknown-to-estimated
+  correction, immutable import time/hash, unchanged edit/content/author, same-key
+  replay, changed intent, stale evidence, read-only scope, invalid future/quality/
+  reason and revoked grants. Initial checks exposed XORM's auto-created field
+  filter and local-zone conversion; explicit timestamp expressions and UTC
+  projection repaired both, followed by the same focused checks.
+- Final six isolated API tests passed in 9.236 seconds. Full `models/issues`,
+  `services/issue` and `models/forgejo_migrations` passed. Formatting, editor
+  diagnostics, whitespace and structured correction Swagger assertions passed;
+  unrelated pre-existing Swagger warnings remain. Parent changes are uncommitted.
+- No live migration/build/restart/content changes occurred. Correction is an
+  explicit operator API, not worker self-approval or a legacy migration. F05 is
+  complete; readable API/web provenance and correction history are F06.
+- Commit subject: `docs: record verified imported source chronology`.

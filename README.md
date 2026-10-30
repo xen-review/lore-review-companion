@@ -160,6 +160,18 @@ becomes an unrelated new review. Delivery binds the parent body hash, so a
 locally edited parent is not silently reused.
 Uncertain earlier writes need a newly reviewed `--retry-uncertain` plan.
 
+The extension initializes imported creation timestamps from a supplied source
+time, labeled `unverified` or `estimated`; unknown source time retains actual
+creation time. Provenance keeps actual import/update times separately in UTC.
+The scoped `PATCH review-imports/operations/OPERATION/source-time` endpoint
+supports explicit corrections with a unique correction key, matching prior
+payload hash/source time/basis and a reason. It appends an audit record and
+changes creation chronology only, not content, author or existing edit time.
+Same-key retries are idempotent; stale evidence, changed intent, unsupported
+verification claims and revoked grants are refused. Original import replay
+does not reset a correction or rewrite legacy content. Corrections are not
+automatic or part of the companion worker; provenance UI is still pending.
+
 ## Coordinated Dry Run
 
 `plan-sync` composes source recovery, exact preflight/publication and reply
