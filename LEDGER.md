@@ -13,9 +13,8 @@ No automatic pushes. Forgejo changes belong to the separate parent repository.
   commit, before implementation import. The user supplied an empty repository.
 - B01 `DONE`: current source/history/tool inventory and offline baseline recorded
   below. B02 imported the unchanged source; installed b4 is still unavailable.
-- First behavioral hypothesis: an unsafe inline delivery must not silently
-  become a conversation write. The existing publisher does this; B03 removes
-  it and immediately runs the focused comment tests.
+- B03 `DONE`: unsafe inline delivery no longer becomes a conversation write.
+  Focused publisher and neighboring queue tests passed; B04 packaging is next.
 - Historical sample publications remain background evidence only; the current
   baseline is 295 synthetic tests, with 3 explicitly reported skips.
 
@@ -38,7 +37,7 @@ installed versions, historical commits and current tests are B01, not assumed.
 | DOC-01 | DONE | - | PLAN and LEDGER are the first content; staged whitespace and both local document links checked. |
 | B01 | DONE | DOC-01 | Current worktrees/history/tools inspected and narrow/full offline baseline passed; source is an untracked snapshot, b4 runtime absent. See execution record. |
 | B02 | DONE | B01 | Unchanged Python/requirements snapshot imported with checksums, legal context, provenance and ignores. Original files untouched; imported offline suite passed. Final distribution-license review remains R01. |
-| B03 | TODO | B02 | Remove inline-to-conversation fallback. Stale/disabled/unsafe inline effects make zero conversation POSTs, remain inspectable, and require a separately reviewed fallback. Run existing comment tests immediately after the edit. |
+| B03 | DONE | B02 | Removed inline fallback; tests prove stale/disabled/pending-review paths make zero POSTs and preserve unresolved effects. Separate conversation approval still works; 25 publisher and 31 queue tests passed. |
 | B04 | TODO | B03 | Rename to neutral project/modules and installable lore_review_companion package with CLI/CI. Preserve legacy replay markers, destination/effect keys and versioned preflight identity. Independent install and old-state replay must not create duplicate writes. |
 
 ## Deterministic Multiline Reviews
@@ -164,3 +163,18 @@ Bring them into scope only through an explicit decision.
 - No operational docs, databases, mail, credentials, caches, services or nested
   repositories were imported. The original source directory is unchanged.
 - Commit subject: `chore: import reviewed companion source snapshot`.
+
+### 2026-10-29: B03 Inline-Only Delivery
+
+- Source snapshot commit: `5707bd3`. Removed the catch-and-post fallback in
+  `outbox._publish_comment`; safety failures now reach existing error handling.
+- Extended the existing stale-head test and added approved-plan subtests for
+  stale head, disabled inline writes, and an existing pending review. They
+  assert zero POSTs, retained inline errors, and an untouched full-reply effect.
+  A separately approved conversation plan can still deliver that full reply.
+- Immediate check: 25 comment-publisher tests passed. Neighboring check: 31
+  review-queue tests passed. Both used synthetic fixtures, live opt-ins unset,
+  and bytecode disabled. Editor diagnostics reported no errors.
+- Existing uncertain-write state handling is unchanged; failures remain visible
+  for inspection rather than silently authorizing an alternate write.
+- Commit subject: `fix: keep unsafe inline deliveries from changing write type`.

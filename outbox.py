@@ -12,7 +12,7 @@ from contextlib import nullcontext
 from anchor import Anchor
 from gitea_api import GiteaAPIError, authenticated_user
 from gitea_comments import (
-    DeliveryResult, DeliveryUncertainError, GiteaCommentPublisher, InlineWritesDisabledError, StaleAnchorError, with_tool_attribution,
+    DeliveryResult, DeliveryUncertainError, GiteaCommentPublisher, with_tool_attribution,
 )
 from gitea_pulls import _series_marker
 from ledger import Delivery, DeliveryStateConflict, Ledger, MessageConflictError, PublicationConflict
@@ -192,10 +192,7 @@ def _publish_comment(
     if not isinstance(anchor_data, dict) or set(anchor_data) != {"path", "old_position", "new_position"}:
         raise ValueError("queued inline comment must have one complete anchor")
     anchor = Anchor(**anchor_data)
-    try:
-        return publisher.ensure_inline_comment(pull_index, anchor, head_commit=head_commit, **arguments)
-    except (InlineWritesDisabledError, StaleAnchorError):
-        return publisher.ensure_issue_comment(pull_index, **arguments)
+    return publisher.ensure_inline_comment(pull_index, anchor, head_commit=head_commit, **arguments)
 
 
 def _assert_thread_sources(

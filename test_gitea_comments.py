@@ -393,7 +393,7 @@ class GiteaCommentPublisherTests(unittest.TestCase):
             self.assertEqual(deliver_issue_comments(ledger, self.publisher, 7, retry_uncertain=True).delivered, 1)
             self.assertEqual(len(self.transport.issue_comments), 1)
 
-    def test_outbox_inline_delivery_and_stale_head_fallback(self):
+    def test_outbox_inline_delivery_and_stale_head_failure(self):
         with tempfile.TemporaryDirectory() as directory:
             ledger = Ledger(Path(directory) / "ledger.sqlite3")
             ledger.record_message("inline@example.test", b"raw")
@@ -408,10 +408,54 @@ class GiteaCommentPublisherTests(unittest.TestCase):
 
             payload["head_commit"] = "b" * 40
             ledger.enqueue("inline@example.test", "INLINE_COMMENT", destination, "stale", payload)
-            self.assertEqual(deliver_inline_comments(ledger, self.publisher, 7).delivered, 1)
+            result = deliver_inline_comments(ledger, self.publisher, 7)
+            self.assertEqual((result.delivered, result.failed), (0, 1))
             self.assertEqual(len(self.transport.reviews), 1)
-            self.assertEqual(len(self.transport.issue_comments), 1)
-            self.assertIn("Review with lore link", self.transport.issue_comments[0]["body"])
+            self.assertEqual(self.transport.issue_comments, [])
+            self.assertEqual([item.effect_key for item in ledger.pending()], ["stale"])
+            self.assertIn("differs from the reviewed commit", ledger.pending()[0].last_error)
+
+    def test_approved_inline_delivery_never_falls_back_to_conversation(self):
+        for unsafe in ("stale_head", "inline_disabled", "pending_review"):
+            with self.subTest(unsafe=unsafe), tempfile.TemporaryDirectory() as directory:
+                transport = CommentTransport()
+                api = GiteaAPI("http://gitea.test/api/v1/", transport=transport, max_retries=0)
+                publisher = GiteaCommentPublisher(
+                    api, "xen-project", "xen", write_enabled=True,
+                    allow_inline_writes=unsafe != "inline_disabled",
+                )
+                if unsafe == "pending_review":
+                    transport.reviews.append({"id": 1, "state": "PENDING"})
+                ledger = Ledger(Path(directory) / "ledger.sqlite3")
+                ledger.record_message("review@example.test", b"raw")
+                destination = comment_destination(publisher, 7)
+                ledger.enqueue("review@example.test", "ISSUE_COMMENT", destination, "full", {"body": "Full reply"})
+                ledger.enqueue("review@example.test", "INLINE_COMMENT", destination, "inline", {
+                    "body": "Inline excerpt",
+                    "head_commit": "b" * 40 if unsafe == "stale_head" else transport.head_commit,
+                    "anchor": {"path": "xen/common.c", "old_position": 0, "new_position": 42},
+                })
+                plan = plan_comment_delivery(ledger, publisher, 7, "INLINE_COMMENT")
+
+                result = deliver_approved_comments(
+                    ledger, publisher, 7, "INLINE_COMMENT", approved_digest=plan.approval_digest(),
+                )
+
+                self.assertEqual((result.delivered, result.failed), (0, 1))
+                self.assertFalse(any(request.get_method() == "POST" for request in transport.requests))
+                pending = {item.effect_key: item for item in ledger.pending()}
+                self.assertEqual(set(pending), {"full", "inline"})
+                self.assertTrue(pending["inline"].last_error)
+                self.assertEqual(pending["full"].attempts, 0)
+
+                conversation_plan = plan_comment_delivery(ledger, publisher, 7, "ISSUE_COMMENT")
+                result = deliver_approved_comments(
+                    ledger, publisher, 7, "ISSUE_COMMENT", approved_digest=conversation_plan.approval_digest(),
+                )
+                self.assertEqual(result.delivered, 1)
+                self.assertEqual(len(transport.issue_comments), 1)
+                self.assertIn("Full reply", transport.issue_comments[0]["body"])
+                self.assertEqual([item.effect_key for item in ledger.pending()], ["inline"])
 
     def test_outbox_write_uses_shared_worker_lock(self):
         with tempfile.TemporaryDirectory() as directory:
