@@ -27,6 +27,7 @@ from lore_review_companion.forge_api import authenticated_user
 from lore_review_companion.forge_comments import (
     DeliveryResult,
     quote_untrusted_text,
+    submission_description,
     submission_text,
     with_tool_attribution,
 )
@@ -234,16 +235,20 @@ def sync_imported_series_revision(
                 submission_text(source.body_text, strip_shortlog=False)
                 + f"\n\nRevision: v{revision.revision}"
             )
-            body = submission_text(source.body_text)
+            body = submission_description(source.body_text, source.from_address)
+            plain_body = submission_text(source.body_text)
             if prepared.result.rejected_hunks:
                 count = prepared.result.rejected_hunks
-                body = (
+                warning = (
                     f"> **Patch application warning:** {count} hunk(s) could not be applied "
                     f"to `{target_branch}` and are included in `.rej` files on this PR branch.\n\n"
-                    + body
                 )
+                body = warning + body
+                plain_body = warning + plain_body
             elif prepared.result.requested_base_commit and prepared.result.base_commit != prepared.result.requested_base_commit:
-                body = _source_base_warning(target_branch, prepared.result.base_commit) + body
+                warning = _source_base_warning(target_branch, prepared.result.base_commit)
+                body = warning + body
+                plain_body = warning + plain_body
             previous = ledger.list_publications(
                 destination=destination,
                 series_key=revision.series_key,
@@ -261,6 +266,7 @@ def sync_imported_series_revision(
                 site = client.api.base_url.removesuffix("/").removesuffix("/api/v1")
                 link = f"\n\nEarlier revision: [v{prior.revision}]({site}/{quote(client.owner, safe='')}/{quote(client.repo, safe='')}/pulls/{prior.pull_index})"
                 body += link
+                plain_body += link
                 legacy_body += link
                 previous_body += link
             request = {
@@ -312,6 +318,8 @@ def sync_imported_series_revision(
                 presentations = (
                     request,
                     {**request, "body": _source_base_warning(target_branch, prepared.result.base_commit) + request["body"]},
+                    {**request, "body": plain_body},
+                    {**request, "body": _source_base_warning(target_branch, prepared.result.base_commit) + plain_body},
                     *(
                         {
                             **request,

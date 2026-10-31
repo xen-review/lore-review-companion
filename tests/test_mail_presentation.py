@@ -15,6 +15,7 @@ from lore_review_companion.forge_comments import (
     imported_mail_text,
     quoted_parent_matches,
     reply_prose,
+    submission_description,
     submission_text,
 )
 from lore_review_companion.mail_parser import parse_message
@@ -461,6 +462,41 @@ class MailPresentationTests(unittest.TestCase):
             submission_text("Prose\n-- \nA human signature"),
             "Prose\n-- \nA human signature",
         )
+
+    def test_pr_description_quotes_prose_and_stops_before_diffstat(self):
+        patch = (
+            "Populate the sibling map.\n\n"
+            "Fixes: 701190abb3d5 (\"xen/arm: Set correct per-cpu cpu_core_mask\")\n"
+            "Signed-off-by: Hirokazu Takahashi <taka@valinux.co.jp>\n---\n"
+            " xen/arch/arm/smpboot.c | 18 +++++++++++++++---\n"
+            " 1 file changed, 15 insertions(+), 3 deletions(-)\n\n"
+            "diff --git a/xen/arch/arm/smpboot.c b/xen/arch/arm/smpboot.c\n"
+        )
+        self.assertEqual(
+            submission_description(patch, "TAKA@valinux.co.jp"),
+            "> Populate the sibling map.\n>\n> Fixes: 701190abb3d5 (\"xen/arm: Set correct per-cpu cpu_core_mask\")",
+        )
+        self.assertIn("Signed-off-by:", submission_description(patch, "other@example.test"))
+
+    def test_pr_description_retains_multiple_and_non_submitter_signoffs(self):
+        source = (
+            "Change.\n\nSigned-off-by: Author <author@example.test>\n"
+            "Signed-off-by: Reviewer <reviewer@example.test>\n---\n"
+            " path/file.c | 2 +-\n"
+        )
+        body = submission_description(source, "author@example.test")
+        self.assertIn("> Signed-off-by: Author <author@example.test>", body)
+        self.assertIn("> Signed-off-by: Reviewer <reviewer@example.test>", body)
+        self.assertNotIn("---", body)
+        self.assertNotIn("path/file.c", body)
+        self.assertEqual(
+            submission_description("Change.\n\nSigned-off-by: Other <other@example.test>\n---\n", "author@example.test"),
+            "> Change.\n>\n> Signed-off-by: Other <other@example.test>",
+        )
+
+    def test_pr_description_cuts_binary_stats_and_bare_diffs(self):
+        self.assertEqual(submission_description("Text\n---\n file.bin | Bin 0 -> 15 bytes\n", "a@b"), "> Text")
+        self.assertEqual(submission_description("Text\n\ndiff --git a/a b/a\n+secret\n", "a@b"), "> Text")
 
     def test_named_source_link_is_escaped_and_not_a_footnote(self):
         body = imported_mail_text(

@@ -9,6 +9,7 @@ import html
 import re
 from bisect import bisect_right
 from dataclasses import dataclass
+from email.utils import parseaddr
 from typing import Any
 from urllib.parse import quote
 
@@ -142,6 +143,26 @@ def submission_text(text: str, *, strip_shortlog: bool = True) -> str:
                         text = "\n".join(lines[:index]).rstrip()
                         break
     return text
+
+
+def submission_description(text: str, submitter_address: str) -> str:
+    lines = submission_text(text).splitlines()
+    for index, line in enumerate(lines):
+        if re.fullmatch(r" .+\s+\|\s+(?:\d+\s*[-+]*|Bin .+)", line) or line.startswith("diff --git "):
+            lines = lines[:index]
+            break
+    while lines and (not lines[-1].strip() or lines[-1] == "---"):
+        lines.pop()
+    signoffs = [index for index, line in enumerate(lines) if re.match(r"(?i)^signed-off-by:\s*", line)]
+    if len(signoffs) == 1:
+        _, address = parseaddr(lines[signoffs[0]].split(":", 1)[1].strip())
+        if address and address.casefold() == submitter_address.casefold():
+            del lines[signoffs[0]]
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(
+        f"> {line}" if line else ">" for line in lines
+    ).replace("<!-- lore-gitea-mirror:", "&lt;!-- lore-gitea-mirror:")
 
 
 def _is_diff_header(line: str) -> bool:

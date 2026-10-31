@@ -12,7 +12,7 @@ from lore_review_companion.forge_comments import (
     format_direct_submission_reply,
     format_nested_reply,
     imported_mail_text,
-    submission_text,
+    submission_description,
 )
 from lore_review_companion.forge_imports import ForgeImportClient
 from lore_review_companion.forge_comments import DeliveryUncertainError
@@ -163,7 +163,7 @@ def plan_import_refresh(
                 }
             )
     source = ledger.messages_by_id((original_pull["message_id"],))[0]
-    body = submission_text(source.body_text)
+    body = submission_description(source.body_text, source.from_address or "")
     earlier = ledger.list_publications(
         destination=destination,
         series_key=revision.series_key,

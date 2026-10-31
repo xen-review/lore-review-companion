@@ -1336,6 +1336,25 @@ class SeriesSyncTests(unittest.TestCase):
                 self.assertEqual(replay.approval_digest, old_plan.approval_digest())
                 self.assertFalse(replay.applied)
 
+    def test_imported_publication_replays_previous_plain_body(self):
+        self.api.transport = lambda request, timeout: FakeResponse(
+            200, {"version": 1, "repository_id": 1, "importer_id": 5,
+                  "importer_login": "mirror-bot", "source_url": "https://lore.kernel.org/xen-devel/",
+                  "operations": ["pull"]},
+        )
+        preview = self.imported_sync()
+        self.assertTrue(preview.plan.request["body"].startswith("> "))
+        old_request = {**preview.plan.request, "body": submission_text(self.revision.messages[0].body_text)}
+        old_plan = replace(preview.plan, request=old_request)
+        self.ledger.record_series_revision(self.revision)
+        self.ledger.begin_publication(
+            self.api.base_url + "repos/o/r", self.revision.series_key, 1,
+            old_plan.approval_digest(), old_plan.base_commit, old_plan.head_branch, old_plan.head_commit,
+        )
+        replay = self.imported_sync()
+        self.assertEqual(replay.plan.request, old_request)
+        self.assertEqual(replay.approval_digest, old_plan.approval_digest())
+
     def test_imported_series_cli_uses_read_only_preview_and_separate_git_credentials(
         self,
     ):
