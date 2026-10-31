@@ -293,7 +293,7 @@ def provision_xen(
         raise ValueError(
             "Existing assembly clone has a different origin; inspect it rather than overwriting"
         )
-    branch = mirror["default_branch"]
+    branch = policy["target_branch"]
     base = api.request_json(f"repos/xen-review/xen/branches/{branch}")["commit"]["id"]
     subprocess.run(
         ["git", "--git-dir", str(repository), "cat-file", "-e", base + "^{commit}"],

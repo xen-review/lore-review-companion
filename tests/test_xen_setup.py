@@ -268,7 +268,7 @@ class XenSetupTests(unittest.TestCase):
             "mirror": True,
             "original_url": "https://github.com/xen-project/xen.git",
             "clone_url": "https://forge.test/xen-project/xen.git",
-            "default_branch": "master",
+            "default_branch": "staging",
         }
         review = {
             "id": 20,
