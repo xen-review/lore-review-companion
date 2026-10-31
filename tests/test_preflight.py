@@ -140,6 +140,8 @@ class PreflightTests(unittest.TestCase):
         self.file.write_text(original.replace("line 2\n", "changed first\n").replace("line 29\n", "changed last\n"))
         self.git("commit", "-qam", "two hunks")
         patch = self.git("format-patch", "--stdout", f"{original_base}..HEAD")
+        date_header = next(line for line in patch.splitlines() if line.startswith(b"Date: "))
+        patch = patch.replace(date_header, b"Date: Tue, 2 Jan 2001 12:00:00 +0000", 1)
         self.git("checkout", "--detach", original_base)
         self.file.write_text(original.replace("line 2\n", "staging conflict\n"))
         self.git("commit", "-qam", "conflicting staging")
@@ -153,6 +155,8 @@ class PreflightTests(unittest.TestCase):
                 self.assertIn("changed last\n", text)
                 self.assertEqual(prepared.result.rejected_hunks, 1)
                 self.assertTrue((prepared.repository / "content.txt.rej").is_file())
+                dates = prepared.run_git("Inspect dates", "show", "-s", "--format=%aI %cI", "HEAD").split()
+                self.assertEqual(dates[0], dates[1])
         self.assertEqual(results[0], results[1])
 
     def test_reject_fallback_retains_rejects_from_every_patch(self):

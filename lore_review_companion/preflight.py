@@ -179,7 +179,7 @@ def _apply_mailbox_with_rejects(prepared: PreparedMailbox, mailbox: bytes) -> in
                     path.write_bytes(previous[path].rstrip(b"\n") + b"\n" + content)
             rejected_hunks += count
             prepared.run_git("Stage partially applied patch and rejects", "add", "-A", "-f", "--", ".")
-            arguments = ("am", "--continue")
+            arguments = ("am", "--continue", "--committer-date-is-author-date")
             input_bytes = None
 
 
