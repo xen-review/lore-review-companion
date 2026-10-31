@@ -411,7 +411,7 @@ def queue_imported_reply(
         )
         if presentation:
             conversation_body += f'\n\n<small><a href="{presentation["presentation_parent"]["url"]}">In reply to the preceding review comment</a></small>'
-        identity = hashlib.sha256(
+        conversation_identity = hashlib.sha256(
             f"{message.message_id}\0imported-full-message-v1".encode()
         ).hexdigest()
 
@@ -428,7 +428,7 @@ def queue_imported_reply(
                     **presentation,
                     "request": {
                         **common,
-                        "operation_key": identity,
+                        "operation_key": conversation_identity,
                         "body": conversation_body,
                     },
                 },
@@ -708,11 +708,7 @@ def queue_imported_reply(
                 },
             )
         inline_count = len(comments) + len(segmented)
-        conversation_id = (
-            existing_conversation.id if existing_conversation is not None else 0
-        )
-        if inline_count < len(remarks):
-            conversation_id = queue_conversation()
+        conversation_id = queue_conversation()
         return ReplyQueueSummary(
             conversation_id, inline_count, len(remarks) - inline_count
         )

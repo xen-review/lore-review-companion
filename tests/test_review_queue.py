@@ -526,8 +526,20 @@ class ReviewQueueTests(unittest.TestCase):
         self.assertEqual((result.inline_count, result.unresolved_count), (2, 0))
         self.assertEqual(
             [item.event_type for item in before],
-            ["IMPORT_REVIEW"],
+            ["IMPORT_REVIEW", "IMPORT_CONVERSATION"],
         )
+        conversation = before[1].payload["request"]
+        self.assertEqual(
+            conversation["operation_key"],
+            hashlib.sha256(
+                f"{reply.message_id}\0imported-full-message-v1".encode()
+            ).hexdigest(),
+        )
+        self.assertNotEqual(
+            conversation["operation_key"], before[0].payload["request"]["operation_key"]
+        )
+        self.assertIn("Please change this line.", conversation["body"])
+        self.assertIn("Please change that line.", conversation["body"])
         request = before[0].payload["request"]
         self.assertEqual(before[0].payload["body_format"], "mail-text-v6")
         self.assertEqual(request["body"], "")
@@ -650,7 +662,7 @@ class ReviewQueueTests(unittest.TestCase):
         self.assertEqual((result.delivered, result.failed), (1, 0))
         self.assertEqual(len(posts), 2)
         self.assertEqual(json.loads(posts[0].data), json.loads(posts[1].data))
-        self.assertEqual(self.ledger.pending(), [])
+        self.assertEqual(self.ledger.pending(), [before[1]])
         self.assertEqual(accepted["code_comment_ids"], [30, 31])
         followup = parse_message(
             b"From: Second Reviewer <second@example.test>\nMessage-ID: <followup@example.test>\nSubject: Re: first\n"
