@@ -718,10 +718,10 @@ class ImportedWorkflowAcceptanceTests(unittest.TestCase):
                 "context 12\ncontext 13\nnew tail\n"
             )
             git("-C", str(checkout), "add", ".")
-            git("-C", str(checkout), "commit", "-qm", "First acceptance patch")
+            git("-C", str(checkout), "commit", "-q", "-s", "-m", "First acceptance patch")
             (checkout / "second-fixture.txt").write_text("second patch\n")
             git("-C", str(checkout), "add", ".")
-            git("-C", str(checkout), "commit", "-qm", "Second acceptance patch")
+            git("-C", str(checkout), "commit", "-q", "-s", "-m", "Second acceptance patch")
             mailbox_path = Path(temporary) / "series.mbox"
             mailbox_path.write_bytes(
                 git(
@@ -1247,11 +1247,11 @@ class ImportedWorkflowAcceptanceTests(unittest.TestCase):
                 "revision two 1\nrevision two 2\nrevision two 3\n"
             )
             git("-C", str(checkout), "add", ".")
-            git("-C", str(checkout), "commit", "-qm", "First acceptance patch, revised")
+            git("-C", str(checkout), "commit", "-q", "-s", "-m", "First acceptance patch, revised")
             (checkout / "second-fixture.txt").write_text("second revision patch\n")
             git("-C", str(checkout), "add", ".")
             git(
-                "-C", str(checkout), "commit", "-qm", "Second acceptance patch, revised"
+                "-C", str(checkout), "commit", "-q", "-s", "-m", "Second acceptance patch, revised"
             )
             mailbox_path.write_bytes(
                 git(
