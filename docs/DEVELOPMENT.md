@@ -70,7 +70,7 @@ ceremony. Record what was rebuilt and which bootstrap paths were actually tested
 Use the setup tool's explicit rebuild mode, which defaults to preview:
 
 ```sh
-.venv/bin/python -m lore_review_companion.xen_setup \
+.venv/bin/lore-review-setup-xen \
   --api-url https://review-forge.be.free.or.at/api/v1/ \
   --admin-token-file /path/to/temporary-admin-token \
   --email mail@example.com --rebuild-development-fork

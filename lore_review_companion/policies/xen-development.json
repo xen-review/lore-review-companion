@@ -5,7 +5,7 @@
   "api_url": "https://review-forge.be.free.or.at/api/v1/",
   "owner": "xen-review",
   "repository": "xen",
-  "repository_id": 2,
+  "repository_id": 3,
   "importer_id": 4,
   "importer_login": "review-companion",
   "source_url": "https://lore.kernel.org/xen-devel/",
