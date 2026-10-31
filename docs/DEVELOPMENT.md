@@ -111,24 +111,25 @@ that every retained submission has been verified.
 
 | Submission | Source | Verified cause and current result |
 | --- | --- | --- |
-| xen/arm: psci: Do not keep a rejected PSCI version in psci_ver, v1 | [Ayan Kumar Halder](https://lore.kernel.org/xen-devel/20261021132640.599126-1-ayan.kumar.halder@amd.com/) | Unnumbered single patch was misclassified as having unknown count. Discovery repaired; application still fails at xen/arch/arm/psci.c:191. |
-| x86/nestedsvm: Record NextRIP with the deferred #VMEXIT, v1 | [Stephen Cheng](https://lore.kernel.org/xen-devel/20261022090658.151682-1-stephen.cheng@citrix.com/) | Same singleton discovery defect repaired. Source-only assembly and patch application pass. PR publication remains subject to the worker's bounded schedule. |
+| xen/arm: psci: Do not keep a rejected PSCI version in psci_ver, v1 | [Ayan Kumar Halder](https://lore.kernel.org/xen-devel/20261021132640.599126-1-ayan.kumar.halder@amd.com/) | Singleton discovery repaired. [PR #16](https://review-forge.be.free.or.at/xen-review/xen/pulls/16) contains one rejected hunk in xen/arch/arm/psci.c.rej. |
+| x86/nestedsvm: Record NextRIP with the deferred #VMEXIT, v1 | [Stephen Cheng](https://lore.kernel.org/xen-devel/20261022090658.151682-1-stephen.cheng@citrix.com/) | Singleton discovery repaired. [PR #20](https://review-forge.be.free.or.at/xen-review/xen/pulls/20) applies cleanly to staging. |
 | tools/ocaml: bindings needed to build ARM domains, v1 | [source thread](https://lore.kernel.org/xen-devel/1792679039.8631fc262581453bbf619ec5b2062170.1a163ff5306000f79f@vates.tech/) | Two different cover messages share the same subject, while both patches name an absent parent. The correct cover cannot be established; see the [message-by-message investigation](design/ocaml-arm-cover-investigation.md). |
-| x86/vpt: Validate timer object with generation number, v1 | [source](https://lore.kernel.org/xen-devel/1792717952.8631fc262581453bbf619ec5b2062170.1a166511467000f79f@vates.tech/) | Singleton discovery repaired; application still fails at xen/arch/x86/hvm/vpt.c:318 and xen/arch/x86/include/asm/hvm/vpt.h:34. |
-| common: dom0less-bindings: introduce XSM labels, v5 | [Sergiy Kibrik](https://lore.kernel.org/xen-devel/20261023110933.2325318-1-Sergiy_Kibrik@epam.com/) | Singleton discovery repaired. Source-only assembly and patch application pass; publication remains subject to the worker's bounded schedule. |
+| x86/vpt: Validate timer object with generation number, v1 | [source](https://lore.kernel.org/xen-devel/1792717952.8631fc262581453bbf619ec5b2062170.1a166511467000f79f@vates.tech/) | Singleton discovery repaired. [PR #17](https://review-forge.be.free.or.at/xen-review/xen/pulls/17) contains five rejected hunks across two .rej files. |
+| common: dom0less-bindings: introduce XSM labels, v5 | [Sergiy Kibrik](https://lore.kernel.org/xen-devel/20261023110933.2325318-1-Sergiy_Kibrik@epam.com/) | Singleton discovery repaired. [PR #21](https://review-forge.be.free.or.at/xen-review/xen/pulls/21) applies cleanly to staging. |
 
-### Patch-Application Blockers
+### Previously Reported Patch-Application Blockers
 
 Rechecked against committed base `8803b82ab2c95da09c837482cbcac11d7f3853e5`.
 No source patches were rewritten and no alternative base was guessed.
 
 | Submission | Source | Concrete blocker |
 | --- | --- | --- |
-| tools/ocaml: implement stub_xc_domain_create() for ARM, v2 | [source](https://lore.kernel.org/xen-devel/1792658248.8631fc262581453bbf619ec5b2062170.1a162c2110b000f79f@vates.tech/) | Application fails at tools/ocaml/libs/xc/xenctrl_stubs.c:257. |
-| x86/nestedvmx: Fix nested VMX bugs, v1 | [source](https://lore.kernel.org/xen-devel/cover.1792997742.git.chunjie.zhu@citrix.com/) | Current preflight applies patches 1-3, then fails at patch 4, x86/nestedvmx: Reflect EPT holes hit during L2 emulation to L1, at xen/arch/x86/mm/p2m.c:1675. The old first-line diagnostic incorrectly named patch 1. |
-| xen/riscv: fix boot on missing extensions and MMU setup bugs, v8 | [source](https://lore.kernel.org/xen-devel/1793027589.8631fc262581453bbf619ec5b2062170.1a178c5c430000f79f@vates.tech/) | Application fails at patch 1, xen/riscv: use pte_is_valid() in pte_is_mapping(), at xen/arch/riscv/include/asm/page.h:187. |
+| tools/ocaml: implement stub_xc_domain_create() for ARM, v2 | [source](https://lore.kernel.org/xen-devel/1792658248.8631fc262581453bbf619ec5b2062170.1a162c2110b000f79f@vates.tech/) | Strict application failed at tools/ocaml/libs/xc/xenctrl_stubs.c:257. [PR #19](https://review-forge.be.free.or.at/xen-review/xen/pulls/19) contains one rejected hunk in xenctrl_stubs.c.rej. |
+| x86/nestedvmx: Fix nested VMX bugs, v1 | [source](https://lore.kernel.org/xen-devel/cover.1792997742.git.chunjie.zhu@citrix.com/) | Strict application failed at patch 4, xen/arch/x86/mm/p2m.c:1675. [PR #18](https://review-forge.be.free.or.at/xen-review/xen/pulls/18) retains all eight patch commits and three rejected hunks in two .rej files. |
+| xen/riscv: fix boot on missing extensions and MMU setup bugs, v8 | [source](https://lore.kernel.org/xen-devel/1793027589.8631fc262581453bbf619ec5b2062170.1a178c5c430000f79f@vates.tech/) | Strict application to staging failed. [PR #8](https://review-forge.be.free.or.at/xen-review/xen/pulls/8) applies cleanly to source base 46678752be2d97f61317d793408a59927a429847 and warns that it does not apply to staging. |
 
-The PSCI and VPT singletons in the preceding table also remain application-blocked.
+The published PSCI, VPT and nested VMX branches were independently reassembled
+from retained mail; each reconstructed head exactly matched the live PR head.
 
 ### Quoted Remarks Without A Parent Match
 
@@ -160,7 +161,7 @@ changed to `staging`. Exact-digest compatibility repairs replay without changing
 accepted request bytes, immutable refs or current policy. Read-only replay of
 all three original live PRs passed after the fix. Deployment at `b0a8155`
 completed a successful worker round: one new PR (#4), five delivered effects,
-no round diagnostics. This does not clear the source/application blockers above.
+no round diagnostics. This was the status before the later reject-based imports.
 
 Final deployment verification used companion `d495033` and Forgejo `b51da217df`.
 The service exited successfully and its timer is active. The live outbox has
