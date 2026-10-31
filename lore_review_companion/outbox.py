@@ -773,15 +773,13 @@ def plan_import_delivery(
     ):
         raise DeliveryStateConflict("Selected imported deliveries must all be pending")
     if delivery_ids is None and any(
-        item.payload.get("presentation_recreation") is not None
-        for item in deliveries
+        item.payload.get("presentation_recreation") is not None for item in deliveries
     ):
         raise DeliveryStateConflict(
             "Presentation recreations require explicit delivery ID selection"
         )
     if client.unattended and any(
-        item.payload.get("presentation_recreation") is not None
-        for item in deliveries
+        item.payload.get("presentation_recreation") is not None for item in deliveries
     ):
         raise DeliveryStateConflict("Presentation recreations require manual approval")
     ledger.assert_unconflicted(tuple(delivery.message_id for delivery in deliveries))
