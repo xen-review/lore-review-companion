@@ -72,6 +72,67 @@ def optional(api: ForgeAPI, path: str):
         raise
 
 
+def rebuild_development_fork(
+    api: ForgeAPI, config: Path, state: Path, policy_path: Path
+) -> dict:
+    policy = read_import_policy(policy_path)
+    if (
+        policy.owner != "xen-review"
+        or policy.repository != "xen"
+        or policy.api_url != api.base_url
+    ):
+        raise ValueError(
+            "Development rebuild is restricted to the committed xen-review/xen destination"
+        )
+    if api.request_json("user").get("is_admin") is not True:
+        raise ValueError("Development rebuild requires a site-administrator token")
+    mirror = api.request_json("repos/xen-project/xen")
+    review = api.request_json("repos/xen-review/xen")
+    if (
+        mirror.get("mirror") is not True
+        or mirror.get("original_url", "").rstrip("/") != UPSTREAM
+        or review.get("id") != policy.repository_id
+        or review.get("mirror")
+        or review.get("parent", {}).get("id") != mirror["id"]
+    ):
+        raise ValueError("Development fork/upstream identity mismatch; nothing reset")
+    private_directory(config)
+    private_directory(state)
+    tokens = api.request_json(f"admin/users/{IMPORTER}/tokens", params={"limit": 50})
+    if len(tokens) >= 50:
+        raise ValueError("Development token listing is incomplete; no reset performed")
+    subprocess.run(
+        [
+            "systemctl",
+            "--user",
+            "stop",
+            "lore-review-companion.timer",
+            "lore-review-companion.service",
+        ],
+        check=True,
+    )
+    api.request_json("repos/xen-review/xen", method="DELETE")
+    for token in tokens:
+        if token["name"] in ("lore-xen-import-token", "lore-xen-git-token"):
+            api.request_json(
+                f"admin/users/{IMPORTER}/tokens/{token['id']}", method="DELETE"
+            )
+    retired = state.with_name(state.name + ".rebuild-" + secrets.token_hex(6))
+    state.rename(retired)
+    for name in ("import-token", "git-token"):
+        (config / name).unlink(missing_ok=True)
+    review = api.request_json(
+        "repos/xen-project/xen/forks",
+        method="POST",
+        payload={"organization": "xen-review", "name": "xen"},
+    )
+    return {
+        "repository_id": review["id"],
+        "retired_state": str(retired),
+        "next": "Update repository_id in the committed policy, test, commit and push; then run setup without --rebuild-development-fork",
+    }
+
+
 def provision_xen(
     api: ForgeAPI,
     config: Path,
@@ -286,6 +347,11 @@ def main(arguments=None) -> int:
     )
     parser.add_argument("--policy-file", type=Path, default=DEFAULT_POLICY_PATH)
     parser.add_argument(
+        "--rebuild-development-fork",
+        action="store_true",
+        help="Explicitly delete/recreate only xen-review/xen and retire its local import state",
+    )
+    parser.add_argument(
         "--apply",
         action="store_true",
         help="Explicitly authorize the documented provisioning API writes",
@@ -307,6 +373,11 @@ def main(arguments=None) -> int:
     ):
         parser.error("Bootstrap requires --enable-policy and 0..32 rounds")
     if not options.apply:
+        if options.rebuild_development_fork:
+            print(
+                "Plan: stop companion, validate identities, delete/recreate only xen-review/xen, retire its local state and scoped credentials; commit the new policy repository_id before setup/imports. Add --apply to rebuild."
+            )
+            return 0
         print(
             "Plan: create review-companion; xen-project/Xen GitHub mirror with server defaults; xen-review Owners membership and fork; review-only grant; secret selected-repo tokens and assembly clone; validate committed public policy. Add --apply to provision; no requests made."
         )
@@ -318,6 +389,15 @@ def main(arguments=None) -> int:
             timeout=600,
             max_retries=0,
         )
+        if options.rebuild_development_fork:
+            print(
+                json.dumps(
+                    rebuild_development_fork(
+                        api, options.config_dir, options.state_dir, options.policy_file
+                    )
+                )
+            )
+            return 0
         policy = provision_xen(
             api,
             options.config_dir,

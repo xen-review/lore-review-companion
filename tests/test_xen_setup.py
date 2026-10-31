@@ -11,12 +11,94 @@ from unittest.mock import Mock, patch
 from lore_review_companion.forge_api import ForgeAPI
 from lore_review_companion.nntp_source import NNTPFetch, NNTPThreadDiscovery
 from lore_review_companion.import_policy import DEFAULT_POLICY_PATH
-from lore_review_companion.xen_setup import main, provision_xen
+from lore_review_companion.xen_setup import (
+    main,
+    provision_xen,
+    rebuild_development_fork,
+)
 from lore_review_companion.xen_import import main as import_main
 from test_forge_comments import FakeResponse
 
 
 class XenSetupTests(unittest.TestCase):
+    def test_development_rebuild_is_scoped_and_retires_matching_state(self):
+        policy = json.loads(DEFAULT_POLICY_PATH.read_text())
+        for mismatch in (False, True):
+            with (
+                self.subTest(mismatch=mismatch),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                root = Path(temporary)
+                config, state = root / "config", root / "state"
+                config.mkdir(mode=0o700)
+                state.mkdir(mode=0o700)
+                for name in ("import-token", "git-token"):
+                    (config / name).write_text("synthetic-token")
+                (state / "mail.sqlite3").write_text("retained-source")
+                (state / "worker.sqlite3").write_text("old-scheduler")
+                api = Mock(base_url=policy["api_url"])
+                api.request_json.side_effect = [
+                    {"is_admin": True},
+                    {
+                        "id": 1,
+                        "mirror": True,
+                        "original_url": "https://github.com/xen-project/xen.git",
+                    },
+                    {
+                        "id": policy["repository_id"] + int(mismatch),
+                        "mirror": False,
+                        "parent": {"id": 1},
+                    },
+                    [
+                        {"id": 40, "name": "lore-xen-import-token"},
+                        {"id": 41, "name": "unrelated-token"},
+                    ],
+                    None,
+                    None,
+                    {"id": 30},
+                ]
+                with patch("lore_review_companion.xen_setup.subprocess.run") as stop:
+                    if mismatch:
+                        with self.assertRaisesRegex(ValueError, "identity mismatch"):
+                            rebuild_development_fork(
+                                api, config, state, DEFAULT_POLICY_PATH
+                            )
+                        stop.assert_not_called()
+                        self.assertTrue(state.exists())
+                        self.assertTrue((config / "import-token").exists())
+                        self.assertEqual(api.request_json.call_count, 3)
+                    else:
+                        result = rebuild_development_fork(
+                            api, config, state, DEFAULT_POLICY_PATH
+                        )
+                        self.assertEqual(result["repository_id"], 30)
+                        retired = Path(result["retired_state"])
+                        self.assertEqual(
+                            (retired / "mail.sqlite3").read_text(), "retained-source"
+                        )
+                        self.assertTrue((retired / "worker.sqlite3").exists())
+                        self.assertFalse(state.exists())
+                        self.assertFalse((config / "import-token").exists())
+                        stop.assert_called_once()
+                        api.request_json.assert_any_call(
+                            "repos/xen-review/xen", method="DELETE"
+                        )
+                        api.request_json.assert_any_call(
+                            "admin/users/review-companion/tokens/40", method="DELETE"
+                        )
+                        self.assertNotIn(
+                            (
+                                ("admin/users/review-companion/tokens/41",),
+                                {"method": "DELETE"},
+                            ),
+                            api.request_json.call_args_list,
+                        )
+                        api.request_json.assert_any_call(
+                            "repos/xen-project/xen/forks",
+                            method="POST",
+                            payload={"organization": "xen-review", "name": "xen"},
+                        )
+
     def test_on_demand_import_rejects_unapproved_remote_writes(self):
         for command in ("publish", "deliver"):
             with self.subTest(command=command), self.assertRaises(SystemExit) as error:
@@ -326,6 +408,24 @@ class XenSetupTests(unittest.TestCase):
                         "/missing",
                         "--email",
                         "operator@example.test",
+                    ]
+                ),
+                0,
+            )
+            api.assert_not_called()
+
+    def test_rebuild_preview_does_not_read_admin_token_or_call_api(self):
+        with patch("lore_review_companion.xen_setup.ForgeAPI") as api:
+            self.assertEqual(
+                main(
+                    [
+                        "--api-url",
+                        "https://forge.test/api/v1",
+                        "--admin-token-file",
+                        "/missing",
+                        "--email",
+                        "operator@example.test",
+                        "--rebuild-development-fork",
                     ]
                 ),
                 0,

@@ -66,3 +66,23 @@ tokens/grant. Fresh numeric repository IDs must be updated in the committed
 profile, tested, committed and pushed before resuming autonomous imports.
 Optional diagnostic snapshots must not turn this into a production recovery
 ceremony. Record what was rebuilt and which bootstrap paths were actually tested.
+
+Use the setup tool's explicit rebuild mode, which defaults to preview:
+
+```sh
+.venv/bin/python -m lore_review_companion.xen_setup \
+  --api-url https://review-forge.be.free.or.at/api/v1/ \
+  --admin-token-file /path/to/temporary-admin-token \
+  --email mail@example.com --rebuild-development-fork
+```
+
+Add `--apply` to execute. The tool validates the committed repository ID and
+upstream mirror before writes, stops scheduling, deletes only the development
+fork, revokes its named setup tokens, retires the entire old state directory
+under a unique sibling name and recreates the fork. It prints the new repository
+ID without modifying policy. Update that ID in the committed public profile,
+test, commit and push. Run the same setup command with `--apply` but without
+`--rebuild-development-fork` to provision fresh selected-repository tokens,
+grant and assembly clone, then deploy normally. A rebuild never resumes the
+timer itself. The temporary administrator token is a secret and should be
+revoked after setup.
