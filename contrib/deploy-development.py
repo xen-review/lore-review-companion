@@ -156,8 +156,8 @@ def main(arguments=None):
     if forgejo_revision[:10] not in str(version.get("version", "")):
         raise ValueError("HTTP endpoint is not serving the deployed Forgejo revision")
     run("systemctl", "--user", "is-active", "forgejo-review.service")
-    run("systemctl", "--user", "reset-failed", "lore-review-companion.service")
     run("systemctl", "--user", "enable", "--now", "lore-review-companion.service")
+    run("systemctl", "--user", "reset-failed", "lore-review-companion.service")
     run("systemctl", "--user", "is-active", "lore-review-companion.service")
     print(
         json.dumps(
