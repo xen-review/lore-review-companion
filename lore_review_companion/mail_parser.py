@@ -263,10 +263,10 @@ def _subject_metadata(
             _bounded_header_number(version_match.group(1)) if version_match else None
         )
         patch_index = (
-            _bounded_header_number(index_match.group(1)) if index_match else None
+            _bounded_header_number(index_match.group(1)) if index_match else 1
         )
         series_size = (
-            _bounded_header_number(index_match.group(2)) if index_match else None
+            _bounded_header_number(index_match.group(2)) if index_match else 1
         )
         kind: MessageKind = "cover" if patch_index == 0 else "patch"
         title = _SUBJECT_TAG_RE.sub("", subject)

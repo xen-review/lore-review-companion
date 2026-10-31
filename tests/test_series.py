@@ -24,6 +24,16 @@ def message(message_id, subject, *, headers=""):
 
 
 class DiscoverSeriesTests(unittest.TestCase):
+    def test_unnumbered_patch_subjects_are_independent_complete_singletons(self):
+        first = message("singleton@example.test", "[PATCH] xen: single change")
+        second = message("revised@example.test", "[PATCH v5] xen: revised single change")
+        revisions = discover_series((first, second))
+        self.assertEqual(len(revisions), 2)
+        self.assertTrue(all(revision.complete for revision in revisions))
+        self.assertTrue(all(revision.expected_patch_count == 1 for revision in revisions))
+        self.assertEqual((first.patch_index, first.series_size), (1, 1))
+        self.assertEqual((second.patch_index, second.series_size, second.patch_version), (1, 1, 5))
+
     def test_groups_cover_and_patches_by_explicit_thread_root(self):
         cover = message(
             "cover@example.test",
