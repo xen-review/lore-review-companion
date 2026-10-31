@@ -10,6 +10,7 @@ from lore_review_companion.forge_api import ForgeAPI
 
 from lore_review_companion.forge_comments import (
     format_direct_submission_reply,
+    format_nested_reply,
     format_submission_quotes,
     imported_mail_text,
     quoted_parent_matches,
@@ -104,6 +105,204 @@ class MailPresentationTests(unittest.TestCase):
             "````rust\n> ```code```\n````\nAnswer.\n",
         )
         self.assertEqual(format_submission_quotes(">\n", parent, "patch"), ">\n")
+
+    def test_v5_unmatched_patch_quote_is_preserved_in_rust_fence(self):
+        """Preserve unmatched v5 patch quotations in a Rust fence."""
+        reply = (
+            "> diff --git a/new.rs b/new.rs\n"
+            "> @@ -1,2 +1,2 @@\n"
+            "> -old value\n"
+            "> +new value\n"
+            "Please check this change.\n"
+        )
+        self.assertEqual(
+            format_submission_quotes(
+                reply,
+                "A different patch with no matching lines.\n",
+                "patch",
+                quote_patch_code=True,
+            ),
+            "```rust\n"
+            "> diff --git a/new.rs b/new.rs\n"
+            "> @@ -1,2 +1,2 @@\n"
+            "> -old value\n"
+            "> +new value\n"
+            "```\nPlease check this change.\n",
+        )
+
+    def test_v6_unmatched_patch_quote_uses_clean_c_fence(self):
+        """Render unmatched v6 patch quotations in a clean C fence."""
+        reply = (
+            "> diff --git a/new.c b/new.c\n"
+            "> --- a/new.c\n"
+            "> +++ b/new.c\n"
+            "> @@ -1 +1,2 @@\n"
+            "> -old value\n"
+            "> +new value\n"
+            "Please check this change.\n"
+        )
+        self.assertEqual(
+            format_submission_quotes(
+                reply,
+                "A different patch with no matching lines.\n",
+                "patch",
+                quote_patch_code=True,
+                diff_quote_as_c=True,
+            ),
+            "```c\n"
+            "diff --git a/new.c b/new.c\n"
+            "--- a/new.c\n"
+            "+++ b/new.c\n"
+            "@@ -1 +1,2 @@\n"
+            "-old value\n"
+            "+new value\n"
+            "```\nPlease check this change.\n",
+        )
+
+    def test_v6_diff_quote_uses_clean_c_fence(self):
+        """Render a matched diff quotation without email markers."""
+        parent = parse_message(
+            b"From: Author <author@example.test>\n"
+            b"Message-ID: <patch@example.test>\nSubject: [PATCH] change\n\n"
+            b"Patch summary.\n"
+            b"diff --git a/file.c b/file.c\n--- a/file.c\n+++ b/file.c\n"
+            b"@@ -1 +1,2 @@\n int current;\n+int added(void) { return 1; }\n"
+        )
+        reply = parse_message(
+            b"From: Reviewer <reviewer@example.test>\n"
+            b"Message-ID: <reply@example.test>\nSubject: Re: patch\n"
+            b"In-Reply-To: <patch@example.test>\n\n"
+            b"> diff --git a/file.c b/file.c\n"
+            b"> --- a/file.c\n> +++ b/file.c\n> @@ -1 +1,2 @@\n"
+            b">  int current;\n> +int added(void) { return 1; }\n"
+            b"Please check this change.\n"
+        )
+        self.assertEqual(
+            format_direct_submission_reply(
+                reply,
+                (parent,),
+                quote_patch_code=True,
+                diff_quote_as_c=True,
+            ),
+            "```c\n"
+            "diff --git a/file.c b/file.c\n"
+            "--- a/file.c\n"
+            "+++ b/file.c\n"
+            "@@ -1 +1,2 @@\n"
+            " int current;\n"
+            "+int added(void) { return 1; }\n"
+            "```\nPlease check this change.\n",
+        )
+
+    def test_v6_generic_diff_quote_uses_clean_c_fence(self):
+        """Recognize generic diff headers in quoted patches."""
+        parent = parse_message(
+            b"From: Author <author@example.test>\n"
+            b"Message-ID: <patch@example.test>\nSubject: [PATCH] change\n\n"
+            b"Patch summary.\n"
+            b"diff a/file.c b/file.c\n--- a/file.c\n+++ b/file.c\n"
+            b"@@ -1 +1,2 @@\n int current;\n+int added(void) { return 1; }\n"
+        )
+        reply = parse_message(
+            b"From: Reviewer <reviewer@example.test>\n"
+            b"Message-ID: <reply@example.test>\nSubject: Re: patch\n"
+            b"In-Reply-To: <patch@example.test>\n\n"
+            b"> diff a/file.c b/file.c\n> --- a/file.c\n> +++ b/file.c\n"
+            b"> @@ -1 +1,2 @@\n>  int current;\n"
+            b"> +int added(void) { return 1; }\nPlease check this change.\n"
+        )
+
+        self.assertEqual(
+            format_direct_submission_reply(
+                reply,
+                (parent,),
+                quote_patch_code=True,
+                diff_quote_as_c=True,
+            ),
+            "```c\n"
+            "diff a/file.c b/file.c\n"
+            "--- a/file.c\n"
+            "+++ b/file.c\n"
+            "@@ -1 +1,2 @@\n"
+            " int current;\n"
+            "+int added(void) { return 1; }\n"
+            "```\nPlease check this change.\n",
+        )
+
+    def test_v6_unmatched_generic_and_header_only_diffs_use_clean_c_fences(self):
+        """Fence unmatched generic and header-only diff quotations."""
+        generic_quote = (
+            "> diff a/new.c b/new.c\n"
+            "> --- a/new.c\n"
+            "> +++ b/new.c\n"
+            "> @@ -1 +1,2 @@\n"
+            ">  old\n"
+            "> +new\n"
+            "Please check this change.\n"
+        )
+        self.assertEqual(
+            format_submission_quotes(
+                generic_quote,
+                "A different patch with no matching lines.",
+                "patch",
+                quote_patch_code=True,
+                diff_quote_as_c=True,
+            ),
+            "```c\n"
+            "diff a/new.c b/new.c\n"
+            "--- a/new.c\n"
+            "+++ b/new.c\n"
+            "@@ -1 +1,2 @@\n"
+            " old\n"
+            "+new\n"
+            "```\nPlease check this change.\n",
+        )
+
+        parent = parse_message(
+            b"From: Author <author@example.test>\n"
+            b"Message-ID: <patch@example.test>\nSubject: [PATCH] change\n\n"
+            b"Patch summary.\n--- a/file.c\n+++ b/file.c\n"
+            b"@@ -1 +1,2 @@\n int current;\n+int added;\n"
+        )
+        reply = parse_message(
+            b"From: Reviewer <reviewer@example.test>\n"
+            b"Message-ID: <reply@example.test>\nSubject: Re: patch\n"
+            b"In-Reply-To: <patch@example.test>\n\n"
+            b"> --- a/file.c\n> +++ b/file.c\n> @@ -1 +1,2 @@\n"
+            b">  int current;\n> +int added;\nPlease check this change.\n"
+        )
+        self.assertEqual(
+            format_direct_submission_reply(
+                reply,
+                (parent,),
+                quote_patch_code=True,
+                diff_quote_as_c=True,
+            ),
+            "```c\n"
+            "--- a/file.c\n"
+            "+++ b/file.c\n"
+            "@@ -1 +1,2 @@\n"
+            " int current;\n"
+            "+int added;\n"
+            "```\nPlease check this change.\n",
+        )
+
+    def test_v6_nested_reply_keeps_immediate_quote_before_the_remark(self):
+        """Keep the immediate quotation with its nested reply."""
+        body = (
+            "On 10/28/26 15:00, Reviewer wrote:\n"
+            ">> original patch line\n"
+            "> immediate parent line 1\n"
+            "> immediate parent line 2\n"
+            "Reply to that remark.\n"
+        )
+        self.assertEqual(
+            format_nested_reply(body),
+            "```rust\n"
+            "> immediate parent line 1\n"
+            "> immediate parent line 2\n"
+            "```\nReply to that remark.",
+        )
 
     def test_v4_omits_only_a_final_sender_name_signoff(self):
         source_url = "https://lore.kernel.org/xen-devel/"

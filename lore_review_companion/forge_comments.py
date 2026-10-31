@@ -14,7 +14,7 @@ from urllib.parse import quote
 
 from lore_review_companion.anchor import Anchor, RangeAnchor
 from lore_review_companion.forge_api import ForgeAPI, ForgeAPIError
-from lore_review_companion.mail_parser import ParsedMessage
+from lore_review_companion.mail_parser import ParsedMessage, extract_quoted_remarks
 
 
 class DeliveryUncertainError(RuntimeError):
@@ -144,17 +144,41 @@ def submission_text(text: str, *, strip_shortlog: bool = True) -> str:
     return text
 
 
-def format_submission_quotes(text: str, parent: str, parent_kind: str) -> str:
+def _is_diff_header(line: str) -> bool:
+    """Recognize supported diff file headers."""
+    return (
+        line.startswith("diff --git ")
+        or re.fullmatch(r"diff a/.+ b/.+", line) is not None
+    )
+
+
+def format_submission_quotes(
+    text: str,
+    parent: str,
+    parent_kind: str,
+    *,
+    quote_patch_code: bool = False,
+    diff_quote_as_c: bool = False,
+) -> str:
+    """Format retained submission quotations with safe Markdown fences."""
     parent_lines = tuple(line.rstrip() for line in parent.splitlines())
+    diff_boundary = None
     if parent_kind == "patch":
-        boundary = next(
-            (
-                index
-                for index, line in enumerate(parent_lines)
-                if line.startswith("diff --git ")
-            ),
+        diff_boundary = next(
+            (index for index, line in enumerate(parent_lines) if _is_diff_header(line)),
             None,
         )
+        if diff_boundary is None:
+            diff_boundary = next(
+                (
+                    index
+                    for index, line in enumerate(parent_lines[:-1])
+                    if line.startswith("--- ")
+                    and parent_lines[index + 1].startswith("+++ ")
+                ),
+                None,
+            )
+        boundary = len(parent_lines) if quote_patch_code else diff_boundary
         if boundary is None:
             return text
     elif parent_kind == "cover":
@@ -171,6 +195,40 @@ def format_submission_quotes(text: str, parent: str, parent_kind: str) -> str:
 
     lines = text.splitlines(keepends=True)
     output = []
+
+    def append_code_quote(segment: list[str], *, is_diff: bool = False) -> None:
+        """Append a fenced quotation with a delimiter longer than its content."""
+        longest = max(
+            (len(match.group()) for match in re.finditer(r"`+", "".join(segment))),
+            default=0,
+        )
+        fence = "`" * max(3, longest + 1)
+        language = "c" if diff_quote_as_c and is_diff else "rust"
+        output.append(f"{fence}{language}\n")
+        if diff_quote_as_c and is_diff:
+            for line in segment:
+                if line.startswith(">"):
+                    line = line[1:]
+                    if line.startswith(" "):
+                        line = line[1:]
+                output.append(line)
+        else:
+            output.extend(segment)
+        if segment and not segment[-1].endswith(("\n", "\r")):
+            output.append("\n")
+        output.append(f"{fence}\n")
+
+    def patch_like(quoted: list[str]) -> bool:
+        """Identify quoted lines that resemble a patch."""
+        return (
+            any(
+                _is_diff_header(line)
+                or line.startswith(("index ", "--- ", "+++ ", "@@"))
+                for line in quoted
+            )
+            or sum(line.startswith(("+", "-")) for line in quoted) >= 2
+        )
+
     position = 0
     while position < len(lines):
         if not lines[position].startswith(">"):
@@ -194,6 +252,7 @@ def format_submission_quotes(text: str, parent: str, parent_kind: str) -> str:
         needle = "\n" + "\n".join(quoted) + "\n"
         matched_boundary = None
         ambiguous = False
+        match_starts = []
         cursor = searchable.find(needle)
         while cursor >= 0:
             start = bisect_right(offsets, cursor + 1) - 1
@@ -202,11 +261,21 @@ def format_submission_quotes(text: str, parent: str, parent_kind: str) -> str:
                 ambiguous = True
                 break
             matched_boundary = candidate
+            match_starts.append(start)
             cursor = searchable.find(needle, cursor + 1)
         if matched_boundary is None or ambiguous:
-            output.extend(block)
+            if quote_patch_code and patch_like(quoted):
+                append_code_quote(block, is_diff=diff_quote_as_c)
+            else:
+                output.extend(block)
             position = end
             continue
+        matched_diff = (
+            diff_quote_as_c
+            and diff_boundary is not None
+            and bool(match_starts)
+            and all(start >= diff_boundary for start in match_starts)
+        )
         split = 0
         while split < len(block):
             next_split = split + 1
@@ -216,19 +285,10 @@ def format_submission_quotes(text: str, parent: str, parent_kind: str) -> str:
                 next_split += 1
             segment = block[split:next_split]
             if split < matched_boundary and any(quoted[split:next_split]):
-                longest = max(
-                    (
-                        len(match.group())
-                        for match in re.finditer(r"`+", "".join(segment))
-                    ),
-                    default=0,
+                append_code_quote(
+                    segment,
+                    is_diff=matched_diff or patch_like(quoted[split:next_split]),
                 )
-                fence = "`" * max(3, longest + 1)
-                output.append(f"{fence}rust\n")
-                output.extend(segment)
-                if not segment[-1].endswith(("\n", "\r")):
-                    output.append("\n")
-                output.append(f"{fence}\n")
             else:
                 output.extend(segment)
             split = next_split
@@ -237,8 +297,13 @@ def format_submission_quotes(text: str, parent: str, parent_kind: str) -> str:
 
 
 def format_direct_submission_reply(
-    message: ParsedMessage, members: tuple[ParsedMessage, ...]
+    message: ParsedMessage,
+    members: tuple[ParsedMessage, ...],
+    *,
+    quote_patch_code: bool = False,
+    diff_quote_as_c: bool = False,
 ) -> str:
+    """Format quotes only when the retained parent is a submission."""
     parents = message.in_reply_to or message.references[-1:]
     if len(parents) != 1:
         return message.body_text
@@ -247,7 +312,13 @@ def format_direct_submission_reply(
     )
     if parent is None or parent.kind not in ("patch", "cover"):
         return message.body_text
-    return format_submission_quotes(message.body_text, parent.body_text, parent.kind)
+    return format_submission_quotes(
+        message.body_text,
+        parent.body_text,
+        parent.kind,
+        quote_patch_code=quote_patch_code,
+        diff_quote_as_c=diff_quote_as_c,
+    )
 
 
 def imported_mail_text(
@@ -257,9 +328,10 @@ def imported_mail_text(
     body_format: str | None,
     author: str = "",
 ) -> str:
+    """Render imported mail according to its versioned presentation format."""
     if body_format is None:
         return quote_untrusted_text(text)
-    if body_format == "mail-text-v4":
+    if body_format in ("mail-text-v4", "mail-text-v5", "mail-text-v6"):
         text = text.rstrip()
         before, separator, last = text.rpartition("\n")
         signature = last.strip()
@@ -302,6 +374,40 @@ def reply_prose(text: str) -> str:
     ).strip()
 
 
+def format_nested_reply(text: str) -> str:
+    """Preserve immediate-parent quotations alongside nested reply prose."""
+    remarks = {
+        remark.quote_start: remark
+        for remark in extract_quoted_remarks(text)
+        if remark.quote_depth > 0
+    }
+    output = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        remark = remarks.get(number)
+        if remark is not None:
+            quote = list(remark.quote)
+            while quote and not quote[0].strip():
+                quote.pop(0)
+            while quote and not quote[-1].strip():
+                quote.pop()
+            if quote:
+                longest = max(
+                    (
+                        len(match.group())
+                        for match in re.finditer(r"`+", "\n".join(quote))
+                    ),
+                    default=0,
+                )
+                fence = "`" * max(3, longest + 1)
+                output.append(f"{fence}rust")
+                output.extend(f"> {quoted}" if quoted else ">" for quoted in quote)
+                output.append(fence)
+        if line.startswith(">") or re.fullmatch(r"On .+ wrote:\s*", line):
+            continue
+        output.append(line)
+    return "\n".join(output).strip()
+
+
 def quoted_parent_matches(
     quoted: tuple[str, ...],
     parent: str,
@@ -309,8 +415,16 @@ def quoted_parent_matches(
     *,
     allow_excerpt: bool = False,
 ) -> bool:
+    """Check whether quoted text matches the retained parent presentation."""
     if (
-        body_format in ("mail-text-v2", "mail-text-v3", "mail-text-v4")
+        body_format
+        in (
+            "mail-text-v2",
+            "mail-text-v3",
+            "mail-text-v4",
+            "mail-text-v5",
+            "mail-text-v6",
+        )
         and allow_excerpt
     ):
         quote_lines = tuple(line.strip() for line in quoted if line.strip())
@@ -321,7 +435,13 @@ def quoted_parent_matches(
             parent_lines[position : position + len(quote_lines)] == quote_lines
             for position in range(len(parent_lines) - len(quote_lines) + 1)
         )
-    if body_format in ("mail-text-v2", "mail-text-v3", "mail-text-v4"):
+    if body_format in (
+        "mail-text-v2",
+        "mail-text-v3",
+        "mail-text-v4",
+        "mail-text-v5",
+        "mail-text-v6",
+    ):
         return tuple(line for line in quoted if line.strip()) == tuple(
             line for line in parent.splitlines() if line.strip()
         )

@@ -100,6 +100,7 @@ from lore_review_companion.outbox import (
     plan_legacy_migration,
     deliver_approved_imports,
     plan_import_delivery,
+    queue_imported_conversation_recreation,
 )
 from lore_review_companion.preflight import GitPreflightError
 from lore_review_companion.public_inbox import (
@@ -214,6 +215,7 @@ class SeriesDiscovery:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse and execute a bounded companion command."""
     parser = argparse.ArgumentParser(
         prog="lore-review-companion",
         description="Local lore-to-Forgejo review operations",
@@ -330,7 +332,7 @@ def main(argv: list[str] | None = None) -> int:
     nntp_fetch.add_argument("--limit", type=int, default=32)
     nntp_selection = nntp_fetch.add_mutually_exclusive_group()
     nntp_selection.add_argument(
-        "--message-id", help="Fetch only this pending Message-ID"
+        "--message-id", help="Queue and fetch only this Message-ID"
     )
     nntp_selection.add_argument(
         "--after", type=int, default=0, help="Fetch pending items after a queue cursor"
@@ -754,11 +756,15 @@ def main(argv: list[str] | None = None) -> int:
         "queue-imports",
         help="Queue retained replies using exact imported patch comparisons",
     )
+    recreate_import = commands.add_parser(
+        "recreate-import",
+        help="Queue a v6 conversation recreation without changing its original effect",
+    )
     import_deliver = commands.add_parser(
         "deliver-imports",
         help="Preview or approve imported conversation/review/reply effects",
     )
-    for command in (import_queue, import_deliver):
+    for command in (import_queue, recreate_import, import_deliver):
         command.add_argument("--ledger", type=Path, required=True)
         command.add_argument("--api-url", required=True)
         command.add_argument("--owner", required=True)
@@ -773,10 +779,19 @@ def main(argv: list[str] | None = None) -> int:
     import_queue.add_argument("--revision", type=int, required=True)
     import_queue.add_argument("--repository", type=Path, required=True)
     import_queue.add_argument("--max-inline-lines", type=int, default=50)
+    recreate_import.add_argument("--message-id", required=True)
+    recreate_import.add_argument("--original-effect-key", required=True)
+    recreate_import.add_argument("--reason", required=True)
     import_deliver.add_argument(
         "--kind", choices=("conversation", "review", "reply"), required=True
     )
     import_deliver.add_argument("--limit", type=int, default=100)
+    import_deliver.add_argument(
+        "--delivery-id",
+        type=int,
+        action="append",
+        help="Select one exact pending delivery effect (repeat only for a reviewed batch)",
+    )
     import_deliver.add_argument("--write", action="store_true")
     import_deliver.add_argument("--approve")
     import_deliver.add_argument("--retry-uncertain", action="store_true")
@@ -861,7 +876,11 @@ def main(argv: list[str] | None = None) -> int:
                 credentials,
                 refresh_source=not args.no_refresh_source,
             )
-        elif args.command in ("queue-imports", "deliver-imports"):
+        elif args.command in (
+            "queue-imports",
+            "recreate-import",
+            "deliver-imports",
+        ):
             write_enabled = args.command == "deliver-imports" and args.write
             if args.command == "deliver-imports" and bool(args.write) != bool(
                 args.approve
@@ -890,6 +909,15 @@ def main(argv: list[str] | None = None) -> int:
                     ledger.messages_by_id(tuple(args.message_id)),
                     max_inline_lines=args.max_inline_lines,
                 )
+            elif args.command == "recreate-import":
+                result = queue_imported_conversation_recreation(
+                    ledger,
+                    client,
+                    args.pull_index,
+                    args.message_id,
+                    args.original_effect_key,
+                    reason=args.reason,
+                )
             else:
                 event_type = {
                     "conversation": "IMPORT_CONVERSATION",
@@ -905,6 +933,9 @@ def main(argv: list[str] | None = None) -> int:
                         approved_digest=args.approve,
                         limit=args.limit,
                         retry_uncertain=args.retry_uncertain,
+                        delivery_ids=tuple(args.delivery_id)
+                        if args.delivery_id is not None
+                        else None,
                     )
                 else:
                     plan = plan_import_delivery(
@@ -914,6 +945,9 @@ def main(argv: list[str] | None = None) -> int:
                         event_type,
                         limit=args.limit,
                         retry_uncertain=args.retry_uncertain,
+                        delivery_ids=tuple(args.delivery_id)
+                        if args.delivery_id is not None
+                        else None,
                     )
                     result = RetentionPreview(plan, plan.approval_digest())
         elif args.command == "plan-sync":

@@ -10,6 +10,7 @@ import json
 import re
 from dataclasses import asdict, dataclass, replace
 from contextlib import nullcontext
+from datetime import datetime, timezone
 
 from lore_review_companion.anchor import (
     Anchor,
@@ -23,6 +24,7 @@ from lore_review_companion.forge_comments import (
     DeliveryUncertainError,
     ForgeCommentPublisher,
     format_direct_submission_reply,
+    format_nested_reply,
     with_tool_attribution,
     imported_mail_text,
     quoted_parent_matches,
@@ -68,9 +70,85 @@ class ImportDeliveryPlan:
         return hashlib.sha256(value).hexdigest()
 
 
+def _import_payload_sha256(payload: dict) -> str:
+    """Hash the canonical local representation of an imported effect."""
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    return hashlib.sha256(serialized).hexdigest()
+
+
+def _review_import_payload_sha256(pull_index: int, request: dict) -> str:
+    """Reproduce Forgejo's canonical hash of an imported conversation request."""
+    source_time = request.get("source_time")
+    if source_time is not None:
+        if not isinstance(source_time, str):
+            raise PublicationConflict("Original imported source time is invalid")
+        try:
+            parsed = datetime.fromisoformat(source_time.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise PublicationConflict(
+                "Original imported source time is invalid"
+            ) from error
+        if parsed.tzinfo is None:
+            raise PublicationConflict("Original imported source time has no timezone")
+        parsed = parsed.astimezone(timezone.utc)
+        fraction = f"{parsed.microsecond:06d}".rstrip("0")
+        source_time = parsed.strftime("%Y-%m-%dT%H:%M:%S")
+        if fraction:
+            source_time += f".{fraction}"
+        source_time += "Z"
+    serialized = json.dumps(
+        {
+            "index": pull_index,
+            "operation_key": request.get("operation_key"),
+            "message_id": request.get("message_id"),
+            "message_sha256": request.get("message_sha256"),
+            "address": request.get("address"),
+            "name": request.get("name"),
+            "body": request.get("body"),
+            "source_time": source_time,
+            "source_time_basis": request.get("source_time_basis"),
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    for character, escaped in (
+        ("&", r"\u0026"),
+        ("<", r"\u003c"),
+        (">", r"\u003e"),
+        ("\u2028", r"\u2028"),
+        ("\u2029", r"\u2029"),
+    ):
+        serialized = serialized.replace(character, escaped)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _presentation_recreation_marker(
+    original_effect_key: str, original_payload_sha256: str
+) -> str:
+    """Derive the versioned marker for an original conversation recreation."""
+    identity = f"{original_effect_key}\0{original_payload_sha256}\0mail-text-v6"
+    return (
+        "presentation-v6-recreation:"
+        + hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    )
+
+
+def _presentation_recreation_effect_key(
+    message_id: str, original_effect_key: str, original_payload_sha256: str
+) -> str:
+    """Derive a stable recreation identity bound to the source and original."""
+    marker = _presentation_recreation_marker(
+        original_effect_key, original_payload_sha256
+    )
+    return hashlib.sha256(f"{message_id}\0{marker}".encode()).hexdigest()
+
+
 def _assert_import_payload(
     ledger: Ledger, delivery: Delivery, *, source_url: str, depth: int = 0
 ) -> None:
+    """Validate an imported effect against retained source and ancestry evidence."""
     if depth > 100:
         raise PublicationConflict(
             "Imported reply evidence exceeds the bounded ancestry limit"
@@ -83,6 +161,8 @@ def _assert_import_payload(
         "mail-text-v2",
         "mail-text-v3",
         "mail-text-v4",
+        "mail-text-v5",
+        "mail-text-v6",
     ):
         raise PublicationConflict("Unsupported imported message body format")
     request = payload.get("request")
@@ -104,14 +184,88 @@ def _assert_import_payload(
         raise PublicationConflict(
             "Imported delivery lacks matching raw-mail identity evidence"
         )
-    marker = (
-        "imported-full-message-v1"
-        if delivery.event_type == "IMPORT_CONVERSATION"
-        else delivery.effect_key
-        if delivery.event_type == "IMPORT_REPLY"
-        or delivery.effect_key.startswith("imported-review-segment-v1:")
-        else "imported-review-v1"
-    )
+    recreation = payload.get("presentation_recreation")
+    if recreation is not None:
+        if (
+            delivery.event_type != "IMPORT_CONVERSATION"
+            or body_format != "mail-text-v6"
+            or not isinstance(recreation, dict)
+            or set(recreation)
+            != {
+                "original_effect_key",
+                "original_payload_sha256",
+                "original_operation_key",
+                "original_comment_id",
+                "reason",
+            }
+            or not isinstance(recreation.get("original_effect_key"), str)
+            or not isinstance(recreation.get("original_payload_sha256"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", recreation["original_payload_sha256"])
+            is None
+            or not isinstance(recreation.get("original_operation_key"), str)
+            or type(recreation.get("original_comment_id")) is not int
+            or recreation["original_comment_id"] <= 0
+            or not isinstance(recreation.get("reason"), str)
+            or not recreation["reason"].strip()
+            or len(recreation["reason"]) > 500
+            or any(
+                ord(character) < 32 or ord(character) == 127
+                for character in recreation["reason"]
+            )
+            or delivery.effect_key
+            != _presentation_recreation_effect_key(
+                delivery.message_id,
+                recreation["original_effect_key"],
+                recreation["original_payload_sha256"],
+            )
+        ):
+            raise PublicationConflict("Imported presentation recreation is invalid")
+        originals = [
+            effect
+            for effect in ledger.comment_effects(
+                delivery.message_id, delivery.destination
+            )
+            if effect.event_type == "IMPORT_CONVERSATION"
+            and effect.effect_key == recreation["original_effect_key"]
+        ]
+        if len(originals) != 1:
+            raise PublicationConflict(
+                "Original imported conversation for recreation is unavailable"
+            )
+        original = originals[0]
+        original_request = original.payload.get("request")
+        if (
+            original.id >= delivery.id
+            or original.write_state != "complete"
+            or original.payload.get("presentation_recreation") is not None
+            or original.payload.get("body_format") == "mail-text-v6"
+            or not isinstance(original_request, dict)
+            or _import_payload_sha256(original.payload)
+            != recreation["original_payload_sha256"]
+            or original_request.get("operation_key")
+            != recreation["original_operation_key"]
+            or original.payload.get("thread") != payload.get("thread")
+            or original.payload.get("presentation_parent")
+            != payload.get("presentation_parent")
+            or original_request.get("body") == request.get("body")
+        ):
+            raise PublicationConflict(
+                "Original imported conversation changed before recreation"
+            )
+        _assert_import_payload(ledger, original, source_url=source_url, depth=depth + 1)
+        marker = _presentation_recreation_marker(
+            recreation["original_effect_key"],
+            recreation["original_payload_sha256"],
+        )
+    else:
+        marker = (
+            "imported-full-message-v1"
+            if delivery.event_type == "IMPORT_CONVERSATION"
+            else delivery.effect_key
+            if delivery.event_type == "IMPORT_REPLY"
+            or delivery.effect_key.startswith("imported-review-segment-v1:")
+            else "imported-review-v1"
+        )
     expected_key = hashlib.sha256(
         f"{delivery.message_id}\0{marker}".encode()
     ).hexdigest()
@@ -121,20 +275,32 @@ def _assert_import_payload(
         )
     if delivery.event_type == "IMPORT_CONVERSATION":
         text = source.body_text
-        if body_format == "mail-text-v4":
+        if body_format in ("mail-text-v4", "mail-text-v5", "mail-text-v6"):
             thread = payload.get("thread", {})
             recorded = ledger.series_revision(
                 thread.get("series_key"), thread.get("revision")
             )
             if recorded is None:
                 raise PublicationConflict("Imported conversation series is unavailable")
-            text = format_direct_submission_reply(source, recorded.messages)
+            text = format_direct_submission_reply(
+                source,
+                recorded.messages,
+                quote_patch_code=body_format in ("mail-text-v5", "mail-text-v6"),
+                diff_quote_as_c=body_format == "mail-text-v6",
+            )
         presentation = payload.get("presentation_parent")
         suffix = ""
         if presentation is not None:
             parents = source.in_reply_to or source.references[-1:]
             if (
-                body_format not in ("mail-text-v2", "mail-text-v3", "mail-text-v4")
+                body_format
+                not in (
+                    "mail-text-v2",
+                    "mail-text-v3",
+                    "mail-text-v4",
+                    "mail-text-v5",
+                    "mail-text-v6",
+                )
                 or len(parents) != 1
                 or not isinstance(presentation, dict)
                 or presentation.get("message_id") != parents[0]
@@ -179,7 +345,11 @@ def _assert_import_payload(
                 raise PublicationConflict(
                     "Concise reply parent URL differs from its destination"
                 )
-            text = reply_prose(source.body_text)
+            text = (
+                format_nested_reply(source.body_text)
+                if body_format == "mail-text-v6"
+                else reply_prose(source.body_text)
+            )
             suffix = f'\n\n<small><a href="{url}">In reply to the preceding review comment</a></small>'
         if (
             request.get("body")
@@ -291,7 +461,8 @@ def _assert_import_payload(
                 not quoted_parent_matches(
                     remark.quote,
                     comments[position]["body"]
-                    if parent.payload.get("body_format") == "mail-text-v4"
+                    if parent.payload.get("body_format")
+                    in ("mail-text-v4", "mail-text-v5", "mail-text-v6")
                     and not ordinary
                     else parent_remarks[position]["text"],
                     body_format,
@@ -339,7 +510,11 @@ def _assert_import_payload(
     if (
         not isinstance(evidence, dict)
         or evidence.get("parser")
-        not in ("quote-blocks-v1", "quote-blocks-segmented-v1")
+        not in (
+            "quote-blocks-v1",
+            "quote-blocks-segmented-v1",
+            "quote-blocks-suffix-v1",
+        )
         or evidence.get("source_sha256") != source.sha256
         or not isinstance(evidence.get("patch_diff"), str)
         or len(evidence["patch_diff"]) > 8 * 1024 * 1024
@@ -375,9 +550,12 @@ def _assert_import_payload(
         raise PublicationConflict("Imported review patch source changed")
     index = DiffIndex(evidence["patch_diff"])
     remarks = extract_quoted_remarks(source.body_text)
-    segmented = evidence["parser"] == "quote-blocks-segmented-v1"
-    if (segmented and len(comments) != 1) or (
-        not segmented and delivery.effect_key != "imported-review-v1"
+    standalone = evidence["parser"] in (
+        "quote-blocks-segmented-v1",
+        "quote-blocks-suffix-v1",
+    )
+    if (standalone and len(comments) != 1) or (
+        not standalone and delivery.effect_key != "imported-review-v1"
     ):
         raise PublicationConflict("Imported review effect identity is invalid")
     for retained, comment in zip(evidence["remarks"], comments, strict=True):
@@ -394,16 +572,37 @@ def _assert_import_payload(
             if remark is not None
             else None
         )
-        if segmented and remark is not None:
-            if anchor is not None or delivery.effect_key != segmented_review_effect_key(
-                remark, remarks.index(remark)
-            ):
-                raise PublicationConflict(
-                    "Imported segmented review effect identity changed"
-                )
+        if (
+            evidence["parser"] == "quote-blocks-v1"
+            and anchor is None
+            and remark is not None
+        ):
             anchor = index.resolve_segmented_quote(
                 remark, max_lines=payload["max_inline_lines"]
             )
+            if anchor is None:
+                anchor = index.resolve_quote_suffix(
+                    remark, max_lines=payload["max_inline_lines"]
+                )
+        if standalone and remark is not None:
+            if delivery.effect_key != segmented_review_effect_key(
+                remark, remarks.index(remark)
+            ):
+                raise PublicationConflict(
+                    "Imported standalone review effect identity changed"
+                )
+            if evidence["parser"] == "quote-blocks-segmented-v1":
+                if anchor is not None:
+                    raise PublicationConflict(
+                        "Imported segmented review no longer has segmented quote evidence"
+                    )
+                anchor = index.resolve_segmented_quote(
+                    remark, max_lines=payload["max_inline_lines"]
+                )
+            else:
+                anchor = index.resolve_quote_suffix(
+                    remark, max_lines=payload["max_inline_lines"]
+                )
         if (
             anchor is None
             or not isinstance(comment, dict)
@@ -442,6 +641,7 @@ def _assert_import_payload(
 
 
 def accepted_inline_targets(ledger, client, destination, parent, thread):
+    """Find accepted inline targets bound to the retained parent thread."""
     targets = []
     for effect in ledger.comment_effects(parent.message_id, destination):
         if effect.event_type not in ("IMPORT_REVIEW", "IMPORT_REPLY"):
@@ -487,7 +687,8 @@ def accepted_inline_targets(ledger, client, destination, parent, thread):
             targets.append(
                 (
                     comment.get("body")
-                    if effect.payload.get("body_format") == "mail-text-v4"
+                    if effect.payload.get("body_format")
+                    in ("mail-text-v4", "mail-text-v5", "mail-text-v6")
                     else parent_remark.get("text"),
                     identifier,
                     comment.get("body"),
@@ -541,6 +742,7 @@ def plan_import_delivery(
     retry_uncertain: bool = False,
     delivery_ids: tuple[int, ...] | None = None,
 ) -> ImportDeliveryPlan:
+    """Build a source-verified, digestible plan for selected import effects."""
     if event_type not in ("IMPORT_CONVERSATION", "IMPORT_REVIEW", "IMPORT_REPLY"):
         raise ValueError("Unsupported imported event type")
     capabilities = client.capabilities()
@@ -566,10 +768,43 @@ def plan_import_delivery(
             delivery_ids=delivery_ids,
         )
     )
+    if delivery_ids is not None and {item.id for item in deliveries} != set(
+        delivery_ids
+    ):
+        raise DeliveryStateConflict("Selected imported deliveries must all be pending")
+    if delivery_ids is None and any(
+        item.payload.get("presentation_recreation") is not None
+        for item in deliveries
+    ):
+        raise DeliveryStateConflict(
+            "Presentation recreations require explicit delivery ID selection"
+        )
+    if client.unattended and any(
+        item.payload.get("presentation_recreation") is not None
+        for item in deliveries
+    ):
+        raise DeliveryStateConflict("Presentation recreations require manual approval")
     ledger.assert_unconflicted(tuple(delivery.message_id for delivery in deliveries))
     _assert_thread_sources(ledger, client, pull_index, deliveries)
     for delivery in deliveries:
         _assert_import_payload(ledger, delivery, source_url=client.source_url)
+        recreation = delivery.payload.get("presentation_recreation")
+        if recreation is not None:
+            original = next(
+                effect
+                for effect in ledger.comment_effects(
+                    delivery.message_id, delivery.destination
+                )
+                if effect.effect_key == recreation["original_effect_key"]
+            )
+            source = ledger.messages_by_id((delivery.message_id,))[0]
+            if (
+                _verify_recreation_original(client, pull_index, original, source)
+                != recreation["original_comment_id"]
+            ):
+                raise PublicationConflict(
+                    "Original imported comment identifier changed before approval"
+                )
         presentation = delivery.payload.get("presentation_parent")
         if presentation is not None:
             remote = client.lookup_operation(presentation["operation_key"])
@@ -893,6 +1128,146 @@ def comment_destination(publisher: ForgeCommentPublisher, pull_index: int) -> st
     ):
         raise ValueError("pull request index must be a positive integer")
     return f"{publisher.api.base_url}{publisher.repository_path}#{pull_index}"
+
+
+def _verify_recreation_original(
+    client: ForgeImportClient,
+    pull_index: int,
+    original: Delivery,
+    source,
+) -> int:
+    """Verify the accepted original operation and return its comment ID."""
+    request = original.payload["request"]
+    remote = client.lookup_operation(request["operation_key"])
+    if (
+        remote is None
+        or remote.get("type") != "conversation"
+        or remote.get("message_id") != source.message_id
+        or remote.get("message_sha256") != source.sha256
+        or remote.get("operation_key") != request["operation_key"]
+        or remote.get("pull_index") != pull_index
+        or type(remote.get("comment_id")) is not int
+        or remote["comment_id"] <= 0
+    ):
+        raise PublicationConflict(
+            "Original imported conversation is not accepted on this pull request"
+        )
+    if remote.get("payload_sha256") != _review_import_payload_sha256(
+        pull_index, request
+    ):
+        raise PublicationConflict(
+            "Original imported conversation payload changed before recreation"
+        )
+    return remote["comment_id"]
+
+
+def queue_imported_conversation_recreation(
+    ledger: Ledger,
+    client: ForgeImportClient,
+    pull_index: int,
+    message_id: str,
+    original_effect_key: str,
+    *,
+    reason: str,
+) -> Delivery:
+    """Queue an append-only v6 recreation bound to a completed conversation."""
+    if (
+        not isinstance(reason, str)
+        or not reason.strip()
+        or len(reason) > 500
+        or any(ord(character) < 32 or ord(character) == 127 for character in reason)
+    ):
+        raise ValueError("A short single-line recreation reason is required")
+    capabilities = client.capabilities()
+    if "conversation" not in capabilities["operations"]:
+        raise ValueError(
+            "Imported conversations are not enabled by repository capabilities"
+        )
+    destination = comment_destination(client, pull_index)
+    repository_destination = client.api.base_url + client.repository_path
+    ledger.assert_publication_sources(repository_destination, pull_index)
+    (source,) = ledger.messages_by_id((message_id,))
+    ledger.assert_unconflicted((source.message_id,))
+    originals = [
+        effect
+        for effect in ledger.comment_effects(source.message_id, destination)
+        if effect.event_type == "IMPORT_CONVERSATION"
+        and effect.effect_key == original_effect_key
+    ]
+    if len(originals) != 1:
+        raise ValueError("Select one existing imported conversation effect")
+    original = originals[0]
+    if (
+        original.write_state != "complete"
+        or original.payload.get("presentation_recreation") is not None
+        or original.payload.get("body_format") == "mail-text-v6"
+    ):
+        raise DeliveryStateConflict(
+            "Recreation requires one completed conversation with an older presentation"
+        )
+    _assert_thread_sources(ledger, client, pull_index, (original,))
+    _assert_import_payload(ledger, original, source_url=client.source_url)
+    thread = original.payload.get("thread")
+    recorded = ledger.series_revision(thread["series_key"], thread["revision"])
+    if recorded is None:
+        raise PublicationConflict("Recorded source revision is unavailable")
+    original_comment_id = _verify_recreation_original(
+        client, pull_index, original, source
+    )
+    original_payload_sha256 = _import_payload_sha256(original.payload)
+    effect_key = _presentation_recreation_effect_key(
+        source.message_id, original.effect_key, original_payload_sha256
+    )
+    operation_key = effect_key
+    presentation = original.payload.get("presentation_parent")
+    if presentation is not None:
+        text = format_nested_reply(source.body_text)
+    else:
+        text = format_direct_submission_reply(
+            source,
+            recorded.messages,
+            quote_patch_code=True,
+            diff_quote_as_c=True,
+        )
+    body = imported_mail_text(
+        text,
+        source.message_id,
+        client.source_url,
+        "mail-text-v6",
+        source.from_name or source.from_address,
+    )
+    if presentation is not None:
+        body += f'\n\n<small><a href="{presentation["url"]}">In reply to the preceding review comment</a></small>'
+    request = dict(original.payload["request"])
+    request["operation_key"] = operation_key
+    request["body"] = body
+    payload = {
+        "payload_version": original.payload["payload_version"],
+        "thread": thread,
+        "body_format": "mail-text-v6",
+        "presentation_recreation": {
+            "original_effect_key": original.effect_key,
+            "original_payload_sha256": original_payload_sha256,
+            "original_operation_key": original.payload["request"]["operation_key"],
+            "original_comment_id": original_comment_id,
+            "reason": reason,
+        },
+        "request": request,
+    }
+    if presentation is not None:
+        payload["presentation_parent"] = presentation
+    delivery_id = ledger.enqueue(
+        source.message_id,
+        "IMPORT_CONVERSATION",
+        destination,
+        effect_key,
+        payload,
+    )
+    return next(
+        effect
+        for effect in ledger.comment_effects(source.message_id, destination)
+        if effect.id == delivery_id
+    )
 
 
 def plan_legacy_migration(

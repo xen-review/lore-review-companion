@@ -28,6 +28,7 @@ from lore_review_companion.forge_comments import (
     ForgeCommentPublisher,
     StaleAnchorError,
     format_direct_submission_reply,
+    format_nested_reply,
     imported_mail_text,
     quoted_parent_matches,
     quote_untrusted_text,
@@ -245,6 +246,7 @@ def queue_imported_reply(
     patch_diffs: Mapping[str, str],
     max_inline_lines: int = 50,
 ) -> ReplyQueueSummary:
+    """Queue verified conversation and review effects for retained mail."""
     if type(max_inline_lines) is not int or not 1 <= max_inline_lines <= 1000:
         raise ValueError("A bounded inline line limit is required")
     with ledger.worker_lock():
@@ -300,16 +302,19 @@ def queue_imported_reply(
         }
         existing = ledger.comment_effects(message.message_id, destination)
         body_format = (
-            existing[0].payload.get("body_format") if existing else "mail-text-v4"
+            existing[0].payload.get("body_format") if existing else "mail-text-v6"
         )
         format_fields = {"body_format": body_format} if body_format is not None else {}
         parents = message.in_reply_to or message.references[-1:]
         presentation = {}
-        conversation_text = (
-            format_direct_submission_reply(message, recorded.messages)
-            if body_format == "mail-text-v4"
-            else message.body_text
-        )
+        conversation_text = message.body_text
+        if body_format in ("mail-text-v4", "mail-text-v5", "mail-text-v6"):
+            conversation_text = format_direct_submission_reply(
+                message,
+                recorded.messages,
+                quote_patch_code=body_format in ("mail-text-v5", "mail-text-v6"),
+                diff_quote_as_c=body_format == "mail-text-v6",
+            )
         existing_conversation = next(
             (
                 effect
@@ -326,10 +331,21 @@ def queue_imported_reply(
                     "presentation_parent"
                 ]
             }
-            conversation_text = reply_prose(message.body_text)
+            conversation_text = (
+                format_nested_reply(message.body_text)
+                if body_format == "mail-text-v6"
+                else reply_prose(message.body_text)
+            )
         if (
             not existing
-            and body_format in ("mail-text-v2", "mail-text-v3", "mail-text-v4")
+            and body_format
+            in (
+                "mail-text-v2",
+                "mail-text-v3",
+                "mail-text-v4",
+                "mail-text-v5",
+                "mail-text-v6",
+            )
             and len(parents) == 1
         ):
             parent_source = ledger.messages_by_id(parents)[0]
@@ -363,7 +379,11 @@ def queue_imported_reply(
                         )
                     site = client.api.base_url.rstrip("/").removesuffix("/api/v1")
                     parent_url = f"{site}/{quote(client.owner, safe='')}/{quote(client.repo, safe='')}/pulls/{pull_index}#issuecomment-{remote['comment_id']}"
-                    conversation_text = reply_prose(message.body_text)
+                    conversation_text = (
+                        format_nested_reply(message.body_text)
+                        if body_format == "mail-text-v6"
+                        else reply_prose(message.body_text)
+                    )
                     presentation = {
                         "presentation_parent": {
                             "message_id": parents[0],
@@ -394,30 +414,33 @@ def queue_imported_reply(
         identity = hashlib.sha256(
             f"{message.message_id}\0imported-full-message-v1".encode()
         ).hexdigest()
-        conversation = ledger.enqueue(
-            message.message_id,
-            "IMPORT_CONVERSATION",
-            destination,
-            "imported-full-message-v1",
-            {
-                "payload_version": 3,
-                "thread": thread,
-                **format_fields,
-                **presentation,
-                "request": {
-                    **common,
-                    "operation_key": identity,
-                    "body": conversation_body,
+
+        def queue_conversation():
+            return ledger.enqueue(
+                message.message_id,
+                "IMPORT_CONVERSATION",
+                destination,
+                "imported-full-message-v1",
+                {
+                    "payload_version": 3,
+                    "thread": thread,
+                    **format_fields,
+                    **presentation,
+                    "request": {
+                        **common,
+                        "operation_key": identity,
+                        "body": conversation_body,
+                    },
                 },
-            },
-        )
+            )
+
         remarks = extract_quoted_remarks(message.body_text)
         if not remarks:
-            return ReplyQueueSummary(conversation, 0, 0)
+            return ReplyQueueSummary(queue_conversation(), 0, 0)
         parents = message.in_reply_to or message.references[-1:]
         if len(parents) != 1:
             return ReplyQueueSummary(
-                conversation,
+                queue_conversation(),
                 0,
                 len(remarks),
                 "Quoted reply has no unique explicit parent",
@@ -434,11 +457,11 @@ def queue_imported_reply(
                     remarks,
                     common,
                     thread,
-                    conversation,
+                    queue_conversation(),
                     body_format,
                 )
         if match.patch_message_id is None:
-            return ReplyQueueSummary(conversation, 0, len(remarks))
+            return ReplyQueueSummary(queue_conversation(), 0, len(remarks))
         patch = next(
             (
                 item
@@ -450,7 +473,10 @@ def queue_imported_reply(
         diff = patch_diffs.get(match.patch_message_id)
         if patch is None or not isinstance(diff, str):
             return ReplyQueueSummary(
-                conversation, 0, len(remarks), "Exact patch comparison is unavailable"
+                queue_conversation(),
+                0,
+                len(remarks),
+                "Exact patch comparison is unavailable",
             )
         capabilities = client.capabilities()
         supported_limit = capabilities.get("max_inline_lines")
@@ -461,7 +487,7 @@ def queue_imported_reply(
             or "review" not in capabilities["operations"]
         ):
             return ReplyQueueSummary(
-                conversation,
+                queue_conversation(),
                 0,
                 len(remarks),
                 "Requested review range capability is unavailable",
@@ -481,16 +507,85 @@ def queue_imported_reply(
                 for field in ("head_commit", "base_commit", "merge_base")
             )
         except (ForgeAPIError, StaleAnchorError, ValueError) as error:
-            return ReplyQueueSummary(conversation, 0, len(remarks), str(error))
+            return ReplyQueueSummary(queue_conversation(), 0, len(remarks), str(error))
         index = DiffIndex(diff)
         comments, evidence, segmented = [], [], []
+        existing_review = next(
+            (
+                effect
+                for effect in existing
+                if effect.event_type == "IMPORT_REVIEW"
+                and effect.effect_key == "imported-review-v1"
+            ),
+            None,
+        )
+        existing_review_remarks = {
+            json.dumps(remark, sort_keys=True, separators=(",", ":"))
+            for remark in (
+                existing_review.payload.get("evidence", {}).get("remarks", [])
+                if existing_review is not None
+                else ()
+            )
+        }
         for position, remark in enumerate(remarks):
-            anchor = index.resolve_quote(remark, max_lines=max_inline_lines)
-            is_segmented = anchor is None
-            if is_segmented:
-                anchor = index.resolve_segmented_quote(
-                    remark, max_lines=max_inline_lines
-                )
+            serialized_remark = json.dumps(
+                asdict(remark), sort_keys=True, separators=(",", ":")
+            )
+            already_in_review = serialized_remark in existing_review_remarks
+            effect_key = segmented_review_effect_key(remark, position)
+            existing_standalone = next(
+                (
+                    effect
+                    for effect in existing
+                    if effect.event_type == "IMPORT_REVIEW"
+                    and effect.effect_key == effect_key
+                ),
+                None,
+            )
+            if existing_standalone is not None:
+                standalone_evidence = existing_standalone.payload.get("evidence", {})
+                parser = standalone_evidence.get("parser")
+                if (
+                    existing_standalone.payload.get("thread") != thread
+                    or standalone_evidence.get("source_sha256") != message.sha256
+                ):
+                    raise PublicationConflict(
+                        "Previously queued review no longer matches retained source"
+                    )
+                if parser == "quote-blocks-segmented-v1":
+                    anchor = index.resolve_segmented_quote(
+                        remark, max_lines=max_inline_lines
+                    )
+                elif parser == "quote-blocks-suffix-v1":
+                    anchor = index.resolve_quote_suffix(
+                        remark, max_lines=max_inline_lines
+                    )
+                else:
+                    raise PublicationConflict(
+                        "Previously queued standalone review has an unknown parser"
+                    )
+                if anchor is None:
+                    raise PublicationConflict(
+                        "Previously queued review no longer matches retained source"
+                    )
+                is_segmented = True
+            else:
+                anchor = index.resolve_quote(remark, max_lines=max_inline_lines)
+                is_segmented = anchor is None
+                parser = "quote-blocks-v1"
+                if is_segmented:
+                    anchor = index.resolve_segmented_quote(
+                        remark, max_lines=max_inline_lines
+                    )
+                    if anchor is not None:
+                        parser = "quote-blocks-segmented-v1"
+                    else:
+                        anchor = index.resolve_quote_suffix(
+                            remark, max_lines=max_inline_lines
+                        )
+                        if anchor is not None:
+                            parser = "quote-blocks-suffix-v1"
+                        is_segmented = False
             if anchor is None or not remark.text.strip():
                 continue
             comment = {
@@ -508,8 +603,10 @@ def queue_imported_reply(
                 "new_position": anchor.new_position,
                 "extra_lines_count": anchor.extra_lines_count,
             }
-            if is_segmented:
-                segmented.append((position, remark, comment))
+            if is_segmented or (existing_review is not None and not already_in_review):
+                if parser == "quote-blocks-v1":
+                    parser = "quote-blocks-suffix-v1"
+                segmented.append((position, remark, comment, parser))
             else:
                 comments.append(comment)
                 evidence.append(asdict(remark))
@@ -561,7 +658,7 @@ def queue_imported_reply(
                     },
                 },
             )
-        for position, remark, comment in segmented:
+        for position, remark, comment, parser in segmented:
             effect_key = segmented_review_effect_key(remark, position)
             identity = hashlib.sha256(
                 f"{message.message_id}\0{effect_key}".encode()
@@ -577,7 +674,7 @@ def queue_imported_reply(
                     "max_inline_lines": max_inline_lines,
                     **format_fields,
                     "evidence": {
-                        "parser": "quote-blocks-segmented-v1",
+                        "parser": parser,
                         "source_sha256": message.sha256,
                         "patch_message_id": patch.message_id,
                         "patch_source_sha256": next(
@@ -611,8 +708,13 @@ def queue_imported_reply(
                 },
             )
         inline_count = len(comments) + len(segmented)
+        conversation_id = (
+            existing_conversation.id if existing_conversation is not None else 0
+        )
+        if inline_count < len(remarks):
+            conversation_id = queue_conversation()
         return ReplyQueueSummary(
-            conversation, inline_count, len(remarks) - inline_count
+            conversation_id, inline_count, len(remarks) - inline_count
         )
 
 
@@ -628,13 +730,41 @@ def _queue_imported_inline_replies(
     conversation,
     body_format,
 ):
-    targets = accepted_inline_targets(ledger, client, destination, parent, thread)
+    """Queue replies that uniquely match accepted parent remarks."""
+    existing_replies = {
+        effect.effect_key: effect
+        for effect in ledger.comment_effects(message.message_id, destination)
+        if effect.event_type == "IMPORT_REPLY"
+    }
+    targets = None
     ordinary_targets = None
 
     queued = 0
     for position, remark in enumerate(remarks):
         if remark.quote_depth != 1:
             continue
+        serialized = json.dumps(asdict(remark), sort_keys=True, separators=(",", ":"))
+        effect_key = f"imported-reply-v1:{position}:{hashlib.sha256(serialized.encode()).hexdigest()}"
+        existing = existing_replies.get(effect_key)
+        if existing is not None:
+            evidence = existing.payload.get("evidence", {})
+            if (
+                existing.payload.get("thread") != thread
+                or evidence.get("source_sha256") != message.sha256
+                or json.dumps(
+                    evidence.get("remark"), sort_keys=True, separators=(",", ":")
+                )
+                != serialized
+            ):
+                raise PublicationConflict(
+                    "Previously queued reply no longer matches retained source"
+                )
+            queued += 1
+            continue
+        if targets is None:
+            targets = accepted_inline_targets(
+                ledger, client, destination, parent, thread
+            )
         candidates = [
             target
             for target in targets
@@ -688,8 +818,6 @@ def _queue_imported_inline_replies(
             if quoted_parent_matches(remark.quote, parent_text, body_format)
             else "quote-blocks-reply-excerpt-v1"
         )
-        serialized = json.dumps(asdict(remark), sort_keys=True, separators=(",", ":"))
-        effect_key = f"imported-reply-v1:{position}:{hashlib.sha256(serialized.encode()).hexdigest()}"
         operation_key = hashlib.sha256(
             f"{message.message_id}\0{effect_key}".encode()
         ).hexdigest()
