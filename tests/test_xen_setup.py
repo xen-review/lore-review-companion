@@ -234,7 +234,7 @@ class XenSetupTests(unittest.TestCase):
             "source_url": "https://lore.kernel.org/xen-devel/",
             "git_username": "review-companion",
             "git_remote": "https://forge.test/xen-review/xen.git",
-            "target_branch": "master",
+            "target_branch": "staging",
             "base_commit": "a" * 40,
         }
         with (
