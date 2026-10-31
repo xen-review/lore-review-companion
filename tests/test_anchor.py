@@ -106,6 +106,62 @@ class DiffIndexTests(unittest.TestCase):
         )
         self.assertIsNone(self.index.resolve_quote(remark, max_lines=1))
 
+    def test_suffix_resolves_headerless_quote_by_unique_changed_lines(self):
+        """Resolve a unique changed-line quote without file headers."""
+        (remark,) = extract_quoted_remarks("> +new_call();\nPlease reconsider.\n")
+        self.assertIsNone(self.index.resolve_quote(remark))
+        anchor = self.index.resolve_quote_suffix(remark)
+        self.assertEqual(
+            (anchor.path, anchor.old_position, anchor.new_position),
+            ("src/sample.c", 0, 11),
+        )
+
+    def test_suffix_skips_cross_file_hunks_to_last_exact_range(self):
+        """Resolve the last exact range in a multi-file quoted diff."""
+        index = DiffIndex(
+            "diff --git a/src/first.c b/src/first.c\n"
+            "--- a/src/first.c\n+++ b/src/first.c\n"
+            "@@ -1 +1,2 @@\n-old_value\n+new_value\n"
+            "diff --git a/include/feature.h b/include/feature.h\n"
+            "--- a/include/feature.h\n+++ b/include/feature.h\n"
+            "@@ -2 +2,2 @@\n-old_feature\n+new_feature\n"
+            "@@ -40,3 +40,4 @@\n"
+            " first_field,\n second_field,\n+    new_flag,\n next_field,\n };\n"
+        )
+        (remark,) = extract_quoted_remarks(
+            "> diff --git a/src/first.c b/src/first.c\n"
+            "> --- a/src/first.c\n> +++ b/src/first.c\n"
+            "> @@ -1 +1,2 @@\n> -old_value\n> +new_value\n"
+            "> diff --git a/include/feature.h b/include/feature.h\n"
+            "> --- a/include/feature.h\n> +++ b/include/feature.h\n"
+            "> @@ -2 +2,2 @@\n> -old_feature\n> +new_feature\n"
+            "> @@ -40,3 +40,4 @@\n"
+            ">  first_field,\n>  second_field,\n> +    new_flag,\n"
+            ">  next_field,\n>  };\nGenerally, looks good.\n"
+        )
+        self.assertIsNone(index.resolve_quote(remark))
+        anchor = index.resolve_quote_suffix(remark)
+        self.assertEqual(
+            (
+                anchor.path,
+                anchor.old_position,
+                anchor.new_position,
+                anchor.extra_lines_count,
+            ),
+            ("include/feature.h", 0, 40, 4),
+        )
+
+    def test_suffix_does_not_guess_between_files(self):
+        """Reject suffixes that match more than one file."""
+        index = DiffIndex(
+            "diff --git a/one.c b/one.c\n--- a/one.c\n+++ b/one.c\n"
+            "@@ -0,0 +1 @@\n+same();\n"
+            "diff --git a/two.c b/two.c\n--- a/two.c\n+++ b/two.c\n"
+            "@@ -0,0 +1 @@\n+same();\n"
+        )
+        (remark,) = extract_quoted_remarks("> +same();\nPlease change.\n")
+        self.assertIsNone(index.resolve_quote_suffix(remark))
+
     def test_context_and_deletion_select_left_range(self):
         (remark,) = extract_quoted_remarks(
             "> --- a/src/sample.c\n> +++ b/src/sample.c\n"

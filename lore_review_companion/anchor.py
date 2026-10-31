@@ -191,6 +191,85 @@ class DiffIndex:
                 )
         return next(iter(candidates)) if len(candidates) == 1 else None
 
+    def resolve_quote_suffix(
+        self, remark: QuotedRemark, *, max_lines: int = 50
+    ) -> RangeAnchor | None:
+        """Resolve the longest unique changed-line suffix of a quoted block."""
+        if (
+            not isinstance(max_lines, int)
+            or isinstance(max_lines, bool)
+            or max_lines < 1
+        ):
+            raise ValueError("The maximum selected line count must be positive")
+        for start in range(len(remark.quote)):
+            quote = list(remark.quote[start:])
+            while quote and quote[-1] == "":
+                quote.pop()
+            if not quote:
+                continue
+
+            paths = {
+                _header_path(header, header[:4])
+                for header in (*remark.headers, *quote)
+                if header.startswith(("--- ", "+++ "))
+            } - {""}
+            if len(paths) > 1:
+                continue
+
+            tokens = []
+            invalid = False
+            for line in quote:
+                if line.startswith(
+                    ("diff --git ", "index ", "--- ", "+++ ")
+                ) or _HUNK_RE.match(line):
+                    if tokens:
+                        invalid = True
+                        break
+                    continue
+                if line.startswith("\\ No newline"):
+                    continue
+                if not line or line[0] not in ("+", "-", " "):
+                    invalid = True
+                    break
+                tokens.append((line[0], line[1:].strip()))
+            markers = {marker for marker, _ in tokens}
+            if (
+                invalid
+                or not tokens
+                or len(tokens) > max_lines
+                or not markers.intersection({"+", "-"})
+                or ("+" in markers and "-" in markers)
+            ):
+                continue
+
+            side = "old" if "-" in markers else "new"
+            candidates = set()
+            for (path, candidate_side, _), lines in self._ranges.items():
+                if candidate_side != side or (paths and path not in paths):
+                    continue
+                for offset in range(len(lines) - len(tokens) + 1):
+                    window = lines[offset : offset + len(tokens)]
+                    if [
+                        (line[0], line[1:].strip()) for line, _ in window
+                    ] != tokens:
+                        continue
+                    start_line = window[0][1]
+                    if [position for _, position in window] != list(
+                        range(start_line, start_line + len(tokens))
+                    ):
+                        continue
+                    candidates.add(
+                        RangeAnchor(
+                            path,
+                            start_line if side == "old" else 0,
+                            start_line if side == "new" else 0,
+                            len(tokens) - 1,
+                        )
+                    )
+            if len(candidates) == 1:
+                return next(iter(candidates))
+        return None
+
     def resolve_segmented_quote(
         self, remark: QuotedRemark, *, max_lines: int = 50
     ) -> RangeAnchor | None:
