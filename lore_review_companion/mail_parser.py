@@ -102,6 +102,15 @@ class ParsedMessage:
     time_estimate: MessageTimeEstimate | None
 
 
+def has_excluded_recipient(message: ParsedMessage) -> bool:
+    headers = BytesHeaderParser(policy=policy.default).parsebytes(message.raw_message)
+    addresses = getaddresses(
+        [str(value) for field in ("To", "Cc", "Bcc", "Resent-To", "Resent-Cc", "Resent-Bcc")
+         for value in headers.get_all(field, [])]
+    )
+    return any("@vger.kernel.org" in address.casefold() for _, address in addresses)
+
+
 @dataclass(frozen=True)
 class QuotedRemark:
     quote: tuple[str, ...]

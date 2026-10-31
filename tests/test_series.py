@@ -24,6 +24,16 @@ def message(message_id, subject, *, headers=""):
 
 
 class DiscoverSeriesTests(unittest.TestCase):
+    def test_excluded_recipient_suppresses_entire_submission_revision(self):
+        cover = message("excluded-cover@example.test", "[PATCH 0/1] xen: example",
+                        headers='Cc: "List, Example" <list@VGER.KERNEL.ORG>\n')
+        patch_message = message("excluded-patch@example.test", "[PATCH 1/1] xen: example",
+                                headers="In-Reply-To: <excluded-cover@example.test>\n")
+        self.assertEqual(discover_series((cover, patch_message)), ())
+        allowed = message("allowed@example.test", "[PATCH] xen: allowed",
+                          headers="From: list@vger.kernel.org\nTo: other@example.test\n")
+        self.assertTrue(discover_series((allowed,))[0].complete)
+
     def test_unnumbered_patch_subjects_are_independent_complete_singletons(self):
         first = message("singleton@example.test", "[PATCH] xen: single change")
         second = message("revised@example.test", "[PATCH v5] xen: revised single change")

@@ -8,6 +8,15 @@ Mirror mailing-list patch series and review discussions into a dedicated
 Forgejo repository, starting with `xen-devel` on lore.kernel.org. The companion
 is deterministic Python software; it does not require a runtime LLM.
 
+## Import Design Principles
+
+- Ignore a submission revision if any cover or patch message names a recipient
+  containing `@vger.kernel.org` in To, Cc, Bcc or their Resent equivalents.
+  Match addresses case-insensitively after parsing mail headers. Excluded source
+  messages and replies are not candidates for PR or discussion import.
+- Preserve source identity and do not guess the relationship between conflicting
+  cover messages, patches or comments.
+
 **License:** GNU General Public License, version 2 or (at your option) any later
 version (`GPL-2.0-or-later`). See [COPYING](COPYING) for the full text and
 [CONTRIBUTING.md](CONTRIBUTING.md) for contribution and code-reuse requirements.

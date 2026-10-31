@@ -7,7 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable
 
-from lore_review_companion.mail_parser import ParsedMessage
+from lore_review_companion.mail_parser import ParsedMessage, has_excluded_recipient
 from lore_review_companion.series import SeriesRevision
 
 
@@ -74,6 +74,9 @@ def match_thread_replies(
                 if message is None or message.kind != "reply":
                     resolved[current] = set()
                     continue
+                if has_excluded_recipient(message):
+                    resolved[current] = set()
+                    continue
                 known_parents = tuple(
                     parent
                     for parent in message.in_reply_to
@@ -111,7 +114,7 @@ def match_thread_replies(
     matched: list[ThreadMatch] = []
     unmatched: list[ParsedMessage] = []
     replies = sorted(
-        (message for message in by_id.values() if message.kind == "reply"),
+        (message for message in by_id.values() if message.kind == "reply" and not has_excluded_recipient(message)),
         key=lambda message: message.message_id or "",
     )
     for reply in replies:

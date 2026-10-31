@@ -9,7 +9,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Iterable
 
-from lore_review_companion.mail_parser import ParsedMessage
+from lore_review_companion.mail_parser import ParsedMessage, has_excluded_recipient
 
 MAX_SERIES_PATCHES = 500
 _CHANGE_ID = re.compile(
@@ -126,6 +126,8 @@ def discover_series(messages: Iterable[ParsedMessage]) -> tuple[SeriesRevision, 
 
     revisions: list[SeriesRevision] = []
     for (root_id, revision), members in sorted(grouped.items()):
+        if any(has_excluded_recipient(member) for member in members):
+            continue
         members.sort(
             key=lambda item: (
                 item.patch_index is None,

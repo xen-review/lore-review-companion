@@ -76,6 +76,11 @@ alone is not proof of complete discussion delivery.
   revision, Message-ID/source link, failed operation and concrete cause. Counts
   or unnamed aggregate warnings are not an adequate report. Distinguish
   observed snapshots from current or exhaustive coverage.
+- Explain technical labels such as "classification" in terms of the exact
+  messages, fields, relationships and observed effects. When evidence needs
+  more space, write and link a specific, maintained document with source links,
+  what was observed, what remains unknown and the next action; do not substitute
+  unexplained jargon or a bare category for an actionable explanation.
 - End every user-facing turn with the remaining blockers and affected
   instances, or explicitly state that there are no known blockers. Do not
   claim unfinished, untested, uncommitted or undeployed work is complete.

@@ -8,6 +8,16 @@ from lore_review_companion.threads import match_thread_replies
 
 
 class ThreadMatchingTests(unittest.TestCase):
+    def test_reply_with_excluded_recipient_is_not_imported(self):
+        patch = message("patch@example.test", "[PATCH] xen: change")
+        reply = message("reply@example.test", "Re: patch", headers=(
+            "In-Reply-To: <patch@example.test>\n"
+            "Cc: Example List <list@VGER.KERNEL.ORG>\n"
+        ))
+        result = match_thread_replies((patch, reply), discover_series((patch,)))
+        self.assertEqual(result.matched, ())
+        self.assertEqual(result.unmatched, ())
+
     def test_nested_replies_match_patch_independent_of_arrival_order(self):
         patch = message("patch@example.test", "[PATCH 1/1] xen: change")
         first = message(

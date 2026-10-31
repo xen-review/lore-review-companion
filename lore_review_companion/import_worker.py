@@ -395,6 +395,8 @@ def _run_import_worker_round(
                 for current in ledger.discover_related_series(seed)
                 if current.series_key == key and current.revision == number
             )
+            if not revisions:
+                continue
             if len(revisions) != 1:
                 raise ValueError(
                     "Worker revision no longer has one unambiguous retained source mapping"
