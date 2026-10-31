@@ -27,6 +27,11 @@ running service is deterministic software, not an LLM agent.
 - Import existing and new replies into their original revision. Use Message-ID,
   References/In-Reply-To, and explicit associations. Subject similarity and an
   unverified change-id alone do not establish series identity.
+- New submission imports are autonomous end-to-end under the reviewed worker
+  policy: discover and retain the thread before publication, then import all
+  retained review replies, accepting parents before queueing children. No AI or
+  operator is required to queue or approve individual replies. Source recovery
+  can defer publication; uncertain evidence stops rather than inventing coverage.
 - Preserve raw mail and hashes. Quarantine conflicting content with the same
   Message-ID. Distinguish source identity from patch equivalence and Git identity.
 - Convert remarks below quoted patch lines into inline comments only when the
@@ -208,7 +213,7 @@ replay preserves the originally recorded build. PR titles are `Sender: Subject
 tail. Existing PR presentation changes require an explicit scoped, audited
 compare-and-swap rather than silently changing the original import request.
 
-### Explicit PR Refresh (Planned)
+### Explicit PR Refresh
 
 A refresh command must preview the exact PR, description, imported comments,
 reviews, reply ancestry, and any non-imported or locally edited content before
@@ -218,15 +223,21 @@ and recoverable state for retries. Human discussion and externally created
 content must not be silently lost. The preview must explain any content that
 would be removed and refuse changed or uncertain evidence.
 
-This is not yet implemented. Deleting imported comments through ordinary APIs
-would strand their immutable import-operation records, making replay fail. The
-existing presentation correction endpoint covers only PR title and body. A
-close-and-recreate fallback also needs server support: the source Message-ID is
-already bound to the original imported PR. Implement and test an authorized,
-audited server-side reset or replacement contract, including parent mappings,
-notification behavior, crash recovery and complete replay, before exposing a
-destructive CLI. Reuse existing branches only if both refs exactly match their
-recorded commits; never force-update divergent refs.
+Implemented by `refresh-import` and the capability-advertised scoped
+`GET/POST review-imports/pulls/INDEX/refresh` contract. The preview retains a
+private, digest-bound plan with the full discussion snapshot, original requests,
+raw-source hashes and rebuilt presentation. The server verifies all original
+operations, rejects missing/edited content and changed refs, then corrects every
+imported body and the PR presentation atomically. Per-comment correction audits
+allow original operation replay without changing immutable payload hashes.
+Comment IDs, review IDs, parent links, authors and source times are retained;
+human discussion is left untouched. There are no deletions or notifications.
+Uncertain acceptance retries the identical retained plan. Retained replies not
+yet imported block refresh until autonomous import completes. Replacement is
+not needed for this supported in-place path and is never silently attempted.
+A future replacement contract still requires separate explicit approval because
+source Message-IDs are already bound to the existing PR. Both immutable branch
+refs must exactly match their recorded commits; mismatches are never forced.
 
 ### Planned Remark-Level Discussion Trees
 

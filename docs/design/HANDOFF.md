@@ -2,6 +2,76 @@
 
 Status captured 2026-10-31. Recheck live state before any write.
 
+## Current Implementation And Review
+
+This section supersedes the earlier implementation limitations below.
+
+- New imports must be autonomous, not completed by an AI or an operator queueing
+  each reply. The policy worker discovers a selected submission thread, fetches
+  its missing candidates within the configured budget, and defers publication
+  until those candidates are retained. Unrelated NNTP backlog does not prevent
+  that thread becoming ready. Before publication it validates retained reply
+  ancestry; after publication it queues/delivers every retained reply in explicit
+  parent-first order, draining all effects in bounded API batches. Existing PRs
+  continue receiving later replies. No archive completeness claim is made.
+- `refresh-import` now provides an audited in-place full-PR presentation rebuild.
+  It requires a retained publication preview and a private digest-bound refresh
+  plan. The server verifies the full snapshot, original operations and exact
+  immutable refs, preserves IDs/ancestry/human discussion, and commits all body
+  corrections atomically without notifications. Original imports remain
+  replayable, and future source-verified replies accept audited parent changes
+  but not unaudited edits. Missing retained replies block refresh until automatic
+  import completes. No replacement is needed or automatically attempted.
+- Forgejo server implementation is committed and pushed as `9bb6521eaf`; the
+  post-refresh parent-hash compatibility fix is `8c3229016b`. Configurable
+  240-hour defaults are committed and pushed in companion `f47a1af`; canonical
+  conversation/operation-key queue fixes are pushed as `4a4ea0e`.
+  Companion refresh CLI and autonomous complete-import orchestration are pushed
+  as `b42bc70`.
+- Verification includes 393 companion tests (four expected skips), the scoped
+  Forgejo import API suite, direct refresh CLI preview/write/digest checks and
+  the enabled disposable real-server companion workflow, including inline
+  review refresh and original-operation replay. No production deployment is
+  implied by those passing checks.
+- 240 hours is only the initial default. Override `--lookback-hours` or policy
+  `lookback_hours` within the supported 1-8760-hour range. Widen a durable
+  checkpoint with explicit backfill; preserve forward progress and retained
+  mail. Existing policy/checkpoint mismatches still require reviewed scheduling
+  reconciliation, not a silent policy edit.
+- The live server still lacks `pull-refresh` capability; the new server and
+  companion code have not been installed or activated. The worker incident
+  latch and protected manual delivery 42 remain untouched. Do not claim the
+  running timer already uses the new behavior.
+
+### LZ4 v2 Publication Plan Review
+
+Regenerated read-only from the operational ledger and configured trusted base:
+
+- Status: `publication_ready`; title: `Marcus Granado: tools: optional LZ4
+  compression of the libxenguest migration stream [v2]`.
+- Ten retained submission messages form the cover and nine-patch revision.
+  All nine patch commits form one exact parent chain from base
+  `e4956d5e6bdcb7e2e9abfa4474b2dc1160c51a45` to head
+  `ed6697e3f49e55c586cd2995158b67c13a3da350`.
+- Paired refs are `lore/dc668b15bc307a5f99617d85ed7856a5dfd532382b1d89154301b9e02e733f90/v2-base`
+  and the same prefix's `/v2`. Both are planned, not already created. Matching
+  immutable refs can be reused; mismatches must still stop publication.
+- The digest is unchanged:
+  `eeedd12a8e00ef39e691ac5ec3666da1bf545549ae49846848ae563dbd2381d6`.
+  This review is not approval to publish.
+- Nine retained replies from Teddy Astie each explicitly name their corresponding
+  patch as immediate parent. They must be imported automatically after confirmed
+  publication. Actual conversation/review IDs and exact server delivery plans
+  are unavailable until a PR exists; no inline placement is asserted here.
+- Publication is not an atomic transaction with discussion delivery. The worker
+  retains effects for recovery and stops on uncertain writes. Do not confuse a
+  confirmed PR with completed discussion if a round fails mid-import.
+- Operational blockers remain: installed runtime is older, policy says 148
+  hours while the durable checkpoint is 240, worker is incident-latched, and
+  manual PR 6 delivery 42 must not be auto-adopted. Review paired state/backups,
+  policy digest and enrolled effects before deployment and recovery. No remote
+  PR/comment/ref write occurred during this review.
+
 ## Requested Work
 
 - Implement an explicit CLI to refresh an existing imported open PR in place,
@@ -14,7 +84,7 @@ Status captured 2026-10-31. Recheck live state before any write.
 - Import Marcus Granado's LZ4 v2 series with its replies once the publication and
   delivery plans have been reviewed. The 240-hour source expansion is done.
 
-## Important Limitations
+## Historical Limitations At Initial Handoff
 
 The full PR refresh/recreation CLI is **not implemented**. `recreate-import`
 creates one additional conversation effect; it does not remove old comments or
@@ -65,7 +135,7 @@ the companion repository itself is untracked there. Do not stage/revert them.
 - `python -m unittest discover -s tests -p 'test_*.py'`: 390 tests passed,
   four skipped. Scoped formatter checks and editor diagnostics passed.
 
-## Suggested Next Steps
+## Historical Suggested Next Steps
 
 1. Recheck status, incident logs, policy and operation mappings. Keep the latch
    in place until the documented recovery gate is satisfied.

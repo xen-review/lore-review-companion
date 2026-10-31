@@ -169,6 +169,45 @@ files, source snapshots and nested repositories are not part of these commits.
   silently clear the latch or assume that changing the checkpoint updates policy.
   Details and the next-chat handoff are in [HANDOFF.md](HANDOFF.md).
 
+## Autonomous Import And Audited Refresh Follow-up
+
+- The user clarified that importing a new submission includes all retained review
+  replies automatically, under the companion's deterministic private policy.
+  An AI/operator must not be required to complete ordinary reply import.
+- The worker now recovers candidates for the selected thread before publication,
+  defers only on that thread's missing source, validates reply ancestry, accepts
+  parents before queueing children, and drains all effect IDs rather than
+  truncating at one API batch. New PRs process their complete retained discussion
+  in the initial publication round; manual pending effects remain protected.
+- `refresh-import` implements a retained-source in-place rebuild with a private
+  approval plan, full snapshot compare-and-swap, complete original-operation
+  verification and per-comment audits. It preserves PR/ref/comment/review IDs,
+  source times and reply ancestry, refuses missing/edited/uncertain evidence and
+  emits no notifications. Replacement is never implicit. Forgejo commits
+  `9bb6521eaf` and `8c3229016b` are pushed; deployment remains outstanding.
+  Companion implementation and regression coverage are pushed as `b42bc70`.
+- Companion `f47a1af` changes new checkpoint/setup defaults to an overridable
+  240 hours. Explicit smaller initial values and larger backfills remain
+  supported. Existing durable checkpoints and private policies are not silently
+  rewritten.
+- The LZ4 v2 plan was regenerated read-only and matches the earlier digest,
+  base and head. Ten source messages and nine Teddy Astie replies are retained.
+  This is plan review, not publication approval. Runtime deployment, policy
+  reconciliation and incident recovery remain gated; delivery 42 is untouched.
+  See [HANDOFF.md](HANDOFF.md) for the current evidence and operational blockers.
+- The disposable real-Forgejo companion workflow also exposed and verified fixes
+  for two queue defects: a conversation closure captured a later inline operation
+  key, and fully anchored replies omitted their canonical complete conversation.
+  Both fixes are committed and pushed as `4a4ea0e`; full-message and inline effects
+  retain separate stable identities and approval states.
+- Verification: 393 companion tests pass with four expected skips; the scoped
+  Forgejo import API suite passes. The explicitly enabled disposable companion
+  acceptance workflow passes with real Git/HTTP publication, automatic replies,
+  inline review mappings, refresh/retry/original replay and protected pending
+  effects. Direct CLI tests cover private plan creation, approved writes and
+  wrong-digest refusal. Touched-module editor diagnostics are clean. This is not
+  production deployment or evidence of complete archive coverage.
+
 ## Remark-Level Threading Follow-up
 
 The first storage foundation is implemented but not deployed; all user-facing

@@ -86,7 +86,7 @@ Add `--apply` to provision. The script performs these API operations:
    them mode 0600, checks their effective permissions, clones a bare assembly
    repository and records the current full mirror commit as the trusted base.
 6. Writes a private seven-day policy with budgets of 32 messages and two
-   revisions per round, a 148-hour initial lookback and uncertain retry disabled.
+  revisions per round, a configurable 240-hour initial lookback and uncertain retry disabled.
 
 Owners membership grants the integration account organization-wide authority.
 The generated runtime tokens are still restricted to `xen-review/xen`; do not
@@ -116,7 +116,8 @@ of rounds in the same provisioning invocation:
 The console equivalent is `lore-review-setup-xen`. Migration/clone may take time.
 Each round prints counts and blockers, without credentials. Recent IDs and older
 parents are fetched into a durable queue; complete applicable revisions become
-PRs. Later rounds revisit discussion after parent effects are accepted. Eight
+PRs with all retained replies imported automatically in parent-first order.
+Source recovery defers new publication until discovered mail is retained. Eight
 rounds are a bounded start, **not a promise of full thread/window coverage**.
 
 Existing policies are deliberately preserved on rerun, including disabled state,
@@ -124,8 +125,9 @@ expiry and trusted base. If you first provisioned without `--enable-policy`,
 review and explicitly edit the private policy to enable it before running the
 worker. Do not silently renew an expired policy. A changed policy digest requires
 reviewed scheduling-state reset; never erase the authoritative mail ledger.
-The 148-hour initial window is a starting guideline, not a permanent coverage
-limit. Use `extend-nntp-window --lookback-hours 240` as documented in the README
+The 240-hour default is a variable, not a fixed rule or permanent coverage
+limit. Override `lookback_hours` in policy or `--lookback-hours` for discovery.
+Use `extend-nntp-window --lookback-hours 336` as documented in the README
 to backfill an existing checkpoint. Reconcile the worker policy and its recorded
 policy digest separately before resuming; do not bypass an incident latch.
 

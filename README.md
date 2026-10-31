@@ -94,21 +94,21 @@ duplicated or migrated to the new parser.
 ## Recent Discovery And Recovery
 
 Discovery uses TLS NNTP and a durable Message-ID queue. Configure the initial
-window explicitly, or retain the 148-hour default:
+window explicitly, or retain the configurable 240-hour default:
 
 ```sh
-.venv/bin/lore-review-companion discover-nntp --ledger state.sqlite3 --lookback-hours 148
+.venv/bin/lore-review-companion discover-nntp --ledger state.sqlite3 --lookback-hours 240
 .venv/bin/lore-review-companion discover-nntp-numbers --ledger state.sqlite3 --limit 128
 .venv/bin/lore-review-companion fetch-nntp --ledger state.sqlite3 --limit 128
 ```
 
-The initial lookback defaults to 148 hours and is a guideline, not a fixed
-coverage limit. Explicitly extend an existing checkpoint, for example to 240
-hours, with:
+The initial lookback defaults to 240 hours, not a fixed rule or coverage limit.
+Override it with `--lookback-hours` or the worker policy's `lookback_hours`.
+Explicitly extend an existing checkpoint, for example to 336 hours, with:
 
 ```sh
 .venv/bin/lore-review-companion extend-nntp-window \
-  --ledger state.sqlite3 --lookback-hours 240
+  --ledger state.sqlite3 --lookback-hours 336
 ```
 
 The extension scans from the earlier cutoff and atomically queues the returned
@@ -186,8 +186,8 @@ Queueing requires the recorded completed publication and pinned b4 runtime;
 it verifies reassembly and exact historical patch diffs before adding effects.
 The delivery command above is read-only and prints its plan/digest. After
 reviewing it, supply paired `--write --approve DIGEST` for that exact batch.
-Presentation corrections are queued as new effects; the completed original is
-retained. Use `recreate-import` only for an existing completed conversation,
+The legacy `recreate-import` command queues an additional conversation; it is
+not a full-PR refresh. The completed original is retained. Use it only for an existing completed conversation,
 then preview its exact ID with `deliver-imports --kind conversation
 --delivery-id ID`. Repeating `--delivery-id` selects a bounded explicit batch.
 Approval remains bound to the returned digest and that exact selection.
@@ -202,6 +202,43 @@ unresolved in a concise conversation with its proven parent permalink; it never
 becomes an unrelated new review. Delivery binds the parent body hash, so a
 locally edited parent is not silently reused.
 Uncertain earlier writes need a newly reviewed `--retry-uncertain` plan.
+
+### Audited Full-PR Refresh
+
+`refresh-import` prefers an in-place rebuild. It retains the PR, exact immutable
+refs, comment/review IDs, authors, source chronology and reply ancestry. It
+rebuilds the title, cover and imported conversation/remark presentation from
+retained mail, with per-comment audits. Human discussion is previewed and left
+untouched. Nothing is deleted and no notifications or hooks are emitted.
+All existing imported operations must have matching complete ledger effects;
+missing retained replies must finish autonomous import before refresh. Local
+edits, missing comments, uncertain effects or changed refs block approval.
+
+First retain the JSON output from `sync-imported-series`'s read-only preview as
+the publication plan. Then create a new private refresh plan:
+
+```sh
+.venv/bin/lore-review-companion refresh-import \
+  --ledger state.sqlite3 --api-url https://forge.example/api/v1/ \
+  --owner review --repo xen --pull-index 7 --token-file /private/import-token \
+  --publication-plan /private/publication.json \
+  --plan-file /private/refresh.json --reason "Rebuild retained presentation"
+
+.venv/bin/lore-review-companion refresh-import \
+  --ledger state.sqlite3 --api-url https://forge.example/api/v1/ \
+  --owner review --repo xen --pull-index 7 --token-file /private/import-token \
+  --plan-file /private/refresh.json --write --approve REVIEWED_DIGEST
+```
+
+The preview is read-only apart from the create-only mode-0600 plan file. Review
+its full snapshot, preserved IDs, reconstructed bodies and digest. The server
+checks that exact snapshot and original immutable operations in one transaction.
+A failed write rolls back all corrections. After uncertain acceptance, retry
+the same file and digest; do not regenerate a plan or operation key to bypass
+uncertainty. Original imports remain replayable after refresh. A server without
+`pull-refresh` support is refused. There is no automatic close-and-recreate
+fallback: replacement requires a separately reviewed, explicitly approved
+server contract and is not needed for supported in-place rebuilds.
 
 The extension initializes imported creation timestamps from a supplied source
 time, labeled `unverified` or `estimated`; unknown source time retains actual
@@ -340,14 +377,27 @@ keep review-only settings fixed while scheduling work.
   --token-file /private/import-token --git-token-file /private/git-token
 ```
 
-This runs one bounded discovery/publication/delivery round. The private worker
+This runs a policy-authorized discovery/publication/delivery round. New PRs are
+not merely queued for an AI or operator to finish: the companion discovers their
+source thread, retains the discovered mail, publishes the complete revision and
+automatically imports every retained reply in explicit parent-before-child order.
+It delivers each parent before queueing children, including all conversation,
+review and reply effects, chunking API batches by `message_limit` rather than
+truncating effects. A new PR's initial discussion is not limited to one message
+batch; later rounds revisit newly arriving replies. Pending source recovery or
+unavailable thread discovery defers a new PR, with a diagnostic. Archive thread
+coverage is still not guaranteed, and incomplete/ambiguous evidence never becomes
+a guessed inline comment. All retained reply text remains in conversations.
+
+The private worker
 SQLite database stores only scheduling cursors, rotating revision work and
 enrolled effect IDs; the mail ledger remains authoritative for effects and
 publication intent. API and Git credentials stay separate. Only effects newly
 queued by this worker are enrolled: pre-existing/manual/legacy effects are not
 automatically approved. A crash between queueing and enrollment can leave new
 effects needing explicit manual approval; it cannot silently adopt old work.
-Later rounds revisit unresolved thread matches after parents become accepted.
+The worker uses the reviewed policy for these deterministic decisions, not an
+LLM or per-message operator approvals. Manual pending work remains protected.
 
 Read-only Git preflight failures for new revisions are reported as per-series
 blockers; no publication intent or remote write is made for them. Other ready
