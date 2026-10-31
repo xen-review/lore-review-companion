@@ -229,6 +229,7 @@ def provision_xen(
         method="PATCH",
         payload={
             **SAFETY,
+            "has_issues": True,
             "has_pull_requests": True,
             "default_branch": policy["target_branch"],
         },

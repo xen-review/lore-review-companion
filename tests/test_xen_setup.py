@@ -418,7 +418,12 @@ class XenSetupTests(unittest.TestCase):
             (
                 "PATCH",
                 "repos/xen-review/xen",
-                {**SAFETY, "has_pull_requests": True, "default_branch": "staging"},
+                {
+                    **SAFETY,
+                    "has_issues": True,
+                    "has_pull_requests": True,
+                    "default_branch": "staging",
+                },
             ),
             requests,
         )
