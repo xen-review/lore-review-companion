@@ -26,7 +26,10 @@ from lore_review_companion.nntp_source import (
     fetch_nntp,
     nntp_source,
 )
-from lore_review_companion.outbox import deliver_approved_imports, plan_import_delivery
+from lore_review_companion.outbox import (
+    deliver_approved_imports, plan_import_delivery,
+    deliver_import_failure_comments, queue_import_failure_comment,
+)
 from lore_review_companion.preflight import GitPreflightError
 from lore_review_companion.review_queue import queue_imported_replies
 from lore_review_companion.series_sync import sync_imported_series_revision
@@ -179,6 +182,10 @@ def _deliver_reply_batch(
     delivered = 0
     diagnostics = []
     for message in batch:
+        reports = deliver_import_failure_comments(ledger, writer, pull_index, message.message_id)
+        delivered += reports.delivered
+        if reports.failed:
+            diagnostics.append(f"PR #{pull_index}: companion failure report delivery blocked for {message.message_id}")
         earlier = {
             effect.id
             for effect in ledger.comment_effects(message.message_id, destination)
@@ -222,6 +229,7 @@ def _deliver_reply_batch(
                 )
         if any(
             effect.id not in enrolled and effect.write_state != "complete"
+            and effect.event_type != "IMPORT_FAILURE_COMMENT"
             for effect in effects
         ):
             diagnostics.append(
@@ -237,15 +245,19 @@ def _deliver_reply_batch(
             )
             for offset in range(0, len(selected), policy.message_limit):
                 identifiers = selected[offset : offset + policy.message_limit]
-                plan = plan_import_delivery(
-                    ledger,
-                    reader,
-                    pull_index,
-                    kind,
-                    limit=policy.message_limit,
-                    retry_uncertain=policy.retry_uncertain,
-                    delivery_ids=identifiers,
-                )
+                try:
+                    plan = plan_import_delivery(
+                        ledger, reader, pull_index, kind,
+                        limit=policy.message_limit,
+                        retry_uncertain=policy.retry_uncertain,
+                        delivery_ids=identifiers,
+                    )
+                except (ValueError, RuntimeError) as error:
+                    for effect in effects:
+                        if effect.id in identifiers:
+                            queue_import_failure_comment(ledger, writer, pull_index, effect, error)
+                    deliver_import_failure_comments(ledger, writer, pull_index, message.message_id)
+                    raise
                 if not plan.deliveries:
                     continue
                 outcome = deliver_approved_imports(

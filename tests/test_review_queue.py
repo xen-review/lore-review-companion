@@ -20,8 +20,9 @@ from lore_review_companion.b4_adapter import (
     QuotedComment,
 )
 from lore_review_companion.cli import main
-from lore_review_companion.forge_api import ForgeAPI
+from lore_review_companion.forge_api import ForgeAPI, ForgeAPIError
 from lore_review_companion.forge_comments import (
+    DeliveryResult,
     ForgeCommentPublisher,
     format_direct_submission_reply,
     imported_mail_text,
@@ -36,7 +37,7 @@ from lore_review_companion.ledger import (
     PublicationConflict,
     WorkerBusyError,
 )
-from lore_review_companion.mail_parser import parse_message
+from lore_review_companion.mail_parser import parse_message, extract_quoted_remarks
 from lore_review_companion.outbox import (
     _assert_import_payload,
     deliver_approved_comments,
@@ -48,6 +49,9 @@ from lore_review_companion.outbox import (
     plan_legacy_migration,
     _review_import_payload_sha256,
     queue_imported_conversation_recreation,
+    latest_accepted_quote_target,
+    queue_import_failure_comment,
+    deliver_import_failure_comments,
 )
 from lore_review_companion.preflight import PatchCommit
 from lore_review_companion.review_queue import (
@@ -104,6 +108,41 @@ class ReviewQueueTests(unittest.TestCase):
             QuotedComment(":message", 0, "General note.", None),
         )
 
+    def test_import_failure_report_is_tool_authored_redacted_and_retryable(self):
+        client = ForgeImportClient(
+            self.api, "xen-project", "xen", source_url="https://lore.kernel.org/xen-devel/",
+            write_enabled=True,
+        )
+        queue_imported_reply(
+            self.ledger, client, 7, self.match,
+            patch_commits=(PatchCommit("patch@example.test", "b" * 40, "a" * 40),),
+            patch_diffs={},
+        )
+        (original,) = self.ledger.pending()
+        self.api.token = "test-secret-token"
+        error = ForgeAPIError(422, "rejected test-secret-token")
+        identifier = queue_import_failure_comment(self.ledger, client, 7, original, error)
+        self.assertEqual(identifier, queue_import_failure_comment(self.ledger, client, 7, original, ValueError("later failure")))
+        report = next(item for item in self.ledger.pending() if item.id == identifier)
+        self.assertNotIn(self.api.token, report.payload["body"])
+        self.assertIn("Original reply: https://lore.kernel.org/xen-devel/reply@example.test/", report.payload["body"])
+        self.assertIn("POST repos/xen-project/xen/review-imports/pulls/7/comments", report.payload["body"])
+        self.assertIn("ForgeAPIError: rejected [redacted]", report.payload["body"])
+        with (
+            patch.object(client, "capabilities", return_value={}),
+            patch.object(ForgeCommentPublisher, "ensure_issue_comment", side_effect=ForgeAPIError(503, "unavailable")),
+        ):
+            outcome = deliver_import_failure_comments(self.ledger, client, 7, original.message_id)
+            self.assertEqual(outcome.failed, 1)
+        with (
+            patch.object(client, "capabilities", return_value={}),
+            patch.object(ForgeCommentPublisher, "ensure_issue_comment", return_value=DeliveryResult({"id": 1}, created=True)) as post,
+        ):
+            outcome = deliver_import_failure_comments(self.ledger, client, 7, original.message_id)
+            self.assertEqual(outcome.delivered, 1)
+            self.assertEqual(post.call_args.kwargs["body"], report.payload["body"])
+        self.assertEqual([item.id for item in self.ledger.pending()], [original.id])
+
     def test_imported_reply_replay_keeps_first_accepted_parent(self):
         """Keep an imported reply bound to its initially accepted parent."""
         client = ForgeImportClient(
@@ -115,6 +154,7 @@ class ReviewQueueTests(unittest.TestCase):
         parent = parse_message(
             b"From: Reviewer <reviewer@example.test>\n"
             b"Message-ID: <ordinary-parent@example.test>\nSubject: Re: patch\n"
+            b"Date: Mon, 26 Oct 2026 10:00:00 +0000\n"
             b"In-Reply-To: <patch@example.test>\n\n"
             b"First point.\nSecond point.\n"
         )
@@ -137,6 +177,7 @@ class ReviewQueueTests(unittest.TestCase):
         reply = parse_message(
             b"From: Second Reviewer <second@example.test>\n"
             b"Message-ID: <ordinary-followup@example.test>\nSubject: Re: patch\n"
+            b"Date: Mon, 26 Oct 2026 11:00:00 +0000\n"
             b"In-Reply-To: <ordinary-parent@example.test>\n\n"
             b"> Second point.\nA reply to that point.\n"
         )
@@ -151,17 +192,6 @@ class ReviewQueueTests(unittest.TestCase):
             patch.object(client, "lookup_operation", return_value=accepted),
             patch.object(client, "capabilities", return_value=capabilities),
         ):
-            capabilities["operations"].remove("conversation-reply")
-            unsupported = queue_imported_reply(
-                self.ledger, client, 7, replace(self.match, message=reply), **arguments
-            )
-            self.assertEqual(
-                (unsupported.inline_count, unsupported.unresolved_count), (0, 1)
-            )
-            self.assertFalse(
-                any(item.event_type == "IMPORT_REPLY" for item in self.ledger.pending())
-            )
-            capabilities["operations"].append("conversation-reply")
             result = queue_imported_reply(
                 self.ledger, client, 7, replace(self.match, message=reply), **arguments
             )
@@ -209,7 +239,7 @@ class ReviewQueueTests(unittest.TestCase):
         self.ledger.begin_delivery(reply_effect.id)
         self.ledger.mark_delivered(reply_effect.id)
         with patch(
-            "lore_review_companion.review_queue.accepted_inline_targets",
+            "lore_review_companion.outbox.accepted_inline_targets",
             return_value=[("Second point.", 21, "Second point.", parent_effect, 0)],
         ) as accepted_targets:
             replay = queue_imported_reply(
@@ -303,7 +333,10 @@ class ReviewQueueTests(unittest.TestCase):
         queue_imported_reply(
             self.ledger, client, 7, matches[parent.message_id], **arguments
         )
-        (parent_effect,) = self.ledger.pending()
+        parent_effect = next(
+            effect for effect in self.ledger.pending()
+            if effect.effect_key == "imported-full-message-v1"
+        )
         accepted = {
             "type": "conversation",
             "comment_id": 20,
@@ -318,7 +351,7 @@ class ReviewQueueTests(unittest.TestCase):
             "max_inline_lines": 50,
         }
         with (
-            patch.object(client, "lookup_operation", return_value=accepted),
+            patch.object(client, "lookup_operation", side_effect=lambda key: accepted if key == parent_effect.payload["request"]["operation_key"] else None),
             patch.object(client, "capabilities", return_value=capabilities),
         ):
             result = queue_imported_reply(
@@ -331,8 +364,31 @@ class ReviewQueueTests(unittest.TestCase):
                 self.ledger, client, 7, matches[quoted_cover.message_id], **arguments
             )
             self.assertEqual(
-                (unresolved.inline_count, unresolved.unresolved_count), (0, 1)
+                (unresolved.inline_count, unresolved.unresolved_count, unresolved.standalone_count), (0, 0, 1)
             )
+
+    def test_quote_target_uses_latest_timestamp_strictly_before_reply(self):
+        sources = [
+            parse_message(
+                (
+                    f"From: Reviewer <reviewer@example.test>\nMessage-ID: <time-{hour}@example.test>\n"
+                    f"Subject: Re: patch\nDate: Mon, 26 Oct 2026 {hour:02}:00:00 +0000\n\n"
+                    "> Same text.\nA remark.\n"
+                ).encode()
+            )
+            for hour in (9, 10, 11, 12)
+        ]
+        remark = extract_quoted_remarks(sources[2].body_text)[0]
+        client = ForgeImportClient(self.api, "xen-project", "xen", source_url="https://lore.kernel.org/xen-devel/")
+        targets = {source.message_id: [("Same text.", hour, "Same text.", None, 0)] for source, hour in zip(sources, (9, 10, 11, 12))}
+        with (
+            patch("lore_review_companion.outbox.reply_ancestor_messages", return_value=(sources[0], sources[1], sources[3])),
+            patch("lore_review_companion.outbox.accepted_inline_targets", side_effect=lambda ledger, client, destination, ancestor, thread: targets[ancestor.message_id]),
+        ):
+            selected = latest_accepted_quote_target(self.ledger, client, "destination", sources[2], {}, remark, "mail-text-v6")
+            self.assertEqual(selected[0][1], 10)
+            targets[sources[1].message_id].append(("Same text.", 20, "Same text.", None, 0))
+            self.assertIsNone(latest_accepted_quote_target(self.ledger, client, "destination", sources[2], {}, remark, "mail-text-v6"))
 
     def test_direct_submission_conversation_formats_quotes_and_revalidates(self):
         self.ledger = Ledger(Path(self.tempdir.name) / "presentation-ledger.sqlite3")
@@ -368,7 +424,10 @@ class ReviewQueueTests(unittest.TestCase):
             "patch_diffs": {},
         }
         queue_imported_reply(self.ledger, client, 7, match, **arguments)
-        (effect,) = self.ledger.pending()
+        effect = next(
+            item for item in self.ledger.pending()
+            if item.effect_key == "imported-full-message-v1"
+        )
         self.assertEqual(effect.payload["body_format"], "mail-text-v6")
         self.assertEqual(
             effect.payload["request"]["body"],
@@ -384,7 +443,7 @@ class ReviewQueueTests(unittest.TestCase):
                 source_url=client.source_url,
             )
         queue_imported_reply(self.ledger, client, 7, match, **arguments)
-        self.assertEqual(self.ledger.pending(), [effect])
+        self.assertEqual(len(self.ledger.pending()), 2)
 
     def test_native_multiline_parse_queue_preview_deliver_and_replay(self):
         reply = parse_message(
@@ -877,7 +936,7 @@ class ReviewQueueTests(unittest.TestCase):
                 patch_diffs={"patch@example.test": PATCH},
             )
         self.assertEqual(self.ledger.pending(), original)
-        self.assertEqual((result.inline_count, result.unresolved_count), (2, 2))
+        self.assertEqual((result.inline_count, result.unresolved_count, result.standalone_count), (2, 0, 2))
         replies = [item for item in original if item.event_type == "IMPORT_REPLY"]
         self.assertEqual(
             [
@@ -989,30 +1048,10 @@ class ReviewQueueTests(unittest.TestCase):
                     patch_commits=commits,
                     patch_diffs={"patch@example.test": PATCH},
                 )
-            self.assertEqual((result.inline_count, result.unresolved_count), (0, 1))
-            self.assertIsNotNone(result.diagnostic)
-            if accepted is None:
-                self.assertEqual(result.conversation_id, 0)
-            else:
-                conversation = next(
-                    effect
-                    for effect in self.ledger.pending()
-                    if effect.id == result.conversation_id
-                )
-                self.assertTrue(
-                    conversation.payload["request"]["body"].startswith(
-                        "```rust\n> Same remark.\n```\nWhich occurrence?\n\n"
-                    )
-                )
-                self.assertIn(
-                    "> Same remark.", conversation.payload["request"]["body"]
-                )
-                self.assertIn(
-                    "#issuecomment-20", conversation.payload["request"]["body"]
-                )
-                _assert_import_payload(
-                    self.ledger, conversation, source_url=client.source_url
-                )
+            self.assertEqual((result.inline_count, result.unresolved_count, result.standalone_count), (0, 0, 1))
+            self.assertGreater(result.conversation_id, 0)
+            for effect in self.ledger.comment_effects(followup.message_id, self.api.base_url + client.repository_path + "#7"):
+                _assert_import_payload(self.ledger, effect, source_url=client.source_url)
         self.assertFalse(
             any(effect.event_type == "IMPORT_REPLY" for effect in self.ledger.pending())
         )
@@ -1539,8 +1578,31 @@ class ReviewQueueTests(unittest.TestCase):
                 patch.object(DiffIndex, "resolve_quote_suffix", return_value=None),
             ):
                 old = queue_imported_reply(self.ledger, client, 7, match, **arguments)
-            self.assertEqual((old.inline_count, old.unresolved_count), (1, 1))
+            self.assertEqual(
+                (old.inline_count, old.unresolved_count, old.standalone_count),
+                (1, 0, 1),
+            )
             original = self.ledger.pending()
+            standalone = next(
+                effect
+                for effect in original
+                if effect.event_type == "IMPORT_CONVERSATION"
+                and effect.effect_key.startswith("quoted-remark-standalone-v1:")
+            )
+            self.assertEqual(
+                standalone.payload["evidence"]["parser"],
+                "quote-blocks-standalone-v1",
+            )
+            self.assertEqual(
+                standalone.payload["request"]["body"],
+                "Second remark.",
+            )
+            plan = plan_import_delivery(self.ledger, client, 7, "IMPORT_CONVERSATION")
+            self.assertIn(standalone.id, [item.id for item in plan.deliveries])
+            changed = json.loads(json.dumps(standalone.payload))
+            changed["request"]["body"] = "Invented remark."
+            with self.assertRaises(PublicationConflict):
+                _assert_import_payload(self.ledger, replace(standalone, payload=changed), source_url=client.source_url)
             for effect in original:
                 self.ledger.begin_delivery(effect.id)
                 self.ledger.mark_delivered(effect.id)

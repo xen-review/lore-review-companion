@@ -11,6 +11,7 @@ import re
 from dataclasses import asdict, dataclass, replace
 from contextlib import nullcontext
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 from lore_review_companion.anchor import (
     Anchor,
@@ -259,6 +260,9 @@ def _assert_import_payload(
         )
     else:
         marker = (
+            delivery.effect_key
+            if delivery.effect_key.startswith("quoted-remark-standalone-v1:")
+            else
             "imported-full-message-v1"
             if delivery.event_type == "IMPORT_CONVERSATION"
             else delivery.effect_key
@@ -274,6 +278,28 @@ def _assert_import_payload(
             "Imported operation key does not match the retained source message"
         )
     if delivery.event_type == "IMPORT_CONVERSATION":
+        evidence = payload.get("evidence", {})
+        if delivery.effect_key.startswith("quoted-remark-standalone-v1:"):
+            remarks = extract_quoted_remarks(source.body_text)
+            position = evidence.get("position")
+            if (
+                evidence.get("parser") != "quote-blocks-standalone-v1"
+                or evidence.get("source_sha256") != source.sha256
+                or type(position) is not int
+                or not 0 <= position < len(remarks)
+                or evidence.get("remark") != json.loads(json.dumps(asdict(remarks[position])))
+                or payload.get("presentation_parent") is not None
+                or recreation is not None
+            ):
+                raise PublicationConflict("Standalone remark lacks retained source evidence")
+            serialized = json.dumps(asdict(remarks[position]), sort_keys=True, separators=(",", ":"))
+            expected = f"quoted-remark-standalone-v1:{position}:{hashlib.sha256(serialized.encode()).hexdigest()}"
+            if delivery.effect_key != expected or request.get("body") != imported_mail_text(
+                remarks[position].text, source.message_id, source_url, body_format,
+                source.from_name or source.from_address,
+            ):
+                raise PublicationConflict("Standalone remark differs from retained source")
+            return
         text = source.body_text
         if body_format in ("mail-text-v4", "mail-text-v5", "mail-text-v6"):
             thread = payload.get("thread", {})
@@ -369,6 +395,12 @@ def _assert_import_payload(
     if delivery.event_type == "IMPORT_REPLY":
         evidence = payload.get("evidence")
         parents = source.in_reply_to or source.references[-1:]
+        if isinstance(evidence, dict) and evidence.get("selection") == "latest-prior-v1":
+            ancestors = {ancestor.message_id for ancestor in reply_ancestor_messages(ledger, source)}
+            selected_parent = evidence.get("parent_message_id")
+            if selected_parent not in ancestors:
+                raise PublicationConflict("Imported reply target is not a retained source ancestor")
+            parents = (selected_parent,)
         if (
             not isinstance(evidence, dict)
             or evidence.get("parser")
@@ -415,13 +447,18 @@ def _assert_import_payload(
         if evidence.get("target_kind") != ("conversation" if ordinary_thread else None):
             raise PublicationConflict("Imported reply parent kind changed")
         parent_source = ledger.messages_by_id((parents[0],))[0]
+        ordinary_text = (
+            parent.payload["evidence"]["remark"]["text"]
+            if ordinary and parent.effect_key.startswith("quoted-remark-standalone-v1:")
+            else reply_prose(parent_source.body_text)
+        )
         parent_remarks = (
             parent.payload["evidence"]["remarks"]
             if parent.event_type == "IMPORT_REVIEW"
             else [
                 {
                     "text": imported_mail_text(
-                        reply_prose(parent_source.body_text),
+                        ordinary_text,
                         parent_source.message_id,
                         source_url,
                         parent.payload.get("body_format"),
@@ -699,6 +736,88 @@ def accepted_inline_targets(ledger, client, destination, parent, thread):
     return targets
 
 
+def reply_ancestor_messages(ledger, source):
+    """Return only the uniquely linked, explicit source ancestry of a reply."""
+    ancestors = []
+    seen = {source.message_id}
+    current = source
+    for _ in range(100):
+        parents = current.in_reply_to or current.references[-1:]
+        if len(parents) != 1:
+            break
+        parent_id = parents[0]
+        if parent_id in seen:
+            raise PublicationConflict("Reply source ancestry is cyclic")
+        parent = ledger.messages_by_id((parent_id,))[0]
+        ancestors.append(parent)
+        seen.add(parent_id)
+        current = parent
+    else:
+        raise PublicationConflict("Reply source ancestry exceeds the bounded limit")
+    return tuple(ancestors)
+
+
+def _message_timestamp(message):
+    estimate = message.time_estimate
+    if estimate is None:
+        return None
+    try:
+        timestamp = datetime.fromisoformat(estimate.timestamp.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return timestamp if timestamp.tzinfo is not None else None
+
+
+def latest_accepted_quote_target(
+    ledger, client, destination, source, thread, remark, body_format
+):
+    source_time = _message_timestamp(source)
+    candidates = []
+    ancestors = reply_ancestor_messages(ledger, source)
+    for ancestor in ancestors:
+        if ancestor.kind != "reply":
+            continue
+        if source_time is None and ancestor != ancestors[0]:
+            continue
+        ancestor_time = _message_timestamp(ancestor)
+        if source_time is not None and ancestor_time is not None and ancestor_time >= source_time:
+            continue
+        inline = []
+        for target in accepted_inline_targets(
+            ledger, client, destination, ancestor, thread
+        ):
+            if quoted_parent_matches(
+                remark.quote, target[0], body_format, allow_excerpt=True
+            ):
+                inline.append((target, ancestor, ancestor_time, False))
+        candidates.extend(inline)
+        if not inline:
+            ordinary = accepted_conversation_targets(
+                ledger, client, destination, ancestor, thread
+            )
+            if ordinary and "conversation-reply" not in client.capabilities()["operations"]:
+                ordinary = []
+            for target in ordinary:
+                if quoted_parent_matches(
+                    remark.quote, target[0], body_format, allow_excerpt=True
+                ) and quoted_parent_matches(
+                    remark.quote, target[2], body_format, allow_excerpt=True
+                ):
+                    candidates.append((target, ancestor, ancestor_time, True))
+    if not candidates:
+        return None
+    if len(candidates) == 1 and candidates[0][1] == ancestors[0]:
+        return candidates[0]
+    if source_time is None:
+        return None
+    candidates = [candidate for candidate in candidates if candidate[2] is not None and candidate[2] < source_time]
+    if not candidates:
+        return None
+    latest_time = max(candidate[2] for candidate in candidates)
+    latest = [candidate for candidate in candidates if candidate[2] == latest_time]
+    return latest[0] if len(latest) == 1 else None
+
+
 def accepted_conversation_targets(ledger, client, destination, parent, thread):
     targets = []
     for effect in ledger.comment_effects(parent.message_id, destination):
@@ -722,7 +841,9 @@ def accepted_conversation_targets(ledger, client, destination, parent, thread):
         ):
             raise PublicationConflict("Imported conversation parent lookup changed")
         authored = imported_mail_text(
-            reply_prose(parent.body_text),
+            effect.payload["evidence"]["remark"]["text"]
+            if effect.effect_key.startswith("quoted-remark-standalone-v1:")
+            else reply_prose(parent.body_text),
             parent.message_id,
             client.source_url,
             effect.payload.get("body_format"),
@@ -856,6 +977,24 @@ def plan_import_delivery(
             if evidence.get("target_kind") == "conversation":
                 if "conversation-reply" not in capabilities["operations"]:
                     raise ValueError("Ordinary conversation replies are not enabled")
+            if evidence.get("selection") == "latest-prior-v1":
+                source = ledger.messages_by_id((delivery.message_id,))[0]
+                remark = next(
+                    item for item in extract_quoted_remarks(source.body_text)
+                    if json.loads(json.dumps(asdict(item))) == evidence["remark"]
+                )
+                selected = latest_accepted_quote_target(
+                    ledger, client, destination, source, delivery.payload["thread"],
+                    remark, delivery.payload.get("body_format"),
+                )
+                if selected is None or (
+                    selected[0][1] != delivery.payload["request"]["parent_id"]
+                    or selected[0][3].effect_key != evidence["parent_effect_key"]
+                    or selected[0][4] != position
+                    or selected[1].message_id != evidence["parent_message_id"]
+                ):
+                    raise PublicationConflict("Imported reply no longer uniquely matches the latest prior parent")
+                continue
             if evidence["parser"] == "quote-blocks-conversation-reply-v1":
                 targets = accepted_inline_targets(
                     ledger,
@@ -995,6 +1134,80 @@ def plan_import_delivery(
     )
 
 
+def queue_import_failure_comment(ledger, client, pull_index, delivery, error):
+    request = delivery.payload.get("request", {})
+    suffix = {
+        "IMPORT_CONVERSATION": "comments",
+        "IMPORT_REVIEW": "reviews",
+        "IMPORT_REPLY": "replies",
+    }[delivery.event_type]
+    path = f"{client.path}/pulls/{pull_index}/{suffix}"
+    details = json.dumps(
+        {key: request[key] for key in (
+            "operation_key", "message_id", "message_sha256", "address", "name",
+            "body", "source_time", "source_time_basis", "parent_id",
+            "parent_body_sha256", "head_commit", "base_commit", "merge_base", "comments",
+        ) if key in request},
+        sort_keys=True, ensure_ascii=True,
+    )
+    failure = f"{type(error).__name__}: {error}"
+    if client.api.token:
+        details = details.replace(client.api.token, "[redacted]")
+        failure = failure.replace(client.api.token, "[redacted]")
+    source = ledger.messages_by_id((delivery.message_id,))[0]
+    source_link = f"{client.source_url}{quote(delivery.message_id, safe='@')}/"
+    body = (
+        "Companion import failure report (not authored by the source sender).\n\n"
+        f"Original reply: {source_link}\n\n"
+        f"Attempted call: `POST {path}`\n\n"
+        + quote_untrusted_text(details)
+        + "\n\nFailure returned:\n\n" + quote_untrusted_text(failure)
+        + "\n\nThe original effect remains retryable; this report is not confirmation of its delivery."
+    )
+    effect_key = f"import-failure-v1:{delivery.id}"
+    existing = [
+        item for item in ledger.comment_effects(delivery.message_id, delivery.destination)
+        if item.event_type == "IMPORT_FAILURE_COMMENT" and item.effect_key == effect_key
+    ]
+    if existing:
+        return existing[0].id
+    return ledger.enqueue(
+        delivery.message_id, "IMPORT_FAILURE_COMMENT", delivery.destination, effect_key,
+        {"body": body, "source_sha256": source.sha256,
+         "failed_effect_id": delivery.id, "thread": delivery.payload.get("thread")},
+    )
+
+
+def deliver_import_failure_comments(ledger, client, pull_index, message_id):
+    publisher = ForgeCommentPublisher(
+        client.api, client.owner, client.repo, write_enabled=client.write_enabled
+    )
+    destination = comment_destination(client, pull_index)
+    delivered = failed = 0
+    for effect in ledger.comment_effects(message_id, destination):
+        if effect.event_type != "IMPORT_FAILURE_COMMENT" or effect.write_state == "complete":
+            continue
+        source = ledger.messages_by_id((message_id,))[0]
+        if effect.payload.get("source_sha256") != source.sha256:
+            raise PublicationConflict("Import failure report source changed")
+        client.capabilities()
+        ledger.assert_publication_sources(client.api.base_url + client.repository_path, pull_index)
+        ledger.begin_delivery(effect.id, retry_uncertain=True)
+        try:
+            result = publisher.ensure_issue_comment(
+                pull_index, source_message_id=message_id,
+                effect_key=effect.effect_key, body=effect.payload["body"],
+            )
+            if result.planned:
+                raise DeliveryUncertainError("Failure report delivery was not confirmed")
+            ledger.mark_delivered(effect.id)
+            delivered += 1
+        except (ForgeAPIError, DeliveryUncertainError, ValueError) as error:
+            ledger.mark_delivery_uncertain(effect.id, str(error))
+            failed += 1
+    return CommentBatchSummary(delivered=delivered, failed=failed)
+
+
 def deliver_approved_imports(
     ledger: Ledger,
     client: ForgeImportClient,
@@ -1055,6 +1268,8 @@ def deliver_approved_imports(
                 delivered += 1
             except (ForgeAPIError, DeliveryUncertainError, ValueError) as error:
                 ledger.mark_delivery_uncertain(delivery.id, str(error))
+                queue_import_failure_comment(ledger, client, pull_index, delivery, error)
+                deliver_import_failure_comments(ledger, client, pull_index, delivery.message_id)
                 failed += 1
     return CommentBatchSummary(delivered=delivered, failed=failed)
 
