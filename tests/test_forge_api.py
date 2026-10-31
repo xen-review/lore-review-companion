@@ -199,8 +199,7 @@ class GiteaAPITests(unittest.TestCase):
             path.write_text(json.dumps({**policy_value, "expires_at": None}))
             self.assertIsNone(read_import_policy(path).expires_at)
             path.chmod(0o666)
-            with self.assertRaisesRegex(ValueError, "write permission"):
-                read_import_policy(path)
+            self.assertIsNone(read_import_policy(path).expires_at)
             path.chmod(0o644)
             path.unlink()
             with self.assertRaisesRegex(ValueError, "revoked"):

@@ -82,6 +82,7 @@ def main(arguments=None):
     share = Path.home() / ".local/share"
     release = share / "forgejo-review/releases" / forgejo_revision[:12]
     release.mkdir(parents=True, exist_ok=True)
+    run("systemctl", "--user", "stop", "forgejo-review.service")
     shutil.copy2(forgejo / "gitea", release / "gitea")
     for name in ("options", "public", "templates"):
         shutil.copytree(forgejo / name, release / name, dirs_exist_ok=True)
@@ -155,6 +156,9 @@ def main(arguments=None):
             text=True,
         )
     )
+    if forgejo_revision[:10] not in str(version.get("version", "")):
+        raise ValueError("HTTP endpoint is not serving the deployed Forgejo revision")
+    run("systemctl", "--user", "is-active", "forgejo-review.service")
     run("systemctl", "--user", "reset-failed", "lore-review-companion.service")
     run("systemctl", "--user", "start", "lore-review-companion.service")
     run("systemctl", "--user", "enable", "--now", "lore-review-companion.timer")
