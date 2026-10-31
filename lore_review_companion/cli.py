@@ -87,6 +87,7 @@ from lore_review_companion.nntp_source import (
     discover_nntp,
     discover_nntp_numbers,
     discover_nntp_thread,
+    extend_nntp_window,
     fetch_nntp,
     inspect_nntp_window,
     nntp_source,
@@ -251,6 +252,17 @@ def main(argv: list[str] | None = None) -> int:
     nntp.add_argument("--group", default=DEFAULT_GROUP)
     nntp.add_argument("--lookback-hours", type=int, default=DEFAULT_LOOKBACK_HOURS)
     nntp.add_argument("--max-discovery-bytes", type=int, default=MAX_DISCOVERY_BYTES)
+    nntp_extend = commands.add_parser(
+        "extend-nntp-window",
+        help="Explicitly backfill and widen an NNTP bootstrap window",
+    )
+    nntp_extend.add_argument("--ledger", type=Path, required=True)
+    nntp_extend.add_argument("--host", default=DEFAULT_HOST)
+    nntp_extend.add_argument("--group", default=DEFAULT_GROUP)
+    nntp_extend.add_argument("--lookback-hours", type=int, required=True)
+    nntp_extend.add_argument(
+        "--max-discovery-bytes", type=int, default=MAX_DISCOVERY_BYTES
+    )
     nntp_numbers = commands.add_parser(
         "discover-nntp-numbers",
         help="Queue a bounded range of new NNTP article numbers",
@@ -1029,6 +1041,18 @@ def main(argv: list[str] | None = None) -> int:
                 result = parse_public_inbox_manifest(args.inbox_url, compressed)
         elif args.command == "discover-nntp":
             result = discover_nntp(
+                Ledger(args.ledger),
+                host=args.host,
+                group=args.group,
+                hours=args.lookback_hours,
+                response_bytes=args.max_discovery_bytes,
+            )
+        elif args.command == "extend-nntp-window":
+            if not args.ledger.is_file():
+                raise ValueError(
+                    "An existing NNTP ledger is required to extend its window"
+                )
+            result = extend_nntp_window(
                 Ledger(args.ledger),
                 host=args.host,
                 group=args.group,

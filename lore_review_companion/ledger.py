@@ -2533,6 +2533,43 @@ class Ledger:
                 )
         return NNTPCheckpoint(**dict(row))
 
+    def extend_nntp_bootstrap(
+        self, checkpoint: NNTPCheckpoint, hours: int, message_ids: tuple[str, ...]
+    ) -> int:
+        """Atomically widen a checkpoint and retain its backfill discoveries."""
+        if type(hours) is not int or not checkpoint.window_hours < hours <= 8760:
+            raise ValueError("Extended bootstrap hours must increase within 8760")
+        cutoff = (
+            datetime.fromisoformat(checkpoint.bootstrap_at) - timedelta(hours=hours)
+        ).isoformat()
+        normalized = tuple(_normalize_nntp_message_id(item) for item in message_ids)
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                "UPDATE nntp_checkpoints SET cutoff = ?, window_hours = ?"
+                " WHERE source = ? AND bootstrap_at = ? AND cutoff = ?"
+                " AND window_hours = ? AND checked_through = ?",
+                (
+                    cutoff,
+                    hours,
+                    checkpoint.source,
+                    checkpoint.bootstrap_at,
+                    checkpoint.cutoff,
+                    checkpoint.window_hours,
+                    checkpoint.checked_through,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ArchiveCheckpointConflict(
+                    "NNTP checkpoint changed during extension"
+                )
+            before = connection.total_changes
+            connection.executemany(
+                "INSERT INTO nntp_message_queue (source, message_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
+                ((checkpoint.source, message_id) for message_id in normalized),
+            )
+            return connection.total_changes - before
+
     def record_nntp_discovery(
         self,
         source: str,

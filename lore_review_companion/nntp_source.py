@@ -17,6 +17,7 @@ from email.parser import BytesHeaderParser
 from typing import Callable
 
 from lore_review_companion.ledger import (
+    ArchiveCheckpointConflict,
     ArchiveSafetyBlocked,
     Ledger,
     NNTPCheckpoint,
@@ -385,6 +386,82 @@ def discover_nntp(
         except (OSError, EOFError) as error:
             raise NNTPSourceError(
                 f"NNTP discovery failed: {type(error).__name__}; pending work retained"
+            ) from None
+
+
+def extend_nntp_window(
+    ledger: Ledger,
+    *,
+    hours: int,
+    host: str = DEFAULT_HOST,
+    group: str = DEFAULT_GROUP,
+    response_bytes: int = MAX_DISCOVERY_BYTES,
+    client_factory: Callable = _client,
+) -> NNTPDiscovery:
+    """Backfill an explicitly widened bootstrap window before recording it."""
+    source = nntp_source(host, group)
+    if type(hours) is not int or not 1 <= hours <= 8760:
+        raise ValueError("Bootstrap hours must be between 1 and 8760")
+    if (
+        type(response_bytes) is not int
+        or not 1024 <= response_bytes <= MAX_DISCOVERY_BYTES
+    ):
+        raise ValueError(
+            "Discovery byte budget must be between 1024 and 8 * 1024 * 1024"
+        )
+    with ledger.worker_lock():
+        ledger.assert_unconflicted(())
+        if ledger.status().conflicted_message_ids:
+            raise NNTPSourceError(
+                "Message-ID conflicts require inspection before NNTP discovery resumes"
+            )
+        checkpoint = ledger.nntp_checkpoint(source)
+        if checkpoint is None:
+            raise ValueError("Run discover-nntp before extending its window")
+        if hours <= checkpoint.window_hours:
+            raise ValueError("Extended bootstrap hours must increase")
+        since = datetime.fromisoformat(checkpoint.bootstrap_at) - timedelta(hours=hours)
+        try:
+            with client_factory(host.lower()) as client:
+                if "NEWNEWS" not in client.getcapabilities():
+                    raise NNTPSourceError("The NNTP server does not advertise NEWNEWS")
+                numeric_cursor = _group_cursor(
+                    ledger, source, _group_snapshot(client, group), initialize=False
+                )
+                with _BoundedBuffer(response_bytes) as output:
+                    response, _ = client.newnews(
+                        group, since.replace(tzinfo=None), file=output
+                    )
+                    if not response.startswith("230 "):
+                        raise NNTPSourceError(
+                            "NNTP NEWNEWS returned an unexpected response"
+                        )
+                    data = output.getvalue()
+                try:
+                    identifiers = tuple(data.decode("ascii").splitlines())
+                except UnicodeDecodeError as error:
+                    raise NNTPSourceError(
+                        "NNTP discovery returned non-ASCII Message-IDs"
+                    ) from error
+                queued = ledger.extend_nntp_bootstrap(checkpoint, hours, identifiers)
+                updated = ledger.nntp_checkpoint(source)
+                if updated is None:
+                    raise ArchiveCheckpointConflict(
+                        "NNTP checkpoint disappeared during extension"
+                    )
+                return NNTPDiscovery(
+                    updated,
+                    len(identifiers),
+                    queued,
+                    since.isoformat(),
+                    len(data),
+                    numeric_cursor,
+                )
+        except NNTPSourceError:
+            raise
+        except (OSError, EOFError) as error:
+            raise NNTPSourceError(
+                f"NNTP window extension failed: {type(error).__name__}; pending work retained"
             ) from None
 
 

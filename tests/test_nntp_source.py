@@ -134,6 +134,92 @@ class NNTPSourceTests(unittest.TestCase):
             ("mail@example.test",),
         )
 
+    def test_extend_window_backfills_before_changing_checkpoint(self):
+        """An explicit extension backfills older IDs without rewinding progress."""
+        from lore_review_companion.nntp_source import extend_nntp_window
+
+        initial = discover_nntp(self.ledger, client_factory=self.factory)
+        self.discovery_bytes = b"<older@example.test>\r\n<mail@example.test>\r\n"
+        self.fail_response = True
+        with self.assertRaises(NNTPSourceError):
+            extend_nntp_window(self.ledger, hours=240, client_factory=self.factory)
+        self.assertEqual(
+            self.ledger.nntp_checkpoint(initial.checkpoint.source), initial.checkpoint
+        )
+        self.assertEqual(
+            self.ledger.pending_nntp_messages(initial.checkpoint.source),
+            ("mail@example.test",),
+        )
+        self.fail_response = False
+        extended = extend_nntp_window(
+            self.ledger, hours=240, client_factory=self.factory
+        )
+        self.assertEqual(self.since[-1], datetime(2026, 10, 18, 11))
+        self.assertEqual(extended.checkpoint.window_hours, 240)
+        self.assertEqual(extended.checkpoint.cutoff, "2026-10-18T11:00:00+00:00")
+        self.assertEqual(
+            extended.checkpoint.checked_through, initial.checkpoint.checked_through
+        )
+        self.assertEqual(extended.newly_queued, 1)
+        self.assertEqual(
+            self.ledger.pending_nntp_messages(initial.checkpoint.source),
+            ("mail@example.test", "older@example.test"),
+        )
+
+    def test_extend_window_rejects_stale_checkpoint_and_invalid_ids(self):
+        """Extension cannot commit malformed discoveries or stale evidence."""
+        from lore_review_companion.nntp_source import extend_nntp_window
+
+        initial = discover_nntp(self.ledger, client_factory=self.factory)
+        self.discovery_bytes = b"not-an-id\r\n"
+        with self.assertRaises(ValueError):
+            extend_nntp_window(self.ledger, hours=240, client_factory=self.factory)
+        self.assertEqual(
+            self.ledger.nntp_checkpoint(initial.checkpoint.source), initial.checkpoint
+        )
+        self.now += timedelta(hours=1)
+        self.discovery_bytes = b"<new@example.test>\r\n"
+        current = discover_nntp(self.ledger, client_factory=self.factory)
+        with self.assertRaises(ArchiveCheckpointConflict):
+            self.ledger.extend_nntp_bootstrap(
+                initial.checkpoint, 240, ("older@example.test",)
+            )
+        self.assertEqual(
+            self.ledger.nntp_checkpoint(initial.checkpoint.source), current.checkpoint
+        )
+        self.assertNotIn(
+            "older@example.test",
+            self.ledger.pending_nntp_messages(initial.checkpoint.source),
+        )
+
+    def test_cli_explicitly_extends_existing_window(self):
+        """The extension command forwards a selected new window to discovery."""
+        from lore_review_companion.nntp_source import extend_nntp_window
+
+        discover_nntp(self.ledger, client_factory=self.factory)
+
+        def extend(ledger, **options):
+            """Use the synthetic NNTP server for the CLI test."""
+            return extend_nntp_window(ledger, **options, client_factory=self.factory)
+
+        with (
+            patch("lore_review_companion.cli.extend_nntp_window", side_effect=extend),
+            redirect_stdout(io.StringIO()) as output,
+        ):
+            result = main(
+                [
+                    "extend-nntp-window",
+                    "--ledger",
+                    str(self.ledger.path),
+                    "--lookback-hours",
+                    "240",
+                ]
+            )
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            json.loads(output.getvalue())["checkpoint"]["window_hours"], 240
+        )
+
     def test_window_inspection_uses_unverified_header_estimates_and_inclusive_bounds(
         self,
     ):
@@ -569,6 +655,7 @@ class NNTPSourceTests(unittest.TestCase):
 
     def test_library_article_adapter_preserves_response_code(self):
         """Preserve server response codes through the NNTP adapter."""
+
         class FakeNNTPError(Exception):
             pass
 
