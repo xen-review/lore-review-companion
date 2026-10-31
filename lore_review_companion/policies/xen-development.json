@@ -15,8 +15,6 @@
   "git_username": "review-companion",
   "base_commit": "8803b82ab2c95da09c837482cbcac11d7f3853e5",
   "target_branch": "staging",
-  "message_limit": 32,
-  "revision_limit": 2,
   "max_inline_lines": 50,
   "lookback_hours": 240,
   "notifications": "disabled",

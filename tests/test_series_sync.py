@@ -24,7 +24,9 @@ from lore_review_companion.import_worker import (
     _message_issue_exists,
     _deliver_reply_batch,
     _recover_submission_thread,
+    run_import_worker,
     run_import_worker_round,
+    wait_for_resources,
 )
 from lore_review_companion.import_refresh import (
     apply_import_refresh,
@@ -115,6 +117,41 @@ class SeriesSyncTests(unittest.TestCase):
         allowed = message("allowed@example.test", "Re: patch", headers="In-Reply-To: <patch@example.test>\n")
         self.assertEqual(_allowed_replies((grandchild, allowed, child, excluded)), (allowed,))
 
+    def test_resource_guard_waits_for_load_and_forge_disk_space(self):
+        with (
+            patch("lore_review_companion.import_worker.os.getloadavg", side_effect=[(5, 0, 0), (4, 0, 0), (4, 0, 0)]),
+            patch("lore_review_companion.import_worker.os.sysconf", return_value=4),
+            patch("lore_review_companion.import_worker.shutil.disk_usage", side_effect=[SimpleNamespace(free=2_000_000_000), SimpleNamespace(free=999_999_999), SimpleNamespace(free=1_000_000_000)]) as disk,
+            patch("lore_review_companion.import_worker.time.sleep") as sleeper,
+        ):
+            wait_for_resources(self.repository)
+        self.assertEqual(sleeper.call_args_list, [unittest.mock.call(10), unittest.mock.call(10)])
+        self.assertEqual(disk.call_args_list, [unittest.mock.call(self.repository)] * 3)
+
+    def test_continuous_worker_keeps_processing_pages(self):
+        result = SimpleNamespace(considered=32, published=32, delivered=0, diagnostics=())
+        idle = SimpleNamespace(considered=0, published=0, delivered=0, diagnostics=())
+        with (
+            patch("lore_review_companion.import_worker.run_import_worker_round", side_effect=[result, result, idle, KeyboardInterrupt]) as run,
+            patch("lore_review_companion.import_worker.time.sleep") as sleeper,
+            redirect_stdout(StringIO()),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            run_import_worker(self.ledger, self.repository, self.repository / "policy",
+                              self.repository / "state", self.api, object(), forge_path=self.repository)
+        self.assertEqual(run.call_count, 4)
+        sleeper.assert_called_once_with(1)
+        self.assertIsNotNone(self.api.before_write)
+
+    def test_forge_api_checks_resources_before_each_write(self):
+        guard_calls = []
+        api = ForgeAPI("https://gitea.test/api/v1/", transport=lambda _request, _timeout: FakeResponse(200, {}),
+                       before_write=lambda: guard_calls.append("checked"))
+        api.request_json("repos/o/r/issues")
+        api.request_json("repos/o/r/issues", method="POST", payload={"title": "one"})
+        api.request_json("repos/o/r/issues", method="POST", payload={"title": "two"})
+        self.assertEqual(guard_calls, ["checked", "checked"])
+
     def test_import_issues_use_exact_message_id_and_include_closed_issues(self):
         calls = []
         existing = {"title": "patch@example.test", "state": "closed"}
@@ -145,7 +182,7 @@ class SeriesSyncTests(unittest.TestCase):
             "source_url": "https://lore.kernel.org/xen-devel/", "nntp_host": "nntp.lore.kernel.org",
             "nntp_group": "org.xenproject.lists.xen-devel", "git_remote": self.remote,
             "git_username": "git-bot", "base_commit": "b" * 40, "target_branch": "main",
-            "message_limit": 2, "revision_limit": 1, "max_inline_lines": 50,
+            "max_inline_lines": 50,
             "lookback_hours": 148, "notifications": "disabled",
             "identity_rule": "isolated-unverified", "retry_uncertain": False,
         }
@@ -409,7 +446,7 @@ class SeriesSyncTests(unittest.TestCase):
                 reason="Rebuild",
             )
 
-    def test_thread_recovery_ignores_unrelated_backlog_and_defers_until_complete(self):
+    def test_thread_recovery_fetches_all_missing_members(self):
         received = {"seed@example.test"}
         ledger = SimpleNamespace(
             nntp_message_received=lambda source, identifier: identifier in received
@@ -418,7 +455,6 @@ class SeriesSyncTests(unittest.TestCase):
             nntp_host="nntp.lore.kernel.org",
             nntp_group="group",
             source_url="https://lore.kernel.org/xen-devel/",
-            message_limit=1,
         )
         discovery = SimpleNamespace(
             empty_or_unavailable=False,
@@ -441,9 +477,6 @@ class SeriesSyncTests(unittest.TestCase):
                 "lore_review_companion.import_worker.fetch_nntp", side_effect=fetch
             ) as fetched,
         ):
-            self.assertFalse(
-                _recover_submission_thread(ledger, policy, "seed@example.test")
-            )
             self.assertTrue(
                 _recover_submission_thread(ledger, policy, "seed@example.test")
             )
@@ -804,8 +837,6 @@ class SeriesSyncTests(unittest.TestCase):
             "git_username": "git-bot",
             "base_commit": "b" * 40,
             "target_branch": "main",
-            "message_limit": 2,
-            "revision_limit": 1,
             "max_inline_lines": 50,
             "lookback_hours": 148,
             "notifications": "disabled",
@@ -1053,7 +1084,7 @@ class SeriesSyncTests(unittest.TestCase):
                     refresh_source=False,
                 )
         incident.unlink()
-        path.write_text(json.dumps({**policy, "message_limit": 3}))
+        path.write_text(json.dumps({**policy, "lookback_hours": 149}))
         with patch(
             "lore_review_companion.import_worker.sync_imported_series_revision",
             side_effect=GitPreflightError("still retryable"),
@@ -1096,6 +1127,8 @@ class SeriesSyncTests(unittest.TestCase):
             "api-token",
             "--git-token-file",
             "git-token",
+            "--forge-path",
+            str(self.repository),
             "--no-refresh-source",
         ]
         with (
@@ -1104,7 +1137,7 @@ class SeriesSyncTests(unittest.TestCase):
                 "lore_review_companion.cli.read_private_token",
                 side_effect=("synthetic-api-token", "synthetic-git-token"),
             ),
-            patch("lore_review_companion.cli.run_import_worker_round") as run,
+            patch("lore_review_companion.cli.run_import_worker") as run,
             patch("lore_review_companion.cli.asdict", return_value={}),
             redirect_stdout(StringIO()),
         ):

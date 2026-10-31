@@ -34,8 +34,6 @@ class ImportPolicy:
     git_username: str
     base_commit: str
     target_branch: str
-    message_limit: int
-    revision_limit: int
     max_inline_lines: int
     lookback_hours: int
     notifications: str
@@ -126,8 +124,6 @@ def read_import_policy(path: Path) -> ImportPolicy:
             "Import policy expiry must be an explicit future timezone-aware time"
         )
     limits = {
-        "message_limit": (1, 1000),
-        "revision_limit": (1, 32),
         "max_inline_lines": (1, 50),
         "lookback_hours": (1, 8760),
     }

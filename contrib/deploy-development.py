@@ -66,18 +66,17 @@ def main(arguments=None):
                     "forgejo_revision": forgejo_revision,
                     "companion_revision": companion_revision,
                     "policy": str(profile),
-                    "action": "build, install, restart, verify worker and resume timer",
+                    "action": "build, install, restart and verify continuous worker",
                 }
             )
         )
         return 0
-    run(
-        "systemctl",
-        "--user",
-        "stop",
-        "lore-review-companion.timer",
-        "lore-review-companion.service",
-    )
+    units = Path.home() / ".config/systemd/user"
+    old_timer = units / "lore-review-companion.timer"
+    if old_timer.exists():
+        run("systemctl", "--user", "disable", "--now", "lore-review-companion.timer")
+        old_timer.unlink()
+    run("systemctl", "--user", "stop", "lore-review-companion.service")
     run("make", "TAGS=sqlite sqlite_unlock_notify", "build", cwd=forgejo)
     share = Path.home() / ".local/share"
     release = share / "forgejo-review/releases" / forgejo_revision[:12]
@@ -119,10 +118,8 @@ def main(arguments=None):
     ).strip()
     if Path(installed_profile).read_bytes() != profile.read_bytes():
         raise ValueError("Installed policy differs from committed source")
-    units = Path.home() / ".config/systemd/user"
     units.mkdir(parents=True, exist_ok=True)
-    for name in ("lore-review-companion.service", "lore-review-companion.timer"):
-        shutil.copy2(companion / "contrib" / name, units / name)
+    shutil.copy2(companion / "contrib/lore-review-companion.service", units / "lore-review-companion.service")
     override = units / "forgejo-review.service.d/90-development.conf"
     override.parent.mkdir(parents=True, exist_ok=True)
     override.write_text(
@@ -160,8 +157,8 @@ def main(arguments=None):
         raise ValueError("HTTP endpoint is not serving the deployed Forgejo revision")
     run("systemctl", "--user", "is-active", "forgejo-review.service")
     run("systemctl", "--user", "reset-failed", "lore-review-companion.service")
-    run("systemctl", "--user", "start", "lore-review-companion.service")
-    run("systemctl", "--user", "enable", "--now", "lore-review-companion.timer")
+    run("systemctl", "--user", "enable", "--now", "lore-review-companion.service")
+    run("systemctl", "--user", "is-active", "lore-review-companion.service")
     print(
         json.dumps(
             {
@@ -169,7 +166,7 @@ def main(arguments=None):
                 "companion_revision": companion_revision,
                 "installed_policy": installed_profile,
                 "server_version": version,
-                "timer": "enabled",
+                "worker": "enabled",
             }
         )
     )

@@ -510,7 +510,7 @@ post historical pending effects implicitly, or use a production DB for tests.
 | P02 | DONE | P01 | Built sqlite/sqlite_unlock_notify candidate 09401fd3c6 with temporary cache and bounded Go memory. Started the exact work/config paths under enabled forgejo-review.service. All three review migrations are present; loopback/public health and embedded API version pass. User lingering is enabled. No shared SSH configuration was changed. |
 | P03 | DONE | P02 | Password gate cleared and both selected-repository credentials verified. Effective access was stale after Owner-team removal; supported collaborator read/write updates recalculated it. Importer push=true/admin=false. Disabled merge/rebase/update/manual/head-edit methods; source-bound Xen lore unattended grant and numeric identities verified. Temporary administrative bootstrap revoked in finally, with no credential values exposed. |
 | P04 | DONE | P03, R01 | Installed companion 2e12fb9 with pinned b4/liblore; exact source fingerprint and pip checks pass. Retained real NNTP mail, reviewed immutable publication/delivery digests and enabled the seven-day repository/source-bound policy. Two bounded no-refresh worker rounds and the hardened systemd source-refresh round succeed without duplicate writes. |
-| P05 | DONE | P04 | Actual grant revocation rejects the worker's first capabilities GET with 403, no writes and an incident latch. Explicit regrant and inspected incident recovery pass; temporary admin tokens are verified absent. Enabled the ten-minute user timer only after the successful service round. Its first invocation skips nonapplicable nested-VMX preflight, publishes ready kexec v3 and exits successfully. Paired private ledger/worker snapshots pass SQLite integrity; monitoring/stop/expiry handoff is below. |
+| P05 | DONE | P04 | Historical grant-revocation and recovery checks passed; temporary admin tokens were verified absent. The original scheduler is superseded by the continuous worker service. |
 | P06 | DONE | C05 | New imported conversation/range/reply bodies use original source prose plus a lore footnote; headers contain the footnote alone. mail-text-v1 is explicit and source-bound; untagged old effects retain exact request bytes and approval/replay identity. All 39 queue tests and actual isolated API/Git/b4/worker acceptance pass, including multiline ranges, nested replies and old-payload requeue. Full suite: 350 run, 348 pass, two deliberate server skips, 14.993s. |
 | P07 | DONE | P03, P04, P06 | Published the three digest-approved actual Xen revisions below, eleven original-message conversations and two reviews with three exact inline remarks. The timer also published ready kexec v3 as PR 4. Actual participant authorship and immutable verified bases are retained. Unsupported bases and ambiguous or missing inline parents stay unresolved, not force-matched. |
 | P08 | DONE | P07 | Real public cover/timeline/files views and ordinary APIs show original prose, clickable lore footnotes, unverified participant/source chronology and exact historical ranges. Desktop 1440x1000 and mobile 390x844 show no page overflow. Same-publication replay returns PRs 1/2/3 unchanged; requeue leaves no old effects pending. Initial master refs and notification/hook counts are unchanged. Active scheduler, paired backup and recovery/monitoring handoff are recorded below. |
@@ -530,8 +530,8 @@ post historical pending effects implicitly, or use a production DB for tests.
   `~/.local/state/lore-review-companion/xen.git`. The operational mail ledger
   and scheduling DB are `mail.sqlite3` and `worker.sqlite3` in that state directory.
   Policy digest is `ef5f5199c21a620c886432ff13e7ddf9aeec82af51fddecdbca253ad38853824`;
-  expiry is `2026-11-06T15:21:05.869451+00:00`. Budgets are 32 messages and two
-  revisions per round; same-key uncertain retry remains disabled. Review expiry
+  expiry was `2026-11-06T15:21:05.869451+00:00`. Same-key uncertain retry was
+  disabled. This historical policy is superseded by the committed current profile. Review expiry
   and disk space before renewing; do not extend expiry silently.
 - The mandatory password change is complete. Importer 4 (`review-companion`)
   has selected-repository write access, not administration; repository 2 is
@@ -604,26 +604,23 @@ verifies the parent. Notification and hook-task counts remain zero after PR 4.
 
 ### Scheduler Handoff
 
-`lore-review-companion.timer` is enabled and active, with a ten-minute inactive
-interval and up to one minute of jitter. `forgejo-review.service` is enabled;
-user lingering is enabled. The worker is a bounded oneshot, not a resident daemon.
-An inactive worker after exit status zero is normal. Check the actual result,
-journal, timer, source backlog and available disk:
+The worker now runs continuously under `lore-review-companion.service`.
+Check the service, journal, source backlog and available disk:
 
 ```sh
 systemctl --user show lore-review-companion.service -p Result -p ExecMainStatus
-systemctl --user list-timers --all --no-pager lore-review-companion.timer
+systemctl --user is-active lore-review-companion.service
 journalctl --user -u lore-review-companion.service --no-pager -n 30
 df -h / /tmp
 ~/.local/share/lore-review-companion/.venv/bin/lore-review-companion list-nntp-queue \
   --ledger ~/.local/state/lore-review-companion/mail.sqlite3 --limit 12
 ```
 
-To suspend future rounds, disable the timer and revoke the repository/source
+To suspend imports, disable the service and revoke the repository/source
 import grant through the administrator API:
 
 ```sh
-systemctl --user disable --now lore-review-companion.timer
+systemctl --user disable --now lore-review-companion.service
 ```
 
 Let any active round finish before taking paired
@@ -1293,7 +1290,7 @@ Bring them into scope only through an explicit decision.
   Actions, active repo/inherited/system hooks, repo/owner secrets, merge/manual/
   rebase methods and default maintainer head edits block authorization. Grant
   changes require explicit revoke/regrant. Existing manual imports are unchanged.
-- `run-import-worker` performs one bounded discovery/publication/reply round.
+- `run-import-worker` continuously processes discovery, publication and replies.
   Private scheduling SQLite plus an independent process lock avoid nested mail
   ledger locks. Durable revision rotation prevents new-series starvation. Only
   newly queued worker effects enroll; IDs are bound to payload fingerprints and

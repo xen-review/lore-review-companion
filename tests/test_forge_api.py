@@ -119,8 +119,6 @@ class GiteaAPITests(unittest.TestCase):
             "git_username": "git-bot",
             "base_commit": "a" * 40,
             "target_branch": "staging",
-            "message_limit": 100,
-            "revision_limit": 8,
             "max_inline_lines": 50,
             "lookback_hours": 148,
             "notifications": "disabled",
@@ -172,8 +170,6 @@ class GiteaAPITests(unittest.TestCase):
             for changed in (
                 {"expires_at": "2000-01-01T00:00:00+00:00"},
                 {"expires_at": "2099-01-01T00:00:00"},
-                {"message_limit": True},
-                {"revision_limit": 33},
                 {"base_commit": "staging"},
                 {"notifications": "enabled"},
                 {"identity_rule": "adopt-existing-users"},

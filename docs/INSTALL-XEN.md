@@ -137,10 +137,11 @@ Use `extend-nntp-window --lookback-hours 336` as documented in the README
 to backfill an existing checkpoint. The installed public profile is the only
 runtime policy authority; restart normally after updating it.
 
-Run additional bounded rounds using only the generated runtime tokens:
+Run the continuous worker using only the generated runtime tokens:
 
 ```sh
 .venv/bin/lore-review-companion run-import-worker \
+  --forge-path "$HOME/forgejo" \
   --ledger "$HOME/.local/state/lore-review-companion/mail.sqlite3" \
   --repository "$HOME/.local/state/lore-review-companion/xen.git" \
   --state "$HOME/.local/state/lore-review-companion/worker.sqlite3" \
@@ -207,14 +208,12 @@ presentation has fences or footnotes. This script never rewrites old imports.
 
 ## Scheduling And Recovery
 
-No script automatically installs/enables systemd. After a successful inspected
-round, adapt the [service](../contrib/lore-review-companion.service) and
-[timer](../contrib/lore-review-companion.timer) to your actual interpreter/config/
-state paths. Review filesystem protections, then install them in your user unit
-directory, verify with `systemd-analyze --user verify`, reload the user manager,
-and enable the timer explicitly. User lingering may require administrator setup.
+Adapt the [service](../contrib/lore-review-companion.service) to your actual
+interpreter, Forgejo filesystem and state paths. Review filesystem protections,
+install the unit, reload the user manager, and enable the service. User lingering
+may require administrator setup.
 
-Stop scheduling with `systemctl --user disable --now lore-review-companion.timer`
+Stop importing with `systemctl --user disable --now lore-review-companion.service`
 and revoke the source grant to stop future writes. There is no persistent
 incident latch: a later invocation retries normally with retained identity and
 uncertain-write checks. Scheduling state reconciles with committed policy.

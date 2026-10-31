@@ -1401,8 +1401,6 @@ class ImportedWorkflowAcceptanceTests(unittest.TestCase):
                 "git_username": owner,
                 "base_commit": base,
                 "target_branch": "branch2",
-                "message_limit": 100,
-                "revision_limit": 8,
                 "max_inline_lines": 50,
                 "lookback_hours": 148,
                 "notifications": "disabled",

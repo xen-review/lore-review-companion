@@ -73,7 +73,7 @@ from lore_review_companion.ledger import (
 from lore_review_companion.mail_parser import parse_mbox
 from lore_review_companion.coordinator import plan_imported_sync
 from lore_review_companion.import_policy import DEFAULT_POLICY_PATH, read_import_policy
-from lore_review_companion.import_worker import run_import_worker_round
+from lore_review_companion.import_worker import run_import_worker
 from lore_review_companion.import_refresh import (
     apply_import_refresh,
     plan_import_refresh,
@@ -881,7 +881,7 @@ def main(argv: list[str] | None = None) -> int:
     sync_plan.add_argument("--max-inline-lines", type=int, default=50)
     import_worker = commands.add_parser(
         "run-import-worker",
-        help="Run one bounded round using the committed public import policy",
+        help="Continuously import using the committed public import policy",
     )
     import_worker.add_argument("--policy-file", type=Path, default=DEFAULT_POLICY_PATH)
     import_worker.add_argument("--ledger", type=Path, required=True)
@@ -889,6 +889,7 @@ def main(argv: list[str] | None = None) -> int:
     import_worker.add_argument("--state", type=Path, required=True)
     import_worker.add_argument("--token-file", type=Path, required=True)
     import_worker.add_argument("--git-token-file", type=Path, required=True)
+    import_worker.add_argument("--forge-path", type=Path, required=True)
     import_worker.add_argument("--no-refresh-source", action="store_true")
     args = parser.parse_args(argv)
 
@@ -900,13 +901,14 @@ def main(argv: list[str] | None = None) -> int:
             credentials = GitHttpCredentials(
                 policy.git_username, read_private_token(args.git_token_file)
             )
-            result = run_import_worker_round(
+            result = run_import_worker(
                 ledger,
                 args.repository,
                 args.policy_file,
                 args.state,
                 api,
                 credentials,
+                forge_path=args.forge_path,
                 refresh_source=not args.no_refresh_source,
             )
         elif args.command == "refresh-import":

@@ -88,6 +88,7 @@ class ForgeAPI:
         retry_delay: float = 0.25,
         transport: Transport | None = None,
         sleeper: Callable[[float], None] = time.sleep,
+        before_write: Callable[[], None] | None = None,
     ):
         origin = urlsplit(base_url)
         if (
@@ -121,6 +122,7 @@ class ForgeAPI:
         self.retry_delay = retry_delay
         self.transport = transport or _urlopen_transport
         self.sleeper = sleeper
+        self.before_write = before_write
 
     def request_json(
         self,
@@ -214,6 +216,8 @@ class ForgeAPI:
         retryable = method.upper() == "GET"
         attempt = 0
         while True:
+            if not retryable and self.before_write is not None:
+                self.before_write()
             request = Request(url, data=body, headers=headers, method=method.upper())
             try:
                 try:

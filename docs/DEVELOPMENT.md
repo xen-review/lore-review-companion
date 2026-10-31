@@ -45,7 +45,7 @@ The script stops companion scheduling, builds matching Forgejo backend/frontend
 assets, installs a revision-specific server release and stamped companion
 package, verifies installed policy bytes and b4, updates the checked-in service
 units, removes obsolete incident/policy artifacts, restarts Forgejo, checks its
-version endpoint, runs a worker round, and enables the timer after success.
+version endpoint, and enables the continuous worker service.
 No administrator credential or privilege escalation is required for an existing
 development installation. Failures are reported and can be retried; no incident
 marker is created.
@@ -54,17 +54,17 @@ Inspect service logs with `journalctl --user -u lore-review-companion.service`
 and check actual PRs, provenance, reply counts and deployed build stamps. A
 successful build alone is not evidence of a successful import.
 
-To run one bounded import round immediately, then inspect its result:
+To start the importer and inspect its activity:
 
 ```sh
 systemctl --user start lore-review-companion.service
 journalctl --user -u lore-review-companion.service -n 20 --no-pager
 ```
 
-The service uses the committed policy's message and revision limits and the
-persisted scheduling cursors. One successful round does not imply that every
-retained submission was considered; later service runs or timer ticks continue
-through the queue.
+The single worker continues through the persisted scheduling cursors without a
+per-run message limit. Before work and Forgejo writes it waits while the one-minute
+load average exceeds online CPUs or the filesystem containing Forgejo has less
+than 1 GB free. It rechecks after ten seconds while either condition persists.
 
 ## Disposable Fork Rebuild
 

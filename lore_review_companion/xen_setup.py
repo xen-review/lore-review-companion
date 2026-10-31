@@ -106,7 +106,6 @@ def rebuild_development_fork(
             "systemctl",
             "--user",
             "stop",
-            "lore-review-companion.timer",
             "lore-review-companion.service",
         ],
         check=True,

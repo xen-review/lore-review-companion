@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
-"""Policy-authorized bounded rounds; effect reconciliation stays in the ledger."""
+"""Policy-authorized import processing with durable effect reconciliation."""
 
 from __future__ import annotations
 
@@ -8,8 +8,10 @@ import fcntl
 import hashlib
 import json
 import os
+import shutil
 import sqlite3
 import stat
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,6 +37,19 @@ from lore_review_companion.outbox import (
 from lore_review_companion.preflight import GitPreflightError
 from lore_review_companion.review_queue import queue_imported_replies
 from lore_review_companion.series_sync import sync_imported_series_revision
+
+PAGE_SIZE = 1000
+REVISION_PAGE_SIZE = 1000
+
+
+def wait_for_resources(forge_path: Path) -> None:
+    while True:
+        load = os.getloadavg()[0]
+        cpus = os.sysconf("SC_NPROCESSORS_ONLN")
+        free = shutil.disk_usage(forge_path).free
+        if load <= cpus and free >= 1_000_000_000:
+            return
+        time.sleep(10)
 
 
 @dataclass(frozen=True)
@@ -198,7 +213,7 @@ def _ensure_message_issue(client, message_id, reasons):
     return True
 
 
-def _recover_submission_thread(ledger, policy, seed):
+def _recover_submission_thread(ledger, policy, seed, *, activity_guard=None):
     source = nntp_source(policy.nntp_host, policy.nntp_group)
     if not ledger.nntp_message_received(source, seed):
         fetch_nntp(
@@ -218,7 +233,9 @@ def _recover_submission_thread(ledger, policy, seed):
         for identifier in recovered.message_ids
         if not ledger.nntp_message_received(source, identifier)
     )
-    for identifier in missing[: policy.message_limit]:
+    for identifier in missing:
+        if activity_guard is not None:
+            activity_guard()
         fetch_nntp(
             ledger,
             host=policy.nntp_host,
@@ -232,12 +249,15 @@ def _recover_submission_thread(ledger, policy, seed):
 
 
 def _deliver_reply_batch(
-    ledger, state, reader, writer, policy, repository, current, pull_index, batch
+    ledger, state, reader, writer, policy, repository, current, pull_index, batch,
+    activity_guard=None,
 ):
     destination = f"{reader.api.base_url}{reader.repository_path}#{pull_index}"
     delivered = 0
     diagnostics = []
     for message in batch:
+        if activity_guard is not None:
+            activity_guard()
         reports = deliver_import_failure_comments(ledger, writer, pull_index, message.message_id)
         delivered += reports.delivered
         if reports.failed:
@@ -299,12 +319,12 @@ def _deliver_reply_batch(
                 and effect.event_type == kind
                 and effect.write_state != "complete"
             )
-            for offset in range(0, len(selected), policy.message_limit):
-                identifiers = selected[offset : offset + policy.message_limit]
+            for offset in range(0, len(selected), PAGE_SIZE):
+                identifiers = selected[offset : offset + PAGE_SIZE]
                 try:
                     plan = plan_import_delivery(
                         ledger, reader, pull_index, kind,
-                        limit=policy.message_limit,
+                        limit=PAGE_SIZE,
                         retry_uncertain=policy.retry_uncertain,
                         delivery_ids=identifiers,
                     )
@@ -322,7 +342,7 @@ def _deliver_reply_batch(
                     pull_index,
                     kind,
                     approved_digest=plan.approval_digest(),
-                    limit=policy.message_limit,
+                    limit=PAGE_SIZE,
                     retry_uncertain=policy.retry_uncertain,
                     delivery_ids=identifiers,
                 )
@@ -343,6 +363,7 @@ def run_import_worker_round(
     credentials: GitHttpCredentials,
     *,
     refresh_source: bool = True,
+    activity_guard=None,
 ) -> ImportWorkerRound:
     return _run_import_worker_round(
         ledger,
@@ -352,7 +373,29 @@ def run_import_worker_round(
         api,
         credentials,
         refresh_source=refresh_source,
+        activity_guard=activity_guard,
     )
+
+
+def run_import_worker(
+    ledger, repository, policy_path, state_path, api, credentials,
+    *, forge_path: Path, refresh_source: bool = True,
+):
+    guard = lambda: wait_for_resources(forge_path)
+    api.before_write = guard
+    while True:
+        try:
+            result = run_import_worker_round(
+                ledger, repository, policy_path, state_path, api, credentials,
+                refresh_source=refresh_source, activity_guard=guard,
+            )
+            print(json.dumps({"considered": result.considered, "published": result.published,
+                              "delivered": result.delivered, "diagnostics": result.diagnostics}), flush=True)
+            if not result.published and not result.delivered:
+                time.sleep(1)
+        except Exception as error:
+            print(json.dumps({"error_type": type(error).__name__, "error": str(error)}), flush=True)
+            time.sleep(1)
 
 
 def _run_import_worker_round(
@@ -364,7 +407,10 @@ def _run_import_worker_round(
     credentials: GitHttpCredentials,
     *,
     refresh_source: bool = True,
+    activity_guard=None,
 ) -> ImportWorkerRound:
+    if activity_guard is not None:
+        activity_guard()
     policy = read_import_policy(policy_path)
     if api.base_url != policy.api_url or credentials.username != policy.git_username:
         raise ValueError(
@@ -400,19 +446,19 @@ def _run_import_worker_round(
         if refresh_source:
             discover_nntp(ledger, host=host, group=group, hours=policy.lookback_hours)
             discover_nntp_numbers(
-                ledger, host=host, group=group, limit=policy.message_limit
+                ledger, host=host, group=group, limit=PAGE_SIZE
             )
-            ledger.repair_nntp_parents(source, limit=policy.message_limit)
-            fetch_nntp(ledger, host=host, group=group, limit=policy.message_limit)
+            ledger.repair_nntp_parents(source, limit=PAGE_SIZE)
+            fetch_nntp(ledger, host=host, group=group, limit=PAGE_SIZE)
         source_cursor, publication_cursor, revision_cursor = state.execute(
             "SELECT source_cursor, publication_cursor, revision_cursor FROM worker WHERE id = 1"
         ).fetchone()
-        page = ledger.list_messages(after=source_cursor, limit=policy.message_limit)
+        page = ledger.list_messages(after=source_cursor, limit=PAGE_SIZE)
         destination = api.base_url + reader.repository_path
         publications = ledger.list_publications(
             destination=destination,
             after=publication_cursor,
-            limit=policy.revision_limit,
+            limit=REVISION_PAGE_SIZE,
         )
         candidates = {}
         diagnostics = []
@@ -436,14 +482,18 @@ def _run_import_worker_round(
             )
         selected = state.execute(
             "SELECT id, series_key, revision, seed FROM revisions WHERE id > ? ORDER BY id LIMIT ?",
-            (revision_cursor, policy.revision_limit),
+            (revision_cursor, REVISION_PAGE_SIZE),
         ).fetchall()
         if not selected:
             selected = state.execute(
                 "SELECT id, series_key, revision, seed FROM revisions ORDER BY id LIMIT ?",
-                (policy.revision_limit,),
+                (REVISION_PAGE_SIZE,),
             ).fetchall()
         for cursor, key, number, seed in selected:
+            if activity_guard is not None:
+                activity_guard()
+            state.execute("UPDATE worker SET revision_cursor = ? WHERE id = 1", (cursor,))
+            state.commit()
             reader.capabilities()
             ledger.assert_unconflicted(())
             revisions = tuple(
@@ -467,7 +517,12 @@ def _run_import_worker_round(
             ):
                 continue
             if refresh_source and previous is None:
-                if not _recover_submission_thread(ledger, policy, seed):
+                recovered_thread = (
+                    _recover_submission_thread(ledger, policy, seed)
+                    if activity_guard is None else
+                    _recover_submission_thread(ledger, policy, seed, activity_guard=activity_guard)
+                )
+                if not recovered_thread:
                     diagnostics.append(
                         f"Source recovery pending: {seed}; publication deferred"
                     )
@@ -553,6 +608,8 @@ def _run_import_worker_round(
             )
             ledger.assert_message_ancestry_available(replies)
             reader.capabilities()
+            if activity_guard is not None:
+                activity_guard()
             result = sync_imported_series_revision(
                 current,
                 repository,
@@ -572,11 +629,7 @@ def _run_import_worker_round(
                 (current.series_key, current.revision),
             ).fetchone()
             position = row[0] if row is not None and row[0] < len(replies) else 0
-            batch = (
-                replies
-                if previous is None
-                else replies[position : position + policy.message_limit]
-            )
+            batch = replies[position:]
             count, reply_diagnostics = _deliver_reply_batch(
                 ledger,
                 state,
@@ -587,6 +640,7 @@ def _run_import_worker_round(
                 current,
                 pull_index,
                 batch,
+                activity_guard=activity_guard,
             )
             delivered += count
             diagnostics.extend(reply_diagnostics)
