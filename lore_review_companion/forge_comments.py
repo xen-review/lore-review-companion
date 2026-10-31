@@ -148,7 +148,10 @@ def submission_text(text: str, *, strip_shortlog: bool = True) -> str:
 def submission_description(text: str, submitter_address: str) -> str:
     lines = submission_text(text).splitlines()
     for index, line in enumerate(lines):
-        if re.fullmatch(r" .+\s+\|\s+(?:\d+\s*[-+]*|Bin .+)", line) or line.startswith("diff --git "):
+        if (
+            re.fullmatch(r" .+\s+\|\s+(?:\d+\s*[-+]*|Bin .+)", line)
+            or line.startswith(("diff --git ", "--- a/"))
+        ):
             lines = lines[:index]
             break
     while lines and (not lines[-1].strip() or lines[-1] == "---"):

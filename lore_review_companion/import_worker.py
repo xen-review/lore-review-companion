@@ -8,6 +8,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import shutil
 import sqlite3
 import stat
@@ -181,37 +182,51 @@ def _allowed_replies(messages):
     )
 
 
-def _message_issue_exists(client, message_id):
+def _message_issue_title(message):
+    submitter = message.from_address or "unknown-sender"
+    subject = message.subject.strip() or "(no subject)"
+    return f"PR creation skipped for {submitter}: {subject}"
+
+
+def _message_issue_exists(client, issue_title):
     page = 1
     while True:
         issues = client.api.request_json(
             f"{client.repository_path}/issues",
-            params={"state": "all", "type": "issues", "q": message_id, "limit": 50, "page": page},
+            params={"state": "all", "type": "issues", "q": issue_title, "limit": 50, "page": page},
         )
         if not isinstance(issues, list):
             raise ValueError("Forgejo returned an invalid issue list")
-        if any(isinstance(issue, dict) and issue.get("title") == message_id for issue in issues):
+        if any(isinstance(issue, dict) and issue.get("title") == issue_title for issue in issues):
             return True
         if len(issues) < 50:
             return False
         page += 1
 
 
-def _ensure_message_issue(client, message_id, reasons):
-    if _message_issue_exists(client, message_id):
+def _ensure_message_issue(client, message, reasons):
+    issue_title = _message_issue_title(message)
+    if _message_issue_exists(client, issue_title):
         return False
     client.capabilities()
-    source = f"{client.source_url}{quote(message_id, safe='@')}/"
-    body = f"Import failed for [source message]({source}).\n\n" + "\n".join(
+    source = f"{client.source_url}{quote(message.message_id, safe='@')}/"
+    body = f"{issue_title}\nLink: {source}\n\n" + "\n".join(
         f"- {reason}" for reason in reasons
     )
+    if len(message.body_text.splitlines()) < 200:
+        longest_fence = max(
+            (len(match.group()) for match in re.finditer(r"`+", message.body_text)),
+            default=0,
+        )
+        fence = "`" * max(3, longest_fence + 1)
+        body += f"\n\n{fence}rust\n{message.body_text.rstrip()}\n{fence}"
     try:
         client.api.request_json(
             f"{client.repository_path}/issues", method="POST",
-            payload={"title": message_id, "body": body},
+            payload={"title": issue_title, "body": body},
         )
     except ForgeAPIError:
-        if not _message_issue_exists(client, message_id):
+        if not _message_issue_exists(client, issue_title):
             raise
     return True
 
@@ -524,7 +539,7 @@ def _run_import_worker_round(
                 destination, current.series_key, current.revision
             )
             if previous is None and all(
-                _message_issue_exists(reader, message.message_id)
+                _message_issue_exists(reader, _message_issue_title(message))
                 for message in current.messages if message.message_id
             ):
                 continue
@@ -552,7 +567,7 @@ def _run_import_worker_round(
                 for message in current.messages:
                     if message.message_id:
                         _ensure_message_issue(
-                            writer, message.message_id,
+                            writer, message,
                             current.conflicts or ("Submission members are missing",),
                         )
                 diagnostics.append(
@@ -563,7 +578,7 @@ def _run_import_worker_round(
                 )
                 continue
             if previous is None and any(
-                _message_issue_exists(reader, message.message_id)
+                _message_issue_exists(reader, _message_issue_title(message))
                 for message in current.messages if message.message_id
             ):
                 continue
@@ -571,7 +586,7 @@ def _run_import_worker_round(
                 missing_signoffs = missing_patch_signoffs(current)
                 for message in missing_signoffs:
                     if message.message_id:
-                        _ensure_message_issue(writer, message.message_id, ("Patch has no valid Signed-off-by trailer",))
+                        _ensure_message_issue(writer, message, ("Patch has no valid Signed-off-by trailer",))
                 if missing_signoffs:
                     diagnostics.append(
                         f"PR creation blocked: {current.title} v{current.revision}; missing Signed-off-by: "
@@ -608,7 +623,12 @@ def _run_import_worker_round(
                     details[0] if details else type(error).__name__,
                 )
                 files = "; ".join(line for line in details if line.startswith("error:"))
-                _ensure_message_issue(writer, seed, tuple(part for part in (failure, files) if part))
+                failed_message = next(
+                    message for message in current.messages if message.message_id == seed
+                )
+                _ensure_message_issue(
+                    writer, failed_message, tuple(part for part in (failure, files) if part)
+                )
                 diagnostics.append(
                     f"Preflight blocked: PR creation for {current.title} "
                     f"[{current.series_key} v{current.revision}]; "
@@ -621,7 +641,7 @@ def _run_import_worker_round(
                 reason = str(error)
                 for message in current.messages:
                     if message.message_id:
-                        _ensure_message_issue(writer, message.message_id, (reason,))
+                        _ensure_message_issue(writer, message, (reason,))
                 diagnostics.append(
                     f"Assembly blocked: PR creation for {current.title} "
                     f"[{current.series_key} v{current.revision}]; "

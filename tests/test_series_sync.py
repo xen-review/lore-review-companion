@@ -21,6 +21,7 @@ from lore_review_companion.import_worker import (
     _allowed_replies,
     _ancestry_order,
     _ensure_message_issue,
+    _message_issue_title,
     _message_issue_exists,
     _deliver_reply_batch,
     _recover_submission_thread,
@@ -155,7 +156,8 @@ class SeriesSyncTests(unittest.TestCase):
 
     def test_import_issues_use_exact_message_id_and_include_closed_issues(self):
         calls = []
-        existing = {"title": "patch@example.test", "state": "closed"}
+        existing_message = message("patch@example.test", "[PATCH] xen: existing")
+        existing = {"title": _message_issue_title(existing_message), "state": "closed"}
 
         def request(path, **options):
             calls.append((path, options))
@@ -165,14 +167,27 @@ class SeriesSyncTests(unittest.TestCase):
 
         client = SimpleNamespace(api=SimpleNamespace(request_json=request), repository_path="repos/o/r",
                                  source_url="https://lore.kernel.org/xen-devel/", capabilities=lambda: {})
-        self.assertTrue(_message_issue_exists(client, "patch@example.test"))
-        self.assertFalse(_ensure_message_issue(client, "patch@example.test", ("broken parent",)))
-        self.assertTrue(_ensure_message_issue(client, "new@example.test", ("missing parent other@example.test",)))
+        self.assertTrue(_message_issue_exists(client, _message_issue_title(existing_message)))
+        duplicate_message = message("different@example.test", "[PATCH] xen: existing")
+        self.assertFalse(_ensure_message_issue(client, duplicate_message, ("broken parent",)))
+        new_message = message("new@example.test", "[PATCH] xen: new")
+        self.assertTrue(_ensure_message_issue(client, new_message, ("missing parent other@example.test",)))
+        long_message = parse_message(
+            b"From: Long <long@example.test>\n"
+            b"Message-ID: <long@example.test>\n"
+            b"Subject: [PATCH] xen: long\n\n"
+            + "\n".join(f"line-{index}" for index in range(200)).encode()
+        )
+        self.assertTrue(_ensure_message_issue(client, long_message, ("too long",)))
         posts = [options for _, options in calls if options.get("method") == "POST"]
-        self.assertEqual(len(posts), 1)
-        self.assertEqual(posts[0]["payload"]["title"], "new@example.test")
+        self.assertEqual(len(posts), 2)
+        self.assertEqual(posts[0]["payload"]["title"], _message_issue_title(new_message))
+        self.assertEqual(posts[0]["payload"]["body"].splitlines()[0], _message_issue_title(new_message))
+        self.assertIn("Link: https://lore.kernel.org/xen-devel/new@example.test/", posts[0]["payload"]["body"])
         self.assertIn("https://lore.kernel.org/xen-devel/new@example.test/", posts[0]["payload"]["body"])
         self.assertIn("missing parent other@example.test", posts[0]["payload"]["body"])
+        self.assertIn("```rust\nPatch body.", posts[0]["payload"]["body"])
+        self.assertNotIn("line-0", posts[1]["payload"]["body"])
         self.assertTrue(all(options.get("params", {}).get("state") == "all" for _, options in calls if "params" in options))
 
     def test_worker_rechecks_exclusion_after_thread_recovery(self):
@@ -261,9 +276,14 @@ class SeriesSyncTests(unittest.TestCase):
             )
         publish.assert_not_called()
         self.assertEqual(result.published, 0)
-        self.assertEqual([issue["title"] for issue in issues], ["unsigned@example.test"])
+        self.assertEqual(
+            [issue["title"] for issue in issues],
+            ["PR creation skipped for a@example.test: [PATCH] example"],
+        )
         self.assertIn("Signed-off-by", issues[0]["body"])
         self.assertIn("https://lore.kernel.org/xen-devel/unsigned@example.test/", issues[0]["body"])
+        self.assertEqual(issues[0]["body"].splitlines()[0], issues[0]["title"])
+        self.assertIn("```rust\nNo signoff.", issues[0]["body"])
 
     def test_worker_reports_source_assembly_failure_without_stopping_round(self):
         policy = {
@@ -313,7 +333,10 @@ class SeriesSyncTests(unittest.TestCase):
         publish.assert_called_once()
         self.assertEqual(result.published, 0)
         self.assertIn("Assembly blocked", result.diagnostics[0])
-        self.assertEqual([issue["title"] for issue in issues], ["patch@example.test"])
+        self.assertEqual(
+            [issue["title"] for issue in issues],
+            ["PR creation skipped for author@example.test: [PATCH 1/1] xen: change"],
+        )
         self.assertIn("Assembly requires exactly one complete", issues[0]["body"])
 
     def test_worker_drains_all_pages_before_waiting_for_next_poll(self):
@@ -358,7 +381,13 @@ class SeriesSyncTests(unittest.TestCase):
                     self.api, GitHttpCredentials("git-bot", "synthetic-git-token"), refresh_source=False,
                 ))
         self.assertEqual([result.backlog_pending for result in results], [True, True, True, False])
-        self.assertEqual({issue["title"] for issue in issues}, {f"unsigned-{index}@example.test" for index in range(4)})
+        self.assertEqual(
+            {issue["title"] for issue in issues},
+            {
+                f"PR creation skipped for a@example.test: [PATCH] example {index}"
+                for index in range(4)
+            },
+        )
 
     def test_direct_publication_rejects_missing_patch_signoff(self):
         unsigned = parse_message(b"From: A <a@example.test>\nMessage-ID: <unsigned@example.test>\nSubject: [PATCH] example\n\nNo signoff.\n---\n")

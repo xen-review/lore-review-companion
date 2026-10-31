@@ -497,6 +497,14 @@ class MailPresentationTests(unittest.TestCase):
     def test_pr_description_cuts_binary_stats_and_bare_diffs(self):
         self.assertEqual(submission_description("Text\n---\n file.bin | Bin 0 -> 15 bytes\n", "a@b"), "> Text")
         self.assertEqual(submission_description("Text\n\ndiff --git a/a b/a\n+secret\n", "a@b"), "> Text")
+        self.assertEqual(
+            submission_description(
+                "Text\n--- a/tools/xl/xl_saverestore.c\n"
+                "+++ b/tools/xl/xl_saverestore.c\n@@ -1 +1 @@\n-secret\n+change\n",
+                "a@b",
+            ),
+            "> Text",
+        )
 
     def test_named_source_link_is_escaped_and_not_a_footnote(self):
         body = imported_mail_text(
