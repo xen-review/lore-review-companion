@@ -402,7 +402,10 @@ def _run_import_worker_round(
             current = revisions[0]
             if not current.complete or current.conflicts:
                 diagnostics.append(
-                    f"Incomplete revision: {current.series_key} v{current.revision}"
+                    f"Incomplete submission revision; PR creation blocked: {current.title} "
+                    f"[{current.series_key} v{current.revision}]; "
+                    f"source: {policy.source_url}{seed}/; "
+                    f"cause: {'; '.join(current.conflicts) or 'missing submission members'}"
                 )
                 continue
             previous = ledger.publication(
@@ -438,8 +441,16 @@ def _run_import_worker_round(
             except GitPreflightError as error:
                 if previous is not None:
                     raise
+                details = str(error).splitlines()
+                failure = next(
+                    (line for line in details if line.startswith("Patch failed at ")),
+                    details[0] if details else type(error).__name__,
+                )
+                files = "; ".join(line for line in details if line.startswith("error:"))
                 diagnostics.append(
-                    f"Preflight blocked: {current.series_key} v{current.revision}: {str(error).splitlines()[0]}"
+                    f"Preflight blocked: PR creation for {current.title} "
+                    f"[{current.series_key} v{current.revision}]; "
+                    f"source: {policy.source_url}{seed}/; {failure}; {files}"
                 )
                 continue
             if (

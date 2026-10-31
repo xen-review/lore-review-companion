@@ -792,7 +792,10 @@ class SeriesSyncTests(unittest.TestCase):
 
         with patch(
             "lore_review_companion.import_worker.sync_imported_series_revision",
-            side_effect=GitPreflightError("Patch does not apply to the trusted base"),
+            side_effect=GitPreflightError(
+                "Applying: successful first patch\nPatch failed at 0004 failed fourth patch\n"
+                "error: patch failed: xen/file.c:10"
+            ),
         ) as blocked:
             skipped = run_import_worker_round(
                 self.ledger,
@@ -807,6 +810,11 @@ class SeriesSyncTests(unittest.TestCase):
             (skipped.considered, skipped.published, skipped.delivered), (1, 0, 0)
         )
         self.assertIn("Preflight blocked:", skipped.diagnostics[0])
+        self.assertIn("PR creation", skipped.diagnostics[0])
+        self.assertIn("https://lore.kernel.org/xen-devel/patch@example.test/", skipped.diagnostics[0])
+        self.assertIn("Patch failed at 0004 failed fourth patch", skipped.diagnostics[0])
+        self.assertIn("xen/file.c:10", skipped.diagnostics[0])
+        self.assertNotIn("successful first patch", skipped.diagnostics[0])
         self.assertFalse(blocked.call_args.args[4].write_enabled)
         self.assertFalse(state.with_name(state.name + ".incident").exists())
         self.assertIsNone(
