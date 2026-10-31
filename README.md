@@ -102,11 +102,23 @@ window explicitly, or retain the 148-hour default:
 .venv/bin/lore-review-companion fetch-nntp --ledger state.sqlite3 --limit 128
 ```
 
-The lookback is bounded to 1 through 8760 hours. It is fixed when that source's
-checkpoint is first created; repeat discovery with the same setting to resume.
-A changed duration is refused, not used to silently reset coverage or truncate
-retained mail. Discovery uses server index time, which may depend on sender
-Date, and does not establish verified receipt-time or complete thread coverage.
+The initial lookback defaults to 148 hours and is a guideline, not a fixed
+coverage limit. Explicitly extend an existing checkpoint, for example to 240
+hours, with:
+
+```sh
+.venv/bin/lore-review-companion extend-nntp-window \
+  --ledger state.sqlite3 --lookback-hours 240
+```
+
+The extension scans from the earlier cutoff and atomically queues the returned
+IDs without resetting the forward cursor or removing retained data. A failed
+scan leaves the checkpoint unchanged. The supported range is 1 through 8760
+hours; only increases are accepted. Normal discovery still refuses a different
+duration, so updating an unattended worker also requires a separately reviewed
+policy and scheduling-state reconciliation. Do not bypass an incident latch.
+Discovery uses server index time, which may depend on sender Date, and does not
+establish verified receipt-time or complete thread coverage.
 
 Fetched messages queue missing older parents recursively, outside the initial
 window. `repair-nntp-parents` repairs dependencies in retained messages, and

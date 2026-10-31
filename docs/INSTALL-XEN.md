@@ -124,6 +124,10 @@ expiry and trusted base. If you first provisioned without `--enable-policy`,
 review and explicitly edit the private policy to enable it before running the
 worker. Do not silently renew an expired policy. A changed policy digest requires
 reviewed scheduling-state reset; never erase the authoritative mail ledger.
+The 148-hour initial window is a starting guideline, not a permanent coverage
+limit. Use `extend-nntp-window --lookback-hours 240` as documented in the README
+to backfill an existing checkpoint. Reconcile the worker policy and its recorded
+policy digest separately before resuming; do not bypass an incident latch.
 
 Run additional bounded rounds using only the generated runtime tokens:
 

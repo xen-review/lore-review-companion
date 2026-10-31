@@ -156,6 +156,19 @@ files, source snapshots and nested repositories are not part of these commits.
   recreation, or notification/hook count query was performed. T02-T05 remain
   `IN PROGRESS`; browser and deployed verification gates remain open.
 
+- 2026-10-31 checkpoint follow-up: the operational NNTP window was explicitly
+  extended from 148 to 240 hours, retaining the forward cursor and queueing 142
+  additional IDs. A private paired SQLite backup at
+  `~/.local/state/lore-review-companion/backups/pre-window-240-yhvh2j60/` passed
+  integrity checks before the extension. The cover and nine patches of Marcus
+  Granado's LZ4 v2 series were then fetched by exact Message-ID; nine replies
+  were already retained. A read-only preflight reports `publication_ready`,
+  but no PR or comments were created. The worker remains incident-latched, the
+  timer remains active, and its existing policy still specifies 148 hours.
+  Reconcile the policy and scheduling state before any worker recovery; do not
+  silently clear the latch or assume that changing the checkpoint updates policy.
+  Details and the next-chat handoff are in [HANDOFF.md](HANDOFF.md).
+
 ## Remark-Level Threading Follow-up
 
 The first storage foundation is implemented but not deployed; all user-facing

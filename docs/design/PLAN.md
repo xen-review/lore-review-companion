@@ -20,6 +20,10 @@ running service is deterministic software, not an LLM agent.
 - Create one immutable PR per revision of a series. Retain its base, patch
   commits, and head; cross-link revisions without force-pushing or silently
   retargeting older reviews. Do not automatically close or merge old PRs.
+- Explicit operator-requested PR refresh should prefer retaining an open PR and
+  its exact matching branches while rebuilding its imported description and
+  discussion. If that is not feasible, offer an explicitly approved close-and-
+  recreate path using those branches; never silently overwrite a mismatched ref.
 - Import existing and new replies into their original revision. Use Message-ID,
   References/In-Reply-To, and explicit associations. Subject similarity and an
   unverified change-id alone do not establish series identity.
@@ -33,9 +37,11 @@ running service is deterministic software, not an LLM agent.
   from the length of the reviewer's remark.
 - Import reviews as non-voting `COMMENT` reviews, never approvals or requested
   changes inferred from prose or trailers.
-- Start with a configurable recent window, preserving the existing 148-hour
-  default, and retrieve older dependencies or selected threads on demand.
-  Resume durable cursors rather than repeatedly bootstrapping.
+- Start with a configurable recent window, preserving the 148-hour default as
+  an initial guideline rather than a coverage limit. Support explicit increases,
+  including to 240 hours or further within the supported range, by backfilling
+  the newly included period without resetting forward cursors or discarding
+  mail. Retrieve older dependencies or selected threads on demand.
 - Support incoming email to web reviews first. Draft export, reverse sync, and
   outbound review email are separate future work.
 - Show actual imported participant profiles for submitters and reviewers,
@@ -201,6 +207,26 @@ replay preserves the originally recorded build. PR titles are `Sender: Subject
 [vN]`; covers omit the generated revision line and validated shortlog/diffstat
 tail. Existing PR presentation changes require an explicit scoped, audited
 compare-and-swap rather than silently changing the original import request.
+
+### Explicit PR Refresh (Planned)
+
+A refresh command must preview the exact PR, description, imported comments,
+reviews, reply ancestry, and any non-imported or locally edited content before
+an operator authorizes a digest-bound write. It should preserve the PR and its
+matching immutable refs, reconstruct from retained source, and provide an audit
+and recoverable state for retries. Human discussion and externally created
+content must not be silently lost. The preview must explain any content that
+would be removed and refuse changed or uncertain evidence.
+
+This is not yet implemented. Deleting imported comments through ordinary APIs
+would strand their immutable import-operation records, making replay fail. The
+existing presentation correction endpoint covers only PR title and body. A
+close-and-recreate fallback also needs server support: the source Message-ID is
+already bound to the original imported PR. Implement and test an authorized,
+audited server-side reset or replacement contract, including parent mappings,
+notification behavior, crash recovery and complete replay, before exposing a
+destructive CLI. Reuse existing branches only if both refs exactly match their
+recorded commits; never force-update divergent refs.
 
 ### Planned Remark-Level Discussion Trees
 
