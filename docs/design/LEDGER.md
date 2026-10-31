@@ -78,6 +78,27 @@ files, source snapshots and nested repositories are not part of these commits.
   caused by the missing explicit `review-import-grants/review-companion` grant
   and stale repository safety settings; rebuild/setup must apply and verify
   those settings before imports resume.
+- Final development rebuild and activation checkpoint, 2026-10-31: companion
+  `b46d5c1` updated the committed repository identity from 3 to 4 after the
+  authorized rebuild recreated only `xen-review/xen` from the existing
+  `xen-project/xen` mirror. Companion `f21476a` fixed deployer ordering so a
+  newly installed worker unit is loaded before `reset-failed`; `e179c63` makes
+  setup explicitly enable issues as well as pull requests, allowing blocked
+  Message-ID imports to be tracked. The signed acceptance fixture is `70273f4`.
+- The rebuilt fork has default branch `staging` at the pinned base, issues and
+  pull requests enabled, all merge/rebase/update/maintainer-edit safety flags
+  disabled, and unattended capability `true` for repository/importer ID 4.
+  The temporary administrator tokens used for rebuild and settings repair were
+  revoked and their private files removed. The Owners membership was already
+  present and was preserved.
+- Companion validation after the final source changes passed 432 tests with
+  four expected skips; the focused setup suite passed 8 tests, deployment tests
+  passed 3, and the isolated Forgejo review-import suite passed. Deployment
+  installed companion `e179c63` and the resident service is active with
+  `run-import-worker --forge-path /home/forge/forgejo`. A live snapshot observed
+  18 new PRs and 5 exact-Message-ID blocking issues, including Lore links and
+  concrete missing-parent/cover reasons, while the 240-hour NNTP bootstrap was
+  still draining. This is not an exhaustive archive-coverage claim.
 - Submission quote presentation: companion `bb97957` and real-Forgejo fixture
   `362c7b6` are pushed. The installed wheel is stamped
   `362c7b66ff34/test-verify-submission-quote-formatting-against-forgejo`.
