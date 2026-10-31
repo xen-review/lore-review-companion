@@ -982,7 +982,7 @@ def queue_imported_replies(
             box.close()
         assembly = assemble_local_series(mailbox_path, revision=revision)
         with prepare_patch_mailbox(
-            repository, publication.base_commit, assembly.patch_mailbox
+            repository, publication.base_commit, assembly.patch_mailbox, allow_rejects=True
         ) as prepared:
             if prepared.result.head_commit != publication.head_commit:
                 raise PublicationConflict(

@@ -114,6 +114,144 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(self.file.read_text(), "conflict\n")
         self.assertFalse((self.repository / ".git" / "rebase-apply").exists())
 
+    def test_reject_fallback_commits_partial_patch_and_reject_file(self):
+        self.git("checkout", "--detach", self.base)
+        self.file.write_text("conflict\n")
+        self.git("commit", "-qam", "conflicting staging")
+        staging = self.git("rev-parse", "HEAD").decode().strip()
+        mailbox = self.mailbox.split(b"From ", 2)
+        first_patch = b"From " + mailbox[1]
+        with prepare_patch_mailbox(
+            self.repository, staging, first_patch, allow_rejects=True
+        ) as prepared:
+            self.assertEqual(prepared.result.patch_count, 1)
+            self.assertEqual(prepared.result.rejected_hunks, 1)
+            self.assertEqual((prepared.repository / "content.txt").read_text(), "conflict\n")
+            self.assertIn("-base", (prepared.repository / "content.txt.rej").read_text())
+            self.assertIn("content.txt.rej", prepared.run_git("Inspect", "ls-tree", "-r", "--name-only", "HEAD"))
+        self.assertEqual(self.git("rev-parse", "HEAD").decode().strip(), staging)
+
+    def test_reject_fallback_preserves_partial_hunks_and_replays_deterministically(self):
+        self.git("checkout", "--detach", self.base)
+        original = "".join(f"line {number}\n" for number in range(1, 31))
+        self.file.write_text(original)
+        self.git("commit", "-qam", "large base")
+        original_base = self.git("rev-parse", "HEAD").decode().strip()
+        self.file.write_text(original.replace("line 2\n", "changed first\n").replace("line 29\n", "changed last\n"))
+        self.git("commit", "-qam", "two hunks")
+        patch = self.git("format-patch", "--stdout", f"{original_base}..HEAD")
+        self.git("checkout", "--detach", original_base)
+        self.file.write_text(original.replace("line 2\n", "staging conflict\n"))
+        self.git("commit", "-qam", "conflicting staging")
+        staging = self.git("rev-parse", "HEAD").decode().strip()
+        results = []
+        for _ in range(2):
+            with prepare_patch_mailbox(self.repository, staging, patch, allow_rejects=True) as prepared:
+                results.append(prepared.result)
+                text = (prepared.repository / "content.txt").read_text()
+                self.assertIn("staging conflict\n", text)
+                self.assertIn("changed last\n", text)
+                self.assertEqual(prepared.result.rejected_hunks, 1)
+                self.assertTrue((prepared.repository / "content.txt.rej").is_file())
+        self.assertEqual(results[0], results[1])
+
+    def test_reject_fallback_retains_rejects_from_every_patch(self):
+        self.git("checkout", "--detach", self.base)
+        self.file.write_text("conflict\n")
+        self.git("commit", "-qam", "conflicting staging")
+        with prepare_patch_mailbox(self.repository, "HEAD", self.mailbox, allow_rejects=True) as prepared:
+            self.assertEqual(prepared.result.patch_count, 2)
+            self.assertEqual(prepared.result.rejected_hunks, 2)
+            rejects = (prepared.repository / "content.txt.rej").read_text()
+            self.assertIn("-base", rejects)
+            self.assertIn("-first", rejects)
+            self.assertEqual(len(prepared.patch_commits(("first@example.test", "second@example.test"))), 2)
+
+    def test_identical_rejected_hunks_are_not_lost(self):
+        self.git("checkout", "--detach", self.base)
+        self.file.write_text("conflict\n")
+        self.git("commit", "-qam", "conflicting staging")
+        first_patch = b"From " + self.mailbox.split(b"From ", 2)[1]
+        with prepare_patch_mailbox(
+            self.repository, "HEAD", first_patch + first_patch, allow_rejects=True
+        ) as prepared:
+            self.assertEqual(prepared.result.rejected_hunks, 2)
+            self.assertEqual((prepared.repository / "content.txt.rej").read_text().count("-base"), 2)
+
+    def test_reject_fallback_refuses_unrepresentable_binary_failure(self):
+        self.git("checkout", "--detach", self.base)
+        binary = self.repository / "fixture.bin"
+        binary.write_bytes(b"\0original\n")
+        self.git("add", "fixture.bin")
+        self.git("commit", "-qm", "binary base")
+        source_base = self.git("rev-parse", "HEAD").decode().strip()
+        self.file.write_text("submitted\n")
+        binary.write_bytes(b"\0submitted\n")
+        self.git("commit", "-qam", "text and binary changes")
+        mailbox = self.git("format-patch", "--stdout", "--binary", f"{source_base}..HEAD")
+        self.git("checkout", "--detach", source_base)
+        self.file.write_text("staging conflict\n")
+        binary.write_bytes(b"\0staging conflict\n")
+        self.git("commit", "-qam", "conflicting staging")
+        with self.assertRaisesRegex(GitPreflightError, "binary"):
+            with prepare_patch_mailbox(self.repository, "HEAD", mailbox, allow_rejects=True):
+                self.fail("A failed binary change cannot be represented by a reject file")
+
+    def test_original_base_is_attempted_before_rejects(self):
+        self.git("checkout", "--detach", self.base)
+        self.file.write_text("conflict\n")
+        self.git("commit", "-qam", "conflicting staging")
+        staging = self.git("rev-parse", "HEAD").decode().strip()
+        with prepare_patch_mailbox(
+            self.repository, staging, self.mailbox, allow_rejects=True,
+            alternative_bases=("f" * 40, self.base),
+        ) as prepared:
+            self.assertEqual(prepared.result.requested_base_commit, staging)
+            self.assertEqual(prepared.result.base_commit, self.base)
+            self.assertEqual(prepared.result.rejected_hunks, 0)
+            self.assertEqual((prepared.repository / "content.txt").read_text(), "second\n")
+
+    def test_format_patch_commit_parent_is_verified_before_use(self):
+        self.git("checkout", "--detach", self.base)
+        self.file.write_text("conflict\n")
+        self.git("commit", "-qam", "conflicting staging")
+        staging = self.git("rev-parse", "HEAD").decode().strip()
+        with prepare_patch_mailbox(
+            self.repository, staging, self.mailbox, allow_rejects=True,
+            infer_format_patch_parent=True,
+        ) as prepared:
+            self.assertEqual(prepared.result.base_commit, self.base)
+            self.assertEqual(prepared.result.rejected_hunks, 0)
+        forged = self.mailbox.replace(b"-base\n", b"-fake\n", 1)
+        with prepare_patch_mailbox(
+            self.repository, staging, forged, allow_rejects=True,
+            infer_format_patch_parent=True,
+        ) as prepared:
+            self.assertEqual(prepared.result.base_commit, staging)
+            self.assertGreater(prepared.result.rejected_hunks, 0)
+
+    def test_source_base_refs_still_verify_staging_target(self):
+        self.git("checkout", "--detach", self.base)
+        self.file.write_text("staging conflict\n")
+        self.git("commit", "-qam", "staging conflict")
+        staging = self.git("rev-parse", "HEAD").decode().strip()
+        remote = self.create_remote()
+        self.git("push", str(remote), "HEAD:refs/heads/staging")
+        with prepare_patch_mailbox(
+            self.repository, staging, self.mailbox, allow_rejects=True,
+            alternative_bases=(self.base,),
+        ) as prepared:
+            options = {
+                "target_branch": "staging", "series_key": "lore:base@example.test",
+                "revision": 1, "expected_patch_count": 2,
+                "expected_target_commit": staging,
+            }
+            refs = ensure_revision_refs(prepared, str(remote), write_enabled=True, **options)
+            self.assertEqual(refs.base.head_commit, self.base)
+            self.assertEqual(refs.head.head_commit, prepared.result.head_commit)
+            self.assertEqual(self.git("ls-remote", str(remote), "refs/heads/staging").decode().split()[0], staging)
+        self.assertTrue(refs.base.created)
+
     def test_prepared_repository_exists_only_inside_context(self):
         with prepare_patch_mailbox(
             self.repository, self.base, self.mailbox

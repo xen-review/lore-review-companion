@@ -55,6 +55,7 @@ def ensure_revision_refs(
     expected_patch_count: int,
     write_enabled: bool = False,
     credentials: GitHttpCredentials | None = None,
+    expected_target_commit: str | None = None,
 ) -> RevisionRefsResult:
     if (
         type(expected_patch_count) is not int
@@ -81,7 +82,7 @@ def ensure_revision_refs(
         prepared.run_git("Validate target branch", "check-ref-format", target_ref)
         if (
             _remote_ref(prepared, remote_address, target_ref, environment)
-            != prepared.result.base_commit
+            != (expected_target_commit or prepared.result.base_commit)
         ):
             raise RevisionBranchConflict(
                 "Selected upstream target does not match the pinned series base"

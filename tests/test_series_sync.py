@@ -18,6 +18,7 @@ from lore_review_companion.b4_adapter import AssemblyResult
 from lore_review_companion.cli import main
 from lore_review_companion.coordinator import plan_imported_sync
 from lore_review_companion.import_worker import (
+    _allowed_replies,
     _ancestry_order,
     _deliver_reply_batch,
     _recover_submission_thread,
@@ -97,13 +98,68 @@ class SeriesSyncTests(unittest.TestCase):
         self.ledger = Ledger(self.repository / "ledger.sqlite3")
 
     @contextmanager
-    def prepare(self, _repository, _base_ref, _mailbox):
+    def prepare(self, _repository, _base_ref, _mailbox, **_options):
         yield SimpleNamespace(
             result=PreflightResult("b" * 40, "a" * 40, 1),
             patch_commits=lambda identifiers: (
                 PatchCommit(identifiers[0], "b" * 40, "a" * 40),
             ),
         )
+
+    def test_worker_ignores_excluded_reply_descendants(self):
+        excluded = message("filtered@example.test", "Re: patch", headers="To: list@vger.kernel.org\n")
+        child = message("child@example.test", "Re: patch", headers="In-Reply-To: <filtered@example.test>\n")
+        grandchild = message("grandchild@example.test", "Re: patch", headers="In-Reply-To: <child@example.test>\n")
+        allowed = message("allowed@example.test", "Re: patch", headers="In-Reply-To: <patch@example.test>\n")
+        self.assertEqual(_allowed_replies((grandchild, allowed, child, excluded)), (allowed,))
+
+    def test_worker_rechecks_exclusion_after_thread_recovery(self):
+        policy = {
+            "version": 1, "enabled": True, "expires_at": "2099-01-01T00:00:00+00:00",
+            "api_url": self.api.base_url, "owner": "o", "repository": "r",
+            "repository_id": 1, "importer_id": 5, "importer_login": "mirror-bot",
+            "source_url": "https://lore.kernel.org/xen-devel/", "nntp_host": "nntp.lore.kernel.org",
+            "nntp_group": "org.xenproject.lists.xen-devel", "git_remote": self.remote,
+            "git_username": "git-bot", "base_commit": "b" * 40, "target_branch": "main",
+            "message_limit": 2, "revision_limit": 1, "max_inline_lines": 50,
+            "lookback_hours": 148, "notifications": "disabled",
+            "identity_rule": "isolated-unverified", "retry_uncertain": False,
+        }
+        policy_path = self.repository / "worker-policy.json"
+        policy_path.write_text(json.dumps(policy))
+        policy_path.chmod(0o600)
+        capabilities = {
+            "version": 1, "repository_id": 1, "importer_id": 5,
+            "importer_login": "mirror-bot", "source_url": policy["source_url"],
+            "operations": ["pull", "conversation", "review", "review-reply"],
+            "max_inline_lines": 50, "unattended_allowed": True,
+        }
+        self.api.transport = lambda _request, _timeout: FakeResponse(200, capabilities)
+        source = message("patch@example.test", "[PATCH 1/1] xen: change",
+                         headers="In-Reply-To: <cover@example.test>\n")
+        cover = message("cover@example.test", "[PATCH 0/1] xen: change",
+                        headers="To: list@vger.kernel.org\n")
+        self.ledger.record_parsed_message(source)
+
+        def recover(*_arguments):
+            self.ledger.record_parsed_message(cover)
+            return True
+
+        with (
+            patch("lore_review_companion.import_worker.discover_nntp"),
+            patch("lore_review_companion.import_worker.discover_nntp_numbers"),
+            patch("lore_review_companion.import_worker.fetch_nntp"),
+            patch.object(self.ledger, "repair_nntp_parents"),
+            patch("lore_review_companion.import_worker._recover_submission_thread", side_effect=recover),
+            patch("lore_review_companion.import_worker.sync_imported_series_revision") as publish,
+        ):
+            result = run_import_worker_round(
+                self.ledger, self.repository, policy_path, self.repository / "worker.sqlite3",
+                self.api, GitHttpCredentials("git-bot", "synthetic-git-token"),
+            )
+        publish.assert_not_called()
+        self.assertEqual(result.published, 0)
+        self.assertEqual(result.diagnostics, ())
 
     def imported_sync(self, *, write_enabled=False, **kwargs):
         for source in self.revision.messages:
@@ -1145,6 +1201,34 @@ class SeriesSyncTests(unittest.TestCase):
         self.assertEqual(replay.plan.head_commit, preview.plan.head_commit)
         with self.assertRaisesRegex(PublicationConflict, "supported presentation"):
             self.imported_sync(target_branch="unrelated")
+
+    def test_imported_publication_warns_about_rejects_and_alternate_base(self):
+        self.api.transport = lambda request, timeout: FakeResponse(
+            200, {"version": 1, "repository_id": 1, "importer_id": 5,
+                  "importer_login": "mirror-bot", "source_url": "https://lore.kernel.org/xen-devel/",
+                  "operations": ["pull"]},
+        )
+
+        @contextmanager
+        def prepare(_repository, _base_ref, _mailbox, **_options):
+            yield SimpleNamespace(
+                result=result,
+                patch_commits=lambda identifiers: (PatchCommit(identifiers[0], result.base_commit, result.head_commit),),
+            )
+
+        with patch.object(self, "prepare", new=prepare):
+            result = PreflightResult("b" * 40, "a" * 40, 1, 3, "b" * 40)
+            rejects = self.imported_sync(target_branch="staging")
+            self.assertTrue(rejects.plan.request["body"].startswith(
+                "> **Patch application warning:** 3 hunk(s) could not be applied to `staging`"
+            ))
+            self.assertIn("`.rej`", rejects.plan.request["body"])
+            result = PreflightResult("c" * 40, "a" * 40, 1, 0, "b" * 40)
+            original_base = self.imported_sync(target_branch="staging")
+            self.assertTrue(original_base.plan.request["body"].startswith(
+                "> **Patch application warning:** This submission did not apply cleanly to `staging`."
+            ))
+            self.assertIn("`" + "c" * 40 + "`", original_base.plan.request["body"])
 
     def test_imported_publication_retains_both_previous_presentations(self):
         self.api.transport = lambda request, timeout: FakeResponse(

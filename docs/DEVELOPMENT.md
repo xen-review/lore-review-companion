@@ -54,6 +54,18 @@ Inspect service logs with `journalctl --user -u lore-review-companion.service`
 and check actual PRs, provenance, reply counts and deployed build stamps. A
 successful build alone is not evidence of a successful import.
 
+To run one bounded import round immediately, then inspect its result:
+
+```sh
+systemctl --user start lore-review-companion.service
+journalctl --user -u lore-review-companion.service -n 20 --no-pager
+```
+
+The service uses the committed policy's message and revision limits and the
+persisted scheduling cursors. One successful round does not imply that every
+retained submission was considered; later service runs or timer ticks continue
+through the queue.
+
 ## Disposable Fork Rebuild
 
 The user authorizes explicit deletion and recreation of `xen-review/xen` from
@@ -101,7 +113,7 @@ that every retained submission has been verified.
 | --- | --- | --- |
 | xen/arm: psci: Do not keep a rejected PSCI version in psci_ver, v1 | [Ayan Kumar Halder](https://lore.kernel.org/xen-devel/20261021132640.599126-1-ayan.kumar.halder@amd.com/) | Unnumbered single patch was misclassified as having unknown count. Discovery repaired; application still fails at xen/arch/arm/psci.c:191. |
 | x86/nestedsvm: Record NextRIP with the deferred #VMEXIT, v1 | [Stephen Cheng](https://lore.kernel.org/xen-devel/20261022090658.151682-1-stephen.cheng@citrix.com/) | Same singleton discovery defect repaired. Source-only assembly and patch application pass. PR publication remains subject to the worker's bounded schedule. |
-| tools/ocaml: bindings needed to build ARM domains, v1 | [source thread](https://lore.kernel.org/xen-devel/1792679039.8631fc262581453bbf619ec5b2062170.1a163ff5306000f79f@vates.tech/) | Both patches 1/2 and 2/2 are retained, but multiple cover messages identify the same revision. Still blocked on source grouping. |
+| tools/ocaml: bindings needed to build ARM domains, v1 | [source thread](https://lore.kernel.org/xen-devel/1792679039.8631fc262581453bbf619ec5b2062170.1a163ff5306000f79f@vates.tech/) | Two different cover messages share the same subject, while both patches name an absent parent. The correct cover cannot be established; see the [message-by-message investigation](design/ocaml-arm-cover-investigation.md). |
 | x86/vpt: Validate timer object with generation number, v1 | [source](https://lore.kernel.org/xen-devel/1792717952.8631fc262581453bbf619ec5b2062170.1a166511467000f79f@vates.tech/) | Singleton discovery repaired; application still fails at xen/arch/x86/hvm/vpt.c:318 and xen/arch/x86/include/asm/hvm/vpt.h:34. |
 | common: dom0less-bindings: introduce XSM labels, v5 | [Sergiy Kibrik](https://lore.kernel.org/xen-devel/20261023110933.2325318-1-Sergiy_Kibrik@epam.com/) | Singleton discovery repaired. Source-only assembly and patch application pass; publication remains subject to the worker's bounded schedule. |
 

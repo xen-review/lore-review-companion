@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import json
 import mailbox
+import re
 import tempfile
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass, replace
@@ -123,6 +124,25 @@ class ImportedSeriesResult:
     applied: bool
 
 
+def _source_base_hints(revision: SeriesRevision) -> tuple[str, ...]:
+    values = {
+        match.group(1).lower()
+        for message in revision.messages
+        for match in re.finditer(
+            r"(?im)^base-commit:[ \t]*([0-9a-f]{40}|[0-9a-f]{64})[ \t]*\r?$",
+            message.body_text,
+        )
+    }
+    return tuple(values) if len(values) == 1 else ()
+
+
+def _source_base_warning(target_branch: str, source_base: str) -> str:
+    return (
+        f"> **Patch application warning:** This submission did not apply cleanly "
+        f"to `{target_branch}`. The PR is based on source commit `{source_base}` instead.\n\n"
+    )
+
+
 def sync_imported_series_revision(
     revision: SeriesRevision,
     repository: Path,
@@ -183,7 +203,9 @@ def sync_imported_series_revision(
             box.close()
         assembly = assemble_local_series(mailbox_path, revision=revision.revision)
         with prepare_patch_mailbox(
-            repository, base_ref, assembly.patch_mailbox
+            repository, base_ref, assembly.patch_mailbox, allow_rejects=True,
+            alternative_bases=_source_base_hints(revision),
+            infer_format_patch_parent=True,
         ) as prepared:
             patches = sorted(
                 (message for message in revision.messages if message.kind == "patch"),
@@ -198,6 +220,7 @@ def sync_imported_series_revision(
                 "revision": revision.revision,
                 "expected_patch_count": revision.expected_patch_count,
                 "credentials": credentials,
+                "expected_target_commit": prepared.result.requested_base_commit or prepared.result.base_commit,
             }
             refs = ensure_revision_refs(prepared, remote, **refs_arguments)
             operation_key = hashlib.sha256(
@@ -212,6 +235,15 @@ def sync_imported_series_revision(
                 + f"\n\nRevision: v{revision.revision}"
             )
             body = submission_text(source.body_text)
+            if prepared.result.rejected_hunks:
+                count = prepared.result.rejected_hunks
+                body = (
+                    f"> **Patch application warning:** {count} hunk(s) could not be applied "
+                    f"to `{target_branch}` and are included in `.rej` files on this PR branch.\n\n"
+                    + body
+                )
+            elif prepared.result.requested_base_commit and prepared.result.base_commit != prepared.result.requested_base_commit:
+                body = _source_base_warning(target_branch, prepared.result.base_commit) + body
             previous = ledger.list_publications(
                 destination=destination,
                 series_key=revision.series_key,
@@ -279,6 +311,7 @@ def sync_imported_series_revision(
             ):
                 presentations = (
                     request,
+                    {**request, "body": _source_base_warning(target_branch, prepared.result.base_commit) + request["body"]},
                     *(
                         {
                             **request,

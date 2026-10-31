@@ -19,6 +19,7 @@ from lore_review_companion.forge_imports import ForgeImportClient
 from lore_review_companion.git_branches import GitHttpCredentials
 from lore_review_companion.import_policy import ImportPolicy, read_import_policy
 from lore_review_companion.ledger import Ledger
+from lore_review_companion.mail_parser import has_excluded_recipient
 from lore_review_companion.nntp_source import (
     discover_nntp,
     discover_nntp_numbers,
@@ -140,6 +141,25 @@ def _ancestry_order(messages):
             ordered.append(message)
             del pending[message.message_id]
     return tuple(ordered)
+
+
+def _allowed_replies(messages):
+    excluded = {
+        message.message_id for message in messages if has_excluded_recipient(message)
+    }
+    while True:
+        descendants = {
+            message.message_id
+            for message in messages
+            if set(message.in_reply_to + message.references) & excluded
+        } - excluded
+        if not descendants:
+            break
+        excluded.update(descendants)
+    return tuple(
+        message for message in messages
+        if message.kind == "reply" and message.message_id not in excluded
+    )
 
 
 def _recover_submission_thread(ledger, policy, seed):
@@ -419,6 +439,20 @@ def _run_import_worker_round(
                         f"Source recovery pending: {seed}; publication deferred"
                     )
                     continue
+                recovered = tuple(
+                    revision for revision in ledger.discover_related_series(seed)
+                    if revision.series_key == key and revision.revision == number
+                )
+                if not recovered:
+                    continue
+                if len(recovered) != 1 or not recovered[0].complete or recovered[0].conflicts:
+                    diagnostics.append(
+                        f"Source recovery changed submission membership; PR creation blocked: "
+                        f"{current.title} [{current.series_key} v{current.revision}]; "
+                        f"source: {policy.source_url}{seed}/"
+                    )
+                    continue
+                current = recovered[0]
             if (
                 previous is not None
                 and previous.status in ("pr_pending", "uncertain")
@@ -467,11 +501,7 @@ def _run_import_worker_round(
                 message.message_id for message in current.messages if message.message_id
             )
             replies = _ancestry_order(
-                tuple(
-                    message
-                    for message in ledger._related_thread_messages(members)
-                    if message.kind == "reply"
-                )
+                _allowed_replies(ledger._related_thread_messages(members))
             )
             ledger.assert_message_ancestry_available(replies)
             reader.capabilities()
