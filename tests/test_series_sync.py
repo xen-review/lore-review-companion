@@ -14,7 +14,7 @@ from types import SimpleNamespace
 from typing import NotRequired, TypedDict
 from unittest.mock import patch
 
-from lore_review_companion.b4_adapter import AssemblyResult
+from lore_review_companion.b4_adapter import AssemblyResult, B4SourceError
 from lore_review_companion.cli import main
 from lore_review_companion.coordinator import plan_imported_sync
 from lore_review_companion.import_worker import (
@@ -264,6 +264,57 @@ class SeriesSyncTests(unittest.TestCase):
         self.assertEqual([issue["title"] for issue in issues], ["unsigned@example.test"])
         self.assertIn("Signed-off-by", issues[0]["body"])
         self.assertIn("https://lore.kernel.org/xen-devel/unsigned@example.test/", issues[0]["body"])
+
+    def test_worker_reports_source_assembly_failure_without_stopping_round(self):
+        policy = {
+            "version": 1, "enabled": True, "expires_at": "2099-01-01T00:00:00+00:00",
+            "api_url": self.api.base_url, "owner": "o", "repository": "r",
+            "repository_id": 1, "importer_id": 5, "importer_login": "mirror-bot",
+            "source_url": "https://lore.kernel.org/xen-devel/", "nntp_host": "nntp.lore.kernel.org",
+            "nntp_group": "org.xenproject.lists.xen-devel", "git_remote": self.remote,
+            "git_username": "git-bot", "base_commit": "b" * 40, "target_branch": "main",
+            "max_inline_lines": 50, "lookback_hours": 148, "notifications": "disabled",
+            "identity_rule": "isolated-unverified", "retry_uncertain": False,
+        }
+        policy_path = self.repository / "worker-policy.json"
+        policy_path.write_text(json.dumps(policy))
+        issues = []
+        capabilities = {
+            "version": 1, "repository_id": 1, "importer_id": 5, "importer_login": "mirror-bot",
+            "source_url": policy["source_url"], "operations": ["pull", "conversation", "review", "review-reply"],
+            "max_inline_lines": 50, "unattended_allowed": True,
+        }
+
+        def transport(request, _timeout):
+            if "/issues" in request.full_url:
+                if request.get_method() == "POST":
+                    issues.append(json.loads(request.data))
+                    return FakeResponse(201, issues[-1])
+                return FakeResponse(200, issues)
+            return FakeResponse(200, capabilities)
+
+        self.api.transport = transport
+        self.ledger.record_parsed_message(self.revision.messages[0])
+        with patch(
+            "lore_review_companion.import_worker.sync_imported_series_revision",
+            side_effect=B4SourceError(
+                "Assembly requires exactly one complete, unambiguous source revision"
+            ),
+        ) as publish:
+            result = run_import_worker_round(
+                self.ledger,
+                self.repository,
+                policy_path,
+                self.repository / "worker.sqlite3",
+                self.api,
+                GitHttpCredentials("git-bot", "synthetic-git-token"),
+                refresh_source=False,
+            )
+        publish.assert_called_once()
+        self.assertEqual(result.published, 0)
+        self.assertIn("Assembly blocked", result.diagnostics[0])
+        self.assertEqual([issue["title"] for issue in issues], ["patch@example.test"])
+        self.assertIn("Assembly requires exactly one complete", issues[0]["body"])
 
     def test_worker_drains_all_pages_before_waiting_for_next_poll(self):
         policy = {

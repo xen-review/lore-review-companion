@@ -73,6 +73,10 @@ class B4AssemblyError(RuntimeError):
     """The local b4 invocation did not produce exactly one patch mailbox."""
 
 
+class B4SourceError(B4AssemblyError):
+    """The retained source mail cannot be assembled as one revision."""
+
+
 class B4ReviewError(RuntimeError):
     """The installed b4 review parser is unavailable or incompatible."""
 
@@ -403,7 +407,7 @@ def assemble_local_series(
     messages = parse_mbox(mailbox_path)
     candidates = discover_series(messages)
     if len(candidates) != 1 or not candidates[0].complete or candidates[0].conflicts:
-        raise B4AssemblyError(
+        raise B4SourceError(
             "Assembly requires exactly one complete, unambiguous source revision"
         )
     selected = candidates[0]
@@ -412,7 +416,7 @@ def assemble_local_series(
         or isinstance(revision, bool)
         or revision != selected.revision
     ):
-        raise B4AssemblyError(
+        raise B4SourceError(
             "Requested revision does not match the complete source mailbox"
         )
     interpreter = python_executable or sys.executable
@@ -472,13 +476,13 @@ def assemble_local_series(
             stdin=subprocess.DEVNULL,
         )
         if completed.returncode:
-            raise B4AssemblyError(
+            raise B4SourceError(
                 f"b4 am failed ({completed.returncode}): {completed.stderr.strip()}"
             )
 
         outputs = list(Path(output_dir).glob("*.mbx"))
         if len(outputs) != 1:
-            raise B4AssemblyError(
+            raise B4SourceError(
                 f"Expected one assembled patch mailbox, found {len(outputs)}"
             )
         source_patches = tuple(
@@ -507,7 +511,7 @@ def assemble_local_series(
         if len(output_patches) != selected.expected_patch_count or tuple(
             patch_identity(message) for message in output_patches
         ) != tuple(patch_identity(message) for message in source_patches):
-            raise B4AssemblyError(
+            raise B4SourceError(
                 "Assembled mailbox does not match the selected patch membership"
             )
         return AssemblyResult(

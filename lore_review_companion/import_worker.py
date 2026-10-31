@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
 
+from lore_review_companion.b4_adapter import B4SourceError
 from lore_review_companion.forge_api import ForgeAPI, ForgeAPIError
 from lore_review_companion.forge_imports import ForgeImportClient
 from lore_review_companion.git_branches import GitHttpCredentials
@@ -612,6 +613,19 @@ def _run_import_worker_round(
                     f"Preflight blocked: PR creation for {current.title} "
                     f"[{current.series_key} v{current.revision}]; "
                     f"source: {policy.source_url}{seed}/; {failure}; {files}"
+                )
+                continue
+            except B4SourceError as error:
+                if previous is not None:
+                    raise
+                reason = str(error)
+                for message in current.messages:
+                    if message.message_id:
+                        _ensure_message_issue(writer, message.message_id, (reason,))
+                diagnostics.append(
+                    f"Assembly blocked: PR creation for {current.title} "
+                    f"[{current.series_key} v{current.revision}]; "
+                    f"source: {policy.source_url}{seed}/; cause: {reason}"
                 )
                 continue
             if (
