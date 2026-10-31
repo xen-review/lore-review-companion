@@ -62,6 +62,7 @@ class ImportWorkerRound:
     published: int
     delivered: int
     diagnostics: tuple[str, ...]
+    backlog_pending: bool = False
 
 
 def _private_descriptor(path: Path) -> int:
@@ -365,6 +366,7 @@ def run_import_worker_round(
     *,
     refresh_source: bool = True,
     activity_guard=None,
+    poll_source: bool = True,
 ) -> ImportWorkerRound:
     return _run_import_worker_round(
         ledger,
@@ -375,6 +377,7 @@ def run_import_worker_round(
         credentials,
         refresh_source=refresh_source,
         activity_guard=activity_guard,
+        poll_source=poll_source,
     )
 
 
@@ -384,16 +387,19 @@ def run_import_worker(
 ):
     guard = lambda: wait_for_resources(forge_path)
     api.before_write = guard
+    poll_source = True
     while True:
         try:
             result = run_import_worker_round(
                 ledger, repository, policy_path, state_path, api, credentials,
-                refresh_source=refresh_source, activity_guard=guard,
+                refresh_source=refresh_source, activity_guard=guard, poll_source=poll_source,
             )
             print(json.dumps({"considered": result.considered, "published": result.published,
                               "delivered": result.delivered, "diagnostics": result.diagnostics}), flush=True)
-            if not result.published and not result.delivered:
-                time.sleep(1)
+            poll_source = False
+            if not result.backlog_pending:
+                time.sleep(600)
+                poll_source = True
         except Exception as error:
             print(json.dumps({"error_type": type(error).__name__, "error": str(error)}), flush=True)
             time.sleep(1)
@@ -409,6 +415,7 @@ def _run_import_worker_round(
     *,
     refresh_source: bool = True,
     activity_guard=None,
+    poll_source: bool = True,
 ) -> ImportWorkerRound:
     if activity_guard is not None:
         activity_guard()
@@ -444,13 +451,16 @@ def _run_import_worker_round(
             )
         host, group = policy.nntp_host, policy.nntp_group
         source = nntp_source(host, group)
+        source_backlog = False
         if refresh_source:
-            discover_nntp(ledger, host=host, group=group, hours=policy.lookback_hours)
-            discover_nntp_numbers(
+            if poll_source:
+                discover_nntp(ledger, host=host, group=group, hours=policy.lookback_hours)
+            numeric = discover_nntp_numbers(
                 ledger, host=host, group=group, limit=PAGE_SIZE
             )
             ledger.repair_nntp_parents(source, limit=PAGE_SIZE)
-            fetch_nntp(ledger, host=host, group=group, limit=PAGE_SIZE)
+            fetched = fetch_nntp(ledger, host=host, group=group, limit=PAGE_SIZE)
+            source_backlog = bool(numeric.has_more or (fetched.has_more and (fetched.ingested or fetched.replayed)))
         source_cursor, publication_cursor, revision_cursor = state.execute(
             "SELECT source_cursor, publication_cursor, revision_cursor FROM worker WHERE id = 1"
         ).fetchone()
@@ -663,11 +673,17 @@ def _run_import_worker_round(
                 "INSERT INTO replies VALUES (?, ?, ?) ON CONFLICT(series_key, revision) DO UPDATE SET position = excluded.position",
                 (current.series_key, current.revision, position),
             )
-        next_source = page.messages[-1].cursor if page.next_cursor is not None else 0
+        last_source = page.messages[-1].cursor if page.messages else source_cursor
+        more_messages = bool(ledger.list_messages(after=last_source, limit=1).messages)
+        next_source = last_source if page.next_cursor is not None or more_messages else 0
         next_publication = publications.next_cursor or 0
+        last_revision = selected[-1][0] if selected else 0
+        more_revisions = bool(state.execute(
+            "SELECT 1 FROM revisions WHERE id > ? LIMIT 1", (last_revision,)
+        ).fetchone())
         state.execute(
             "UPDATE worker SET source_cursor = ?, publication_cursor = ?, revision_cursor = ? WHERE id = 1",
-            (next_source, next_publication, selected[-1][0] if selected else 0),
+            (next_source, next_publication, last_revision),
         )
         state.commit()
         return ImportWorkerRound(
@@ -678,4 +694,5 @@ def _run_import_worker_round(
             published_count,
             delivered,
             tuple(diagnostics),
+            bool(source_backlog or next_source or next_publication or more_revisions),
         )
