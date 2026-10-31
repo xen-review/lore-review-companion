@@ -7,6 +7,7 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from dataclasses import dataclass
+from email.utils import parseaddr
 from typing import Iterable
 
 from lore_review_companion.mail_parser import ParsedMessage, has_excluded_recipient
@@ -30,6 +31,17 @@ class SeriesRevision:
     messages: tuple[ParsedMessage, ...]
     complete: bool
     conflicts: tuple[str, ...]
+
+
+def missing_patch_signoffs(revision: SeriesRevision) -> tuple[ParsedMessage, ...]:
+    return tuple(
+        message for message in revision.messages
+        if message.kind == "patch" and not any(
+            trailer.name.casefold() == "signed-off-by"
+            and "@" in parseaddr(trailer.value)[1]
+            for trailer in message.trailers
+        )
+    )
 
 
 def _change_id_bodies(revision: SeriesRevision) -> Iterable[str]:

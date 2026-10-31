@@ -35,7 +35,7 @@ from lore_review_companion.forge_pulls import ForgePullPublisher
 from lore_review_companion.forge_imports import ForgeImportClient, ImportDeliveryResult
 from lore_review_companion.ledger import Ledger, PublicationConflict
 from lore_review_companion.preflight import PatchCommit, prepare_patch_mailbox
-from lore_review_companion.series import SeriesRevision, discover_series
+from lore_review_companion.series import SeriesRevision, discover_series, missing_patch_signoffs
 
 
 @dataclass(frozen=True)
@@ -192,6 +192,13 @@ def sync_imported_series_revision(
     )
     ledger.assert_message_ancestry_available(revision.messages)
     destination = client.api.base_url + client.repository_path
+    if ledger.publication(destination, revision.series_key, revision.revision) is None:
+        missing = missing_patch_signoffs(revision)
+        if missing:
+            raise ValueError(
+                "Missing Signed-off-by trailer for patch: "
+                + ", ".join(message.message_id or "unknown" for message in missing)
+            )
     lock = ledger.worker_lock() if client.write_enabled else nullcontext()
     with lock, tempfile.TemporaryDirectory(prefix="lore-import-series-") as temporary:
         mailbox_path = Path(temporary) / "series.mbox"

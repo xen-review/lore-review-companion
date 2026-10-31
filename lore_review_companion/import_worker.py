@@ -36,6 +36,7 @@ from lore_review_companion.outbox import (
 )
 from lore_review_companion.preflight import GitPreflightError
 from lore_review_companion.review_queue import queue_imported_replies
+from lore_review_companion.series import missing_patch_signoffs
 from lore_review_companion.series_sync import sync_imported_series_revision
 
 PAGE_SIZE = 1000
@@ -555,6 +556,17 @@ def _run_import_worker_round(
                 for message in current.messages if message.message_id
             ):
                 continue
+            if previous is None:
+                missing_signoffs = missing_patch_signoffs(current)
+                for message in missing_signoffs:
+                    if message.message_id:
+                        _ensure_message_issue(writer, message.message_id, ("Patch has no valid Signed-off-by trailer",))
+                if missing_signoffs:
+                    diagnostics.append(
+                        f"PR creation blocked: {current.title} v{current.revision}; missing Signed-off-by: "
+                        + ", ".join(message.message_id or "unknown" for message in missing_signoffs)
+                    )
+                    continue
             if (
                 previous is not None
                 and previous.status in ("pr_pending", "uncertain")

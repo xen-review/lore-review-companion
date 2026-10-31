@@ -7,6 +7,7 @@ from lore_review_companion.series import (
     change_id_candidates,
     discover_series,
     has_invalid_change_id_claims,
+    missing_patch_signoffs,
 )
 
 
@@ -18,12 +19,28 @@ def message(message_id, subject, *, headers=""):
             f"Subject: {subject}\n"
             f"{headers}"
             "Content-Type: text/plain; charset=utf-8\n\n"
-            "Patch body.\n"
+            "Patch body.\n\nSigned-off-by: Patch Author <author@example.test>\n"
         ).encode()
     )
 
 
 class DiscoverSeriesTests(unittest.TestCase):
+    def test_signoff_validation_checks_each_patch_not_cover(self):
+        cover = parse_message(b"Message-ID: <cover@example.test>\nSubject: [PATCH 0/2] test\n\nCover.\n")
+        first = message("first@example.test", "[PATCH 1/2] test", headers="In-Reply-To: <cover@example.test>\n")
+        second = parse_message(b"Message-ID: <second@example.test>\nSubject: [PATCH 2/2] test\nIn-Reply-To: <cover@example.test>\n\nNo signoff.\n---\n")
+        (revision,) = discover_series((cover, first, second))
+        self.assertTrue(revision.complete)
+        self.assertEqual(missing_patch_signoffs(revision), (second,))
+
+    def test_signoff_validation_rejects_malformed_or_quoted_trailers(self):
+        for text in ("Signed-off-by: not-an-address", "> Signed-off-by: Author <author@example.test>"):
+            patch_message = parse_message(
+                ("Message-ID: <patch@example.test>\nSubject: [PATCH] test\n\n" + text + "\n---\n").encode()
+            )
+            (revision,) = discover_series((patch_message,))
+            self.assertEqual(missing_patch_signoffs(revision), (patch_message,))
+
     def test_excluded_recipient_suppresses_entire_submission_revision(self):
         cover = message("excluded-cover@example.test", "[PATCH 0/1] xen: example",
                         headers='Cc: "List, Example" <list@VGER.KERNEL.ORG>\n')
