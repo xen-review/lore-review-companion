@@ -151,3 +151,21 @@ accepted request bytes, immutable refs or current policy. Read-only replay of
 all three original live PRs passed after the fix. Deployment at `b0a8155`
 completed a successful worker round: one new PR (#4), five delivered effects,
 no round diagnostics. This does not clear the source/application blockers above.
+
+Final deployment verification used companion `d495033` and Forgejo `b51da217df`.
+The service exited successfully and its timer is active. The live outbox has
+14 completed conversations, four completed replies and two completed reviews,
+with no pending effects; three conversations are standalone quoted remarks.
+The next bounded worker round reported two additional PR-creation blockers:
+
+- [xen/vcpu: ensure no write when runstate handler is NULL, v1](https://lore.kernel.org/xen-devel/20261023133316.64204-1-roger@xenproject.org/):
+  patch 1 fails at xen/arch/x86/x86_64/domain.c:58 and xen/common/domain.c:2330.
+- [The same submission, v2](https://lore.kernel.org/xen-devel/20261023161742.67329-1-roger@xenproject.org/):
+  patch 1 fails at those files and xen/include/public/vcpu.h:112.
+
+Verification: 402 companion unit tests passed (four expected opt-in skips).
+The Forgejo `TestAPIReviewImport` integration suite passed with the real-server
+companion workflow enabled, including source-attributed standalone comments,
+tool-authored failure comments and uncertain-write retry reconciliation. The
+fixture's selected-repository token includes `write:issue`, matching existing
+development setup; no live permission expansion was required.
