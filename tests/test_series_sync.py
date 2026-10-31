@@ -342,6 +342,7 @@ class SeriesSyncTests(unittest.TestCase):
         client = ForgeImportClient(
             self.api, "o", "r", source_url="https://lore.kernel.org/xen-devel/"
         )
+        assert self.revision.messages[0].message_id
         options: ImportedSyncOptions = {
             "series_seed": self.revision.messages[0].message_id,
             "target_branch": "main",
@@ -456,6 +457,7 @@ class SeriesSyncTests(unittest.TestCase):
             b"From: Reviewer <reviewer@example.test>\nMessage-ID: <worker-reply@example.test>\n"
             b"Subject: Re: patch\nIn-Reply-To: <patch@example.test>\n\nWorker reply\n"
         )
+        assert reply.message_id
         self.ledger.record_parsed_message(reply)
         destination = self.api.base_url + "repos/o/r#7"
         manual = self.ledger.enqueue(
@@ -517,6 +519,7 @@ class SeriesSyncTests(unittest.TestCase):
             )
 
         def queue(*arguments, **options):
+            assert reply.message_id
             self.ledger.enqueue(
                 reply.message_id,
                 "IMPORT_REVIEW",
@@ -819,6 +822,7 @@ class SeriesSyncTests(unittest.TestCase):
         git_path = self.repository / "git-token"
         git_path.write_text("synthetic-git-token")
         git_path.chmod(0o600)
+        assert self.revision.messages[0].message_id
         arguments = [
             "sync-imported-series",
             "--ledger",
@@ -915,6 +919,7 @@ class SeriesSyncTests(unittest.TestCase):
         second = parse_message(
             b"From: Author <author@example.test>\nMessage-ID: <v2@example.test>\nSubject: [PATCH v2 1/1] xen: change\n\nSecond revision\n"
         )
+        assert second.message_id
         self.ledger.record_parsed_message(second)
         arguments = [
             "link-revision",
@@ -1105,6 +1110,7 @@ class SeriesSyncTests(unittest.TestCase):
             b"From: Author <author@example.test>\nMessage-ID: <v2@example.test>\n"
             b"Subject: [PATCH v2 1/1] change\n\nPatch without a change-ID.\n"
         )
+        assert second.message_id
         self.revision = discover_series((first,))[0]
         preview = self.sync(ForgePullPublisher(self.api, "o", "r"))
         writer = ForgePullPublisher(self.api, "o", "r", write_enabled=True)
@@ -1279,6 +1285,7 @@ class SeriesSyncTests(unittest.TestCase):
 
     def test_quarantined_series_is_not_published_on_original_replay(self):
         patch_message = self.revision.messages[0]
+        assert patch_message.message_id
         self.ledger.record_parsed_message(patch_message)
         with self.assertRaises(MessageConflictError):
             self.ledger.record_message(patch_message.message_id, b"conflicting mail")
@@ -1371,6 +1378,7 @@ class SeriesSyncTests(unittest.TestCase):
 
     def test_cli_can_preview_a_series_selected_from_the_archive_ledger(self):
         patch_message = self.revision.messages[0]
+        assert patch_message.message_id
         self.ledger.record_parsed_message(patch_message)
         arguments = [
             "sync-series",
@@ -1406,6 +1414,7 @@ class SeriesSyncTests(unittest.TestCase):
 
     def test_cli_can_discover_and_preview_a_series_from_one_stored_seed(self):
         patch_message = self.revision.messages[0]
+        assert patch_message.message_id
         self.ledger.record_parsed_message(patch_message)
         with redirect_stdout(StringIO()) as output:
             self.assertEqual(
