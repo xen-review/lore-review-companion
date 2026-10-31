@@ -8,6 +8,8 @@ import tempfile
 import unittest
 from contextlib import closing, redirect_stderr, redirect_stdout
 from pathlib import Path
+from threading import Event
+from typing import NotRequired, TypedDict
 from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlsplit
@@ -247,14 +249,22 @@ class PublicInboxTests(unittest.TestCase):
         self.assertNotIn("secret-id", str(caught.exception))
 
         with patch("lore_review_companion.public_inbox.build_opener") as opener:
-            for bounds in (
+            class Bounds(TypedDict):
+                from_index_time: NotRequired[int | None]
+                through_index_time: NotRequired[int | None]
+                temporary_directory: NotRequired[Path | None]
+
+            invalid_bounds: tuple[Bounds, ...] = (
                 {"from_index_time": -1},
                 {"through_index_time": True},
                 {"from_index_time": 2, "through_index_time": 1},
-            ):
+            )
+            for bounds in invalid_bounds:
                 with self.subTest(bounds=bounds), self.assertRaises(ValueError):
                     fetch_public_inbox_thread(
-                        "https://lore.example/list/", "anchor@example.test", **bounds
+                        "https://lore.example/list/",
+                        "anchor@example.test",
+                        **bounds,
                     )
             opener.assert_not_called()
 
@@ -336,15 +346,15 @@ class PublicInboxTests(unittest.TestCase):
             cycle["backfill"]["results"][0]["summary"]["messages"]["replayed"], 3
         )
 
-        class Stop:
+        class Stop(Event):
             def __init__(self):
                 self.intervals = []
 
             def is_set(self):
                 return False
 
-            def wait(self, interval):
-                self.intervals.append(interval)
+            def wait(self, timeout: float | None = None) -> bool:
+                self.intervals.append(timeout)
                 return True
 
         stop = Stop()
@@ -637,7 +647,9 @@ class PublicInboxTests(unittest.TestCase):
         oldest = backfill_public_inbox(self.repo, ledger, limit=2)
         self.assertEqual(oldest.messages.ingested, 1)
         self.assertTrue(oldest.complete)
-        self.assertTrue(ledger.backfill_checkpoint(str(self.repo)).complete)
+        checkpoint = ledger.backfill_checkpoint(str(self.repo))
+        assert checkpoint
+        self.assertTrue(checkpoint.complete)
         self.assertEqual(backfill_public_inbox(self.repo, ledger).messages.ingested, 0)
         with self.assertRaises(ArchiveCheckpointConflict):
             ledger.advance_backfill_checkpoint(

@@ -9,6 +9,7 @@ from io import StringIO
 from pathlib import Path
 from dataclasses import replace
 from unittest.mock import patch
+from typing import TypedDict, NotRequired
 from urllib.error import URLError
 
 from lore_review_companion.anchor import DiffIndex
@@ -60,6 +61,10 @@ from test_forge_comments import CommentTransport, FakeResponse
 from test_series import message
 from lore_review_companion.threads import match_thread_replies
 
+class PatchArguments(TypedDict):
+    patch_commits: tuple[PatchCommit, ...]
+    patch_diffs: dict[str, str]
+    max_inline_lines: NotRequired[int]
 
 class ReviewQueueTests(unittest.TestCase):
     def setUp(self):
@@ -108,7 +113,7 @@ class ReviewQueueTests(unittest.TestCase):
             b"In-Reply-To: <patch@example.test>\n\n"
             b"First point.\nSecond point.\n"
         )
-        arguments = {
+        arguments: PatchArguments = {
             "patch_commits": (PatchCommit("patch@example.test", "b" * 40, "a" * 40),),
             "patch_diffs": {},
         }
@@ -239,7 +244,7 @@ class ReviewQueueTests(unittest.TestCase):
             "xen",
             source_url="https://lore.kernel.org/xen-devel/",
         )
-        arguments = {
+        arguments: PatchArguments = {
             "patch_commits": (
                 PatchCommit(patch_message.message_id, "b" * 40, "a" * 40),
             ),
@@ -307,7 +312,7 @@ class ReviewQueueTests(unittest.TestCase):
             "xen",
             source_url="https://lore.kernel.org/xen-devel/",
         )
-        arguments = {
+        arguments: PatchArguments = {
             "patch_commits": (PatchCommit(parent.message_id, "b" * 40, "a" * 40),),
             "patch_diffs": {},
         }
@@ -1118,7 +1123,7 @@ class ReviewQueueTests(unittest.TestCase):
             "diff": diff,
             "diff_sha256": hashlib.sha256(diff.encode()).hexdigest(),
         }
-        arguments = {
+        arguments: PatchArguments = {
             "patch_commits": (PatchCommit("patch@example.test", "b" * 40, "a" * 40),),
             "patch_diffs": {"patch@example.test": diff},
         }
@@ -1267,6 +1272,7 @@ class ReviewQueueTests(unittest.TestCase):
         queue_thread_reply(self.ledger, self.publisher, 7, match, b4_python="legacy")
         before = self.ledger.pending()
         result = queue_thread_reply(self.ledger, self.publisher, 7, match)
+        assert result.diagnostic
         self.assertIn("migration requires", result.diagnostic)
         self.assertEqual(self.ledger.pending(), before)
 
@@ -1426,6 +1432,7 @@ class ReviewQueueTests(unittest.TestCase):
             self.ledger, self.publisher, 7, self.match, b4_python="b4-python"
         )
         self.assertEqual((result.inline_count, result.unresolved_count), (0, 3))
+        assert result.diagnostic
         self.assertIn("changed", result.diagnostic)
         self.assertEqual(
             [item.event_type for item in self.ledger.pending()], ["ISSUE_COMMENT"]
@@ -1439,6 +1446,7 @@ class ReviewQueueTests(unittest.TestCase):
         result = queue_thread_reply(
             self.ledger, self.publisher, 7, self.match, b4_python="b4-python"
         )
+        assert result.diagnostic
         self.assertIn("unsupported b4", result.diagnostic)
         self.assertEqual(len(self.ledger.pending()), 1)
 
