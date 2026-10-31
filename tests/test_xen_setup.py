@@ -383,13 +383,29 @@ class XenSetupTests(unittest.TestCase):
                 self.assertEqual((root / "config" / name).stat().st_mode & 0o777, 0o600)
             self.assertFalse((root / "config" / "import-policy.json").exists())
             self.assertEqual(json.loads(policy_path.read_text()), public_policy)
-        (migration,) = [
+            public_policy["base_commit"] = "b" * 40
+            policy_path.write_text(json.dumps(public_policy))
+            with self.assertRaisesRegex(ValueError, "base_commit"):
+                provision_xen(
+                    ForgeAPI(
+                        "https://forge.test/api/v1",
+                        token="synthetic-admin",
+                        transport=transport,
+                    ),
+                    root / "other-config",
+                    root / "other-state",
+                    email="operator@example.test",
+                    policy_path=policy_path,
+                )
+        migrations = [
             body for method, path, body in requests if path == "repos/migrate"
         ]
-        self.assertNotIn("mirror_interval", migration)
-        self.assertEqual(
-            migration["clone_addr"], "https://github.com/xen-project/xen.git"
-        )
+        self.assertEqual(len(migrations), 2)
+        for migration in migrations:
+            self.assertNotIn("mirror_interval", migration)
+            self.assertEqual(
+                migration["clone_addr"], "https://github.com/xen-project/xen.git"
+            )
         self.assertIn(("PUT", "teams/30/members/review-companion", None), requests)
         for method, path, body in requests:
             if path.endswith("/tokens"):

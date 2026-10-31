@@ -13,7 +13,7 @@
   "nntp_group": "org.xenproject.lists.xen-devel",
   "git_remote": "https://review-forge.be.free.or.at/xen-review/xen.git",
   "git_username": "review-companion",
-  "base_commit": "e4956d5e6bdcb7e2e9abfa4474b2dc1160c51a45",
+  "base_commit": "8803b82ab2c95da09c837482cbcac11d7f3853e5",
   "target_branch": "master",
   "message_limit": 32,
   "revision_limit": 2,

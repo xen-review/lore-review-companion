@@ -294,7 +294,7 @@ def provision_xen(
             "Existing assembly clone has a different origin; inspect it rather than overwriting"
         )
     branch = mirror["default_branch"]
-    base = api.request_json(f"repos/xen-project/xen/branches/{branch}")["commit"]["id"]
+    base = api.request_json(f"repos/xen-review/xen/branches/{branch}")["commit"]["id"]
     subprocess.run(
         ["git", "--git-dir", str(repository), "cat-file", "-e", base + "^{commit}"],
         check=True,
@@ -311,6 +311,8 @@ def provision_xen(
         "nntp_group": "org.xenproject.lists.xen-devel",
         "git_remote": review["clone_url"],
         "git_username": IMPORTER,
+        "target_branch": branch,
+        "base_commit": base,
     }
     if any(policy.get(key) != value for key, value in expected.items()):
         raise ValueError(
