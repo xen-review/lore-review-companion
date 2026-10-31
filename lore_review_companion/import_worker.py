@@ -12,7 +12,6 @@ import sqlite3
 import stat
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 
 from lore_review_companion.forge_api import ForgeAPI
@@ -90,21 +89,16 @@ def _worker_state(path: Path, policy: ImportPolicy, ledger: Ledger):
             "INSERT OR IGNORE INTO worker VALUES (1, ?, ?, 0, 0, 0)",
             (policy.digest(), str(ledger.path.resolve())),
         )
-        if (
-            connection.execute(
-                "SELECT policy_digest FROM worker WHERE id = 1"
-            ).fetchone()[0]
-            != policy.digest()
-        ):
-            raise ValueError(
-                "Worker policy changed; explicitly review and reset only the scheduling cursor database"
-            )
         if connection.execute("SELECT ledger_path FROM worker WHERE id = 1").fetchone()[
             0
         ] != str(ledger.path.resolve()):
             raise ValueError(
                 "Worker scheduling state belongs to a different mail ledger"
             )
+        connection.execute(
+            "UPDATE worker SET policy_digest = ?, source_cursor = 0, publication_cursor = 0, revision_cursor = 0 WHERE id = 1 AND policy_digest != ?",
+            (policy.digest(), policy.digest()),
+        )
         connection.commit()
         yield connection
     finally:
@@ -282,43 +276,15 @@ def run_import_worker_round(
     *,
     refresh_source: bool = True,
 ) -> ImportWorkerRound:
-    incident = state_path.with_name(state_path.name + ".incident")
-    if incident.exists():
-        raise ValueError(
-            "Worker incident is latched; inspect the ledger before explicitly clearing its incident file"
-        )
-    try:
-        return _run_import_worker_round(
-            ledger,
-            repository,
-            policy_path,
-            state_path,
-            api,
-            credentials,
-            refresh_source=refresh_source,
-        )
-    except Exception:
-        state_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        try:
-            descriptor = os.open(
-                incident,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
-                0o600,
-            )
-            try:
-                os.write(
-                    descriptor,
-                    (
-                        datetime.now(timezone.utc).isoformat()
-                        + "\nInspect durable publication/outbox state before recovery.\n"
-                    ).encode(),
-                )
-                os.fsync(descriptor)
-            finally:
-                os.close(descriptor)
-        except FileExistsError:
-            pass
-        raise
+    return _run_import_worker_round(
+        ledger,
+        repository,
+        policy_path,
+        state_path,
+        api,
+        credentials,
+        refresh_source=refresh_source,
+    )
 
 
 def _run_import_worker_round(

@@ -29,6 +29,7 @@ from lore_review_companion.import_refresh import (
     refresh_digest,
     save_refresh_plan,
 )
+from lore_review_companion.import_policy import read_import_policy
 from lore_review_companion.git_branches import (
     GitHttpCredentials,
     RevisionBranchResult,
@@ -927,7 +928,7 @@ class SeriesSyncTests(unittest.TestCase):
                 credentials,
                 refresh_source=False,
             )
-        state.with_name(state.name + ".incident").unlink()
+        self.assertFalse(state.with_name(state.name + ".incident").exists())
         capabilities["unattended_allowed"] = False
         with self.assertRaisesRegex(ValueError, "disabled"):
             run_import_worker_round(
@@ -940,31 +941,48 @@ class SeriesSyncTests(unittest.TestCase):
                 refresh_source=False,
             )
         incident = state.with_name(state.name + ".incident")
-        self.assertTrue(incident.is_file())
-        self.assertEqual(incident.stat().st_mode & 0o777, 0o600)
+        self.assertFalse(incident.exists())
+        incident.write_text("obsolete development latch\n")
         capabilities["unattended_allowed"] = True
-        with self.assertRaisesRegex(ValueError, "latched"):
-            run_import_worker_round(
-                self.ledger,
-                self.repository,
-                path,
-                state,
-                self.api,
-                credentials,
-                refresh_source=False,
-            )
+        with patch(
+            "lore_review_companion.import_worker.sync_imported_series_revision",
+            side_effect=GitPreflightError("transient preflight failure"),
+        ):
+            with self.assertRaises(GitPreflightError):
+                run_import_worker_round(
+                    self.ledger,
+                    self.repository,
+                    path,
+                    state,
+                    self.api,
+                    credentials,
+                    refresh_source=False,
+                )
         incident.unlink()
         path.write_text(json.dumps({**policy, "message_limit": 3}))
-        with self.assertRaisesRegex(ValueError, "policy changed"):
-            run_import_worker_round(
-                self.ledger,
-                self.repository,
-                path,
-                state,
-                self.api,
-                credentials,
-                refresh_source=False,
+        with patch(
+            "lore_review_companion.import_worker.sync_imported_series_revision",
+            side_effect=GitPreflightError("still retryable"),
+        ):
+            with self.assertRaises(GitPreflightError):
+                run_import_worker_round(
+                    self.ledger,
+                    self.repository,
+                    path,
+                    state,
+                    self.api,
+                    credentials,
+                    refresh_source=False,
+                )
+        with closing(sqlite3.connect(state)) as schedule:
+            self.assertEqual(
+                schedule.execute("SELECT policy_digest FROM worker").fetchone()[0],
+                read_import_policy(path).digest(),
             )
+            self.assertEqual(
+                schedule.execute("SELECT COUNT(*) FROM effects").fetchone()[0], 3
+            )
+        self.assertFalse(incident.exists())
 
     def test_worker_cli_binds_destinations_and_credentials_only_from_private_policy(
         self,

@@ -87,11 +87,6 @@ def main(arguments=None) -> int:
             read_only=options.command in ("plan", "plan-delivery"),
         )
         if options.command == "recover":
-            incident = options.state_dir / "worker.sqlite3.incident"
-            if incident.exists():
-                raise ValueError(
-                    "Worker incident is latched; inspect the ledger before explicitly clearing its incident file"
-                )
             source = nntp_source(deployment["nntp_host"], deployment["nntp_group"])
             if not ledger.nntp_message_received(source, options.seed):
                 print(

@@ -99,8 +99,8 @@ class XenSetupTests(unittest.TestCase):
             ],
         )
 
-    def test_on_demand_recovery_does_not_bypass_worker_incident_latch(self):
-        """Keep on-demand recovery blocked while a worker incident is latched."""
+    def test_on_demand_recovery_ignores_obsolete_incident_marker(self):
+        """Old development marker files must never block another attempt."""
         deployment = {
             "nntp_host": "nntp.lore.kernel.org",
             "nntp_group": "org.xenproject.lists.xen-devel",
@@ -118,6 +118,8 @@ class XenSetupTests(unittest.TestCase):
                 ),
                 patch("lore_review_companion.xen_import.Ledger", return_value=Mock()),
                 patch("lore_review_companion.xen_import.fetch_nntp") as fetch,
+                patch("lore_review_companion.xen_import.discover_nntp_thread"),
+                patch("lore_review_companion.xen_import.asdict", return_value={}),
                 redirect_stdout(io.StringIO()),
             ):
                 result = import_main(
@@ -133,9 +135,9 @@ class XenSetupTests(unittest.TestCase):
                         "recover",
                     ]
                 )
-                self.assertEqual(result, 1)
+                self.assertEqual(result, 0)
                 self.assertTrue(incident.exists())
-                fetch.assert_not_called()
+                fetch.assert_called_once()
 
     def test_on_demand_plan_has_no_write_client_and_exposes_digest(self):
         deployment = {
