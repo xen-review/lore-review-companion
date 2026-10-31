@@ -34,6 +34,25 @@ class DiscoverSeriesTests(unittest.TestCase):
                           headers="From: list@vger.kernel.org\nTo: other@example.test\n")
         self.assertTrue(discover_series((allowed,))[0].complete)
 
+    def test_excluded_cover_suppresses_unversioned_patches_in_thread(self):
+        cover = message("cover@example.test", "[PATCH v2 0/1] xen: example",
+                        headers="Cc: list@vger.kernel.org\n")
+        patch_message = message("patch@example.test", "[PATCH 1/1] xen: example",
+                                headers="In-Reply-To: <cover@example.test>\n")
+        self.assertEqual(discover_series((cover, patch_message)), ())
+
+    def test_unversioned_patches_under_later_cover_are_not_complete_v1(self):
+        cover = message("cover@example.test", "[PATCH v2 0/1] xen: example")
+        patch_message = message("patch@example.test", "[PATCH 1/1] xen: example",
+                                headers="In-Reply-To: <cover@example.test>\n")
+        revisions = discover_series((cover, patch_message))
+        self.assertEqual([revision.revision for revision in revisions], [1, 2])
+        self.assertFalse(any(revision.complete for revision in revisions))
+        self.assertIn("unversioned patch references v2 cover: cover@example.test", revisions[0].conflicts)
+        versioned = message("patch@example.test", "[PATCH v2 1/1] xen: example",
+                            headers="In-Reply-To: <cover@example.test>\n")
+        self.assertTrue(discover_series((cover, versioned))[0].complete)
+
     def test_unnumbered_patch_subjects_are_independent_complete_singletons(self):
         first = message("singleton@example.test", "[PATCH] xen: single change")
         second = message("revised@example.test", "[PATCH v5] xen: revised single change")

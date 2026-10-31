@@ -115,18 +115,28 @@ def discover_series(messages: Iterable[ParsedMessage]) -> tuple[SeriesRevision, 
 
     grouped: dict[tuple[str, int], list[ParsedMessage]] = defaultdict(list)
     ancestry_errors: dict[tuple[str, int], set[str]] = defaultdict(set)
+    excluded_roots: set[str] = set()
     for message in candidates:
         revision = message.patch_version or 1
         root_id, errors = root_for(message)
         key = root_id, revision
         grouped[key].append(message)
         ancestry_errors[key].update(errors)
+        if has_excluded_recipient(message):
+            excluded_roots.add(root_id)
+        if message.kind == "patch" and message.patch_version is None:
+            for parent_id in (*message.in_reply_to, *message.references):
+                parent = by_id.get(parent_id)
+                if parent and parent.kind == "cover" and (parent.patch_version or 1) > 1:
+                    ancestry_errors[key].add(
+                        f"unversioned patch references v{parent.patch_version} cover: {parent_id}"
+                    )
         if id_counts[message.message_id] > 1:
             ancestry_errors[key].add(f"duplicate Message-ID: {message.message_id}")
 
     revisions: list[SeriesRevision] = []
     for (root_id, revision), members in sorted(grouped.items()):
-        if any(has_excluded_recipient(member) for member in members):
+        if root_id in excluded_roots:
             continue
         members.sort(
             key=lambda item: (
