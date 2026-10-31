@@ -23,7 +23,7 @@ from lore_review_companion.forge_api import ForgeAPI, ForgeAPIError
 from lore_review_companion.forge_imports import ForgeImportClient
 from lore_review_companion.git_branches import GitHttpCredentials
 from lore_review_companion.import_policy import ImportPolicy, read_import_policy
-from lore_review_companion.ledger import Ledger
+from lore_review_companion.ledger import Ledger, PublicationConflict
 from lore_review_companion.mail_parser import has_excluded_recipient
 from lore_review_companion.nntp_source import (
     discover_nntp,
@@ -662,7 +662,18 @@ def _run_import_worker_round(
             replies = _ancestry_order(
                 _allowed_replies(ledger._related_thread_messages(members))
             )
-            ledger.assert_message_ancestry_available(replies)
+            try:
+                ledger.assert_message_ancestry_available(replies)
+            except PublicationConflict as error:
+                for message in current.messages:
+                    if message.message_id:
+                        _ensure_message_issue(writer, message, (str(error),))
+                diagnostics.append(
+                    f"PR creation blocked: {current.title} "
+                    f"[{current.series_key} v{current.revision}]; "
+                    f"source: {policy.source_url}{seed}/; cause: {error}"
+                )
+                continue
             reader.capabilities()
             if activity_guard is not None:
                 activity_guard()
