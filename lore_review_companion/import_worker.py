@@ -23,6 +23,7 @@ from lore_review_companion.ledger import Ledger
 from lore_review_companion.nntp_source import (
     discover_nntp,
     discover_nntp_numbers,
+    discover_nntp_thread,
     fetch_nntp,
     nntp_source,
 )
@@ -123,6 +124,152 @@ def _effect_fingerprint(effect) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+
+
+def _ancestry_order(messages):
+    pending = {message.message_id: message for message in messages}
+    ordered = []
+    while pending:
+        ready = [
+            message
+            for message in pending.values()
+            if not set(message.in_reply_to or message.references[-1:]) & pending.keys()
+        ]
+        if not ready:
+            raise ValueError(
+                "Reply ancestry is cyclic; publication discussion cannot be completed"
+            )
+        for message in ready:
+            ordered.append(message)
+            del pending[message.message_id]
+    return tuple(ordered)
+
+
+def _recover_submission_thread(ledger, policy, seed):
+    source = nntp_source(policy.nntp_host, policy.nntp_group)
+    if not ledger.nntp_message_received(source, seed):
+        fetch_nntp(
+            ledger, host=policy.nntp_host, group=policy.nntp_group, message_id=seed
+        )
+    recovered = discover_nntp_thread(
+        ledger,
+        seed,
+        inbox_url=policy.source_url,
+        host=policy.nntp_host,
+        group=policy.nntp_group,
+    )
+    if recovered.empty_or_unavailable or not recovered.message_ids:
+        return False
+    missing = tuple(
+        identifier
+        for identifier in recovered.message_ids
+        if not ledger.nntp_message_received(source, identifier)
+    )
+    for identifier in missing[: policy.message_limit]:
+        fetch_nntp(
+            ledger,
+            host=policy.nntp_host,
+            group=policy.nntp_group,
+            message_id=identifier,
+        )
+    return all(
+        ledger.nntp_message_received(source, identifier)
+        for identifier in recovered.message_ids
+    )
+
+
+def _deliver_reply_batch(
+    ledger, state, reader, writer, policy, repository, current, pull_index, batch
+):
+    destination = f"{reader.api.base_url}{reader.repository_path}#{pull_index}"
+    delivered = 0
+    diagnostics = []
+    for message in batch:
+        earlier = {
+            effect.id
+            for effect in ledger.comment_effects(message.message_id, destination)
+        }
+        queued = queue_imported_replies(
+            ledger,
+            reader,
+            pull_index,
+            current.series_key,
+            current.revision,
+            repository,
+            (message,),
+            max_inline_lines=policy.max_inline_lines,
+        )
+        diagnostics.extend(queued.diagnostics)
+        effects = ledger.comment_effects(message.message_id, destination)
+        state.executemany(
+            "INSERT OR IGNORE INTO effects VALUES (?, ?)",
+            (
+                (effect.id, _effect_fingerprint(effect))
+                for effect in effects
+                if effect.id not in earlier
+            ),
+        )
+        state.commit()
+        enrolled = {}
+        for offset in range(0, len(effects), 500):
+            identifiers = tuple(effect.id for effect in effects[offset : offset + 500])
+            enrolled.update(
+                state.execute(
+                    f"SELECT delivery_id, fingerprint FROM effects WHERE delivery_id IN ({','.join('?' for _ in identifiers)})",
+                    identifiers,
+                )
+            )
+        for effect in effects:
+            if effect.id in enrolled and enrolled[effect.id] != _effect_fingerprint(
+                effect
+            ):
+                raise ValueError(
+                    "Worker effect enrollment no longer matches the retained mail ledger"
+                )
+        if any(
+            effect.id not in enrolled and effect.write_state != "complete"
+            for effect in effects
+        ):
+            diagnostics.append(
+                "Pre-existing import effects were not enrolled; keep them under explicit manual approval"
+            )
+        for kind in ("IMPORT_CONVERSATION", "IMPORT_REVIEW", "IMPORT_REPLY"):
+            selected = tuple(
+                effect.id
+                for effect in effects
+                if effect.id in enrolled
+                and effect.event_type == kind
+                and effect.write_state != "complete"
+            )
+            for offset in range(0, len(selected), policy.message_limit):
+                identifiers = selected[offset : offset + policy.message_limit]
+                plan = plan_import_delivery(
+                    ledger,
+                    reader,
+                    pull_index,
+                    kind,
+                    limit=policy.message_limit,
+                    retry_uncertain=policy.retry_uncertain,
+                    delivery_ids=identifiers,
+                )
+                if not plan.deliveries:
+                    continue
+                outcome = deliver_approved_imports(
+                    ledger,
+                    writer,
+                    pull_index,
+                    kind,
+                    approved_digest=plan.approval_digest(),
+                    limit=policy.message_limit,
+                    retry_uncertain=policy.retry_uncertain,
+                    delivery_ids=identifiers,
+                )
+                if outcome.failed:
+                    raise ValueError(
+                        "Import acceptance is uncertain; worker stopped with durable effects retained"
+                    )
+                delivered += outcome.delivered
+    return delivered, diagnostics
 
 
 def run_import_worker_round(
@@ -283,6 +430,12 @@ def _run_import_worker_round(
             previous = ledger.publication(
                 destination, current.series_key, current.revision
             )
+            if refresh_source and previous is None:
+                if not _recover_submission_thread(ledger, policy, seed):
+                    diagnostics.append(
+                        f"Source recovery pending: {seed}; publication deferred"
+                    )
+                    continue
             if (
                 previous is not None
                 and previous.status in ("pr_pending", "uncertain")
@@ -319,6 +472,17 @@ def _run_import_worker_round(
                 raise ValueError(
                     "Retained publication refs are missing; stop for operator recovery"
                 )
+            members = tuple(
+                message.message_id for message in current.messages if message.message_id
+            )
+            replies = _ancestry_order(
+                tuple(
+                    message
+                    for message in ledger._related_thread_messages(members)
+                    if message.kind == "reply"
+                )
+            )
+            ledger.assert_message_ancestry_available(replies)
             reader.capabilities()
             result = sync_imported_series_revision(
                 current,
@@ -334,117 +498,29 @@ def _run_import_worker_round(
             )
             published_count += int(previous is None or previous.status != "complete")
             pull_index = result.pull_request.remote_object["pull_index"]
-            members = tuple(
-                message.message_id for message in current.messages if message.message_id
-            )
-            replies = tuple(
-                message
-                for message in ledger._related_thread_messages(members)
-                if message.kind == "reply"
-            )
             row = state.execute(
                 "SELECT position FROM replies WHERE series_key = ? AND revision = ?",
                 (current.series_key, current.revision),
             ).fetchone()
             position = row[0] if row is not None and row[0] < len(replies) else 0
-            batch = replies[position : position + policy.message_limit]
-            comment_destination = f"{destination}#{pull_index}"
-            earlier_effects = {
-                effect.id
-                for message in batch
-                for effect in ledger.comment_effects(
-                    message.message_id, comment_destination
-                )
-            }
-            if batch:
-                queued = queue_imported_replies(
-                    ledger,
-                    reader,
-                    pull_index,
-                    current.series_key,
-                    current.revision,
-                    repository,
-                    batch,
-                    max_inline_lines=policy.max_inline_lines,
-                )
-                diagnostics.extend(queued.diagnostics)
-            effects = tuple(
-                effect
-                for message in batch
-                for effect in ledger.comment_effects(
-                    message.message_id, comment_destination
-                )
+            batch = (
+                replies
+                if previous is None
+                else replies[position : position + policy.message_limit]
             )
-            state.executemany(
-                "INSERT OR IGNORE INTO effects VALUES (?, ?)",
-                (
-                    (effect.id, _effect_fingerprint(effect))
-                    for effect in effects
-                    if effect.id not in earlier_effects
-                ),
+            count, reply_diagnostics = _deliver_reply_batch(
+                ledger,
+                state,
+                reader,
+                writer,
+                policy,
+                repository,
+                current,
+                pull_index,
+                batch,
             )
-            state.commit()
-            enrolled = set()
-            for offset in range(0, len(effects), 500):
-                identifiers = tuple(
-                    effect.id for effect in effects[offset : offset + 500]
-                )
-                retained = dict(
-                    state.execute(
-                        f"SELECT delivery_id, fingerprint FROM effects WHERE delivery_id IN ({','.join('?' for _ in identifiers)})",
-                        identifiers,
-                    )
-                )
-                for effect in effects[offset : offset + 500]:
-                    if effect.id in retained:
-                        if retained[effect.id] != _effect_fingerprint(effect):
-                            raise ValueError(
-                                "Worker effect enrollment no longer matches the retained mail ledger"
-                            )
-                        enrolled.add(effect.id)
-            if any(
-                effect.id not in enrolled and effect.write_state != "complete"
-                for effect in effects
-            ):
-                diagnostics.append(
-                    "Pre-existing import effects were not enrolled; keep them under explicit manual approval"
-                )
-            for kind in ("IMPORT_CONVERSATION", "IMPORT_REVIEW", "IMPORT_REPLY"):
-                identifiers = tuple(
-                    effect.id
-                    for effect in effects
-                    if effect.id in enrolled
-                    and effect.event_type == kind
-                    and effect.write_state != "complete"
-                )[: policy.message_limit]
-                if not identifiers:
-                    continue
-                plan = plan_import_delivery(
-                    ledger,
-                    reader,
-                    pull_index,
-                    kind,
-                    limit=policy.message_limit,
-                    retry_uncertain=policy.retry_uncertain,
-                    delivery_ids=identifiers,
-                )
-                if not plan.deliveries:
-                    continue
-                outcome = deliver_approved_imports(
-                    ledger,
-                    writer,
-                    pull_index,
-                    kind,
-                    approved_digest=plan.approval_digest(),
-                    limit=policy.message_limit,
-                    retry_uncertain=policy.retry_uncertain,
-                    delivery_ids=identifiers,
-                )
-                if outcome.failed:
-                    raise ValueError(
-                        "Import acceptance is uncertain; worker stopped with durable effects retained"
-                    )
-                delivered += outcome.delivered
+            delivered += count
+            diagnostics.extend(reply_diagnostics)
             position = (
                 position + len(batch) if position + len(batch) < len(replies) else 0
             )

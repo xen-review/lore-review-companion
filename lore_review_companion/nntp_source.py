@@ -120,6 +120,7 @@ class NNTPThreadDiscovery:
     from_index_time: int | None = None
     through_index_time: int | None = None
     empty_or_unavailable: bool = False
+    message_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -841,4 +842,5 @@ def discover_nntp_thread(
             from_index_time=from_index_time,
             through_index_time=through_index_time,
             empty_or_unavailable=thread.empty_or_unavailable,
+            message_ids=thread.message_ids,
         )

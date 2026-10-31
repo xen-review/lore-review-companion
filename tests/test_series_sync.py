@@ -17,7 +17,18 @@ from unittest.mock import patch
 from lore_review_companion.b4_adapter import AssemblyResult
 from lore_review_companion.cli import main
 from lore_review_companion.coordinator import plan_imported_sync
-from lore_review_companion.import_worker import run_import_worker_round
+from lore_review_companion.import_worker import (
+    _ancestry_order,
+    _deliver_reply_batch,
+    _recover_submission_thread,
+    run_import_worker_round,
+)
+from lore_review_companion.import_refresh import (
+    apply_import_refresh,
+    plan_import_refresh,
+    refresh_digest,
+    save_refresh_plan,
+)
 from lore_review_companion.git_branches import (
     GitHttpCredentials,
     RevisionBranchResult,
@@ -149,6 +160,301 @@ class SeriesSyncTests(unittest.TestCase):
                 credentials=GitHttpCredentials("mirror-bot", "synthetic-git-token"),
                 **kwargs,
             )
+
+    def test_refresh_plan_preserves_human_discussion_and_requires_exact_approval(self):
+        source = self.revision.messages[0]
+        self.ledger.record_parsed_message(source)
+        self.ledger.record_series_revision(self.revision)
+        destination = self.api.base_url + "repos/o/r"
+        self.ledger.begin_publication(
+            destination,
+            self.revision.series_key,
+            1,
+            "digest",
+            "b" * 40,
+            "head",
+            "a" * 40,
+        )
+        self.ledger.transition_publication(
+            destination,
+            self.revision.series_key,
+            1,
+            expected=("prepared",),
+            status="complete",
+            pull_index=7,
+        )
+        snapshot = {
+            "sha256": "c" * 64,
+            "imports": [
+                {
+                    "Type": "pull",
+                    "MessageID": source.message_id,
+                    "MessageSHA256": source.sha256,
+                    "OperationKey": "root",
+                }
+            ],
+            "comments": [{"ID": 99, "Content": "Human discussion"}],
+        }
+        capabilities = {
+            "version": 1,
+            "repository_id": 1,
+            "importer_id": 5,
+            "importer_login": "mirror-bot",
+            "source_url": "https://lore.kernel.org/xen-devel/",
+            "operations": ["pull-refresh"],
+        }
+        writes = []
+
+        def transport(request, _timeout):
+            if request.full_url.endswith("/capabilities"):
+                return FakeResponse(200, capabilities)
+            if request.get_method() == "POST":
+                writes.append(json.loads(request.data))
+                return FakeResponse(
+                    200, {"id": 1, "pull_index": 7, "operation_key": "root"}
+                )
+            return FakeResponse(200, snapshot)
+
+        self.api.transport = transport
+        client = ForgeImportClient(
+            self.api, "o", "r", source_url=capabilities["source_url"]
+        )
+        plan = plan_import_refresh(
+            self.ledger,
+            client,
+            7,
+            self.revision,
+            {"operation_key": "root", "message_id": source.message_id},
+            reason="Rebuild retained presentation",
+        )
+        self.assertEqual(plan["preserved_comment_ids"], [99])
+        self.assertEqual(plan["removed_comment_ids"], [])
+        self.assertEqual(writes, [])
+        path = self.repository / "refresh.json"
+        save_refresh_plan(path, plan)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        with self.assertRaises(FileExistsError):
+            save_refresh_plan(path, plan)
+        with self.assertRaisesRegex(ValueError, "write opt-in"):
+            apply_import_refresh(
+                self.ledger, client, plan, approved_digest=refresh_digest(plan)
+            )
+        client.write_enabled = True
+        with self.assertRaisesRegex(ValueError, "exact retained"):
+            apply_import_refresh(self.ledger, client, plan, approved_digest="f" * 64)
+        self.assertEqual(writes, [])
+        self.assertEqual(
+            apply_import_refresh(
+                self.ledger,
+                client,
+                json.loads(path.read_text()),
+                approved_digest=refresh_digest(plan),
+            ),
+            {"id": 1, "pull_index": 7, "operation_key": "root"},
+        )
+        self.assertEqual(writes, [plan["request"]])
+        token = self.repository / "import-token"
+        token.write_text("synthetic-import-token")
+        token.chmod(0o600)
+        publication_path = self.repository / "publication.json"
+        publication_path.write_text(
+            json.dumps(
+                {
+                    "plan": {
+                        "series_key": self.revision.series_key,
+                        "revision": 1,
+                        "request": {
+                            "operation_key": "root",
+                            "message_id": source.message_id,
+                        },
+                    }
+                }
+            )
+        )
+        cli_plan = self.repository / "cli-refresh.json"
+        arguments = [
+            "refresh-import",
+            "--ledger",
+            str(self.ledger.path),
+            "--api-url",
+            self.api.base_url,
+            "--owner",
+            "o",
+            "--repo",
+            "r",
+            "--pull-index",
+            "7",
+            "--token-file",
+            str(token),
+            "--publication-plan",
+            str(publication_path),
+            "--plan-file",
+            str(cli_plan),
+            "--reason",
+            "Rebuild via operator CLI",
+        ]
+        with patch("lore_review_companion.cli.ForgeAPI", return_value=self.api):
+            with redirect_stdout(StringIO()) as output:
+                self.assertEqual(main(arguments), 0)
+            approval = json.loads(output.getvalue())["approval_digest"]
+            self.assertEqual(len(writes), 1)
+            with redirect_stdout(StringIO()):
+                self.assertEqual(
+                    main([*arguments, "--write", "--approve", approval]), 0
+                )
+            self.assertEqual(len(writes), 2)
+            with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                self.assertEqual(
+                    main([*arguments, "--write", "--approve", "f" * 64]), 1
+                )
+            self.assertEqual(len(writes), 2)
+        snapshot["imports"].append(
+            {
+                "Type": "conversation",
+                "MessageID": source.message_id,
+                "MessageSHA256": source.sha256,
+                "OperationKey": "unretained",
+            }
+        )
+        with self.assertRaisesRegex(PublicationConflict, "complete retained effect"):
+            plan_import_refresh(
+                self.ledger,
+                client,
+                7,
+                self.revision,
+                {"operation_key": "root", "message_id": source.message_id},
+                reason="Rebuild",
+            )
+
+    def test_thread_recovery_ignores_unrelated_backlog_and_defers_until_complete(self):
+        received = {"seed@example.test"}
+        ledger = SimpleNamespace(
+            nntp_message_received=lambda source, identifier: identifier in received
+        )
+        policy = SimpleNamespace(
+            nntp_host="nntp.lore.kernel.org",
+            nntp_group="group",
+            source_url="https://lore.kernel.org/xen-devel/",
+            message_limit=1,
+        )
+        discovery = SimpleNamespace(
+            empty_or_unavailable=False,
+            message_ids=(
+                "seed@example.test",
+                "reply-one@example.test",
+                "reply-two@example.test",
+            ),
+        )
+
+        def fetch(_ledger, **options):
+            received.add(options["message_id"])
+
+        with (
+            patch(
+                "lore_review_companion.import_worker.discover_nntp_thread",
+                return_value=discovery,
+            ),
+            patch(
+                "lore_review_companion.import_worker.fetch_nntp", side_effect=fetch
+            ) as fetched,
+        ):
+            self.assertFalse(
+                _recover_submission_thread(ledger, policy, "seed@example.test")
+            )
+            self.assertTrue(
+                _recover_submission_thread(ledger, policy, "seed@example.test")
+            )
+        self.assertEqual(
+            [call.kwargs["message_id"] for call in fetched.call_args_list],
+            ["reply-one@example.test", "reply-two@example.test"],
+        )
+
+    def test_autonomous_reply_delivery_orders_parents_and_drains_every_effect(self):
+        parent = parse_message(
+            b"From: Reviewer <r@example.test>\nMessage-ID: <parent@example.test>\nSubject: Re: patch\nIn-Reply-To: <patch@example.test>\n\nParent\n"
+        )
+        child = parse_message(
+            b"From: Reviewer <r@example.test>\nMessage-ID: <child@example.test>\nSubject: Re: patch\nIn-Reply-To: <parent@example.test>\n\nChild\n"
+        )
+        ordered = _ancestry_order((child, parent))
+        self.assertEqual(ordered, (parent, child))
+        client = ForgeImportClient(
+            self.api, "o", "r", source_url="https://lore.kernel.org/xen-devel/"
+        )
+        destination = self.api.base_url + "repos/o/r#7"
+        for source in ordered:
+            self.ledger.record_parsed_message(source)
+        accepted = []
+
+        def queue(
+            _ledger, _reader, _index, _key, _revision, _repository, selected, **options
+        ):
+            source = selected[0]
+            if source == child:
+                self.assertIn(parent.message_id, accepted)
+            for position in range(3):
+                self.ledger.enqueue(
+                    source.message_id,
+                    "IMPORT_REVIEW",
+                    destination,
+                    f"effect-{position}",
+                    {"source": source.message_id},
+                )
+            return SimpleNamespace(diagnostics=())
+
+        def plan(*arguments, **options):
+            return SimpleNamespace(
+                deliveries=options["delivery_ids"], approval_digest=lambda: "batch"
+            )
+
+        def deliver(*arguments, **options):
+            for identifier in options["delivery_ids"]:
+                effect = next(
+                    effect
+                    for source in ordered
+                    for effect in self.ledger.comment_effects(
+                        source.message_id, destination
+                    )
+                    if effect.id == identifier
+                )
+                accepted.append(effect.message_id)
+                self.ledger.mark_delivered(identifier)
+            return SimpleNamespace(delivered=len(options["delivery_ids"]), failed=0)
+
+        with closing(sqlite3.connect(":memory:")) as state:
+            state.execute(
+                "CREATE TABLE effects (delivery_id INTEGER PRIMARY KEY, fingerprint TEXT)"
+            )
+            with (
+                patch(
+                    "lore_review_companion.import_worker.queue_imported_replies",
+                    side_effect=queue,
+                ),
+                patch(
+                    "lore_review_companion.import_worker.plan_import_delivery",
+                    side_effect=plan,
+                ),
+                patch(
+                    "lore_review_companion.import_worker.deliver_approved_imports",
+                    side_effect=deliver,
+                ),
+            ):
+                delivered, diagnostics = _deliver_reply_batch(
+                    self.ledger,
+                    state,
+                    client,
+                    client,
+                    SimpleNamespace(
+                        message_limit=1, retry_uncertain=False, max_inline_lines=50
+                    ),
+                    self.repository,
+                    self.revision,
+                    7,
+                    ordered,
+                )
+        self.assertEqual(delivered, 6)
+        self.assertEqual(diagnostics, [])
+        self.assertEqual(self.ledger.pending(), [])
 
     def test_read_only_snapshot_is_private_independent_and_refuses_existing_files(self):
         self.ledger.record_parsed_message(self.revision.messages[0])
@@ -464,6 +770,16 @@ class SeriesSyncTests(unittest.TestCase):
         )
         assert reply.message_id
         self.ledger.record_parsed_message(reply)
+        child = parse_message(
+            b"From: Reviewer <reviewer@example.test>\nMessage-ID: <worker-child@example.test>\n"
+            b"Subject: Re: patch\nIn-Reply-To: <worker-reply@example.test>\n\nChild reply\n"
+        )
+        grandchild = parse_message(
+            b"From: Reviewer <reviewer@example.test>\nMessage-ID: <worker-grandchild@example.test>\n"
+            b"Subject: Re: patch\nIn-Reply-To: <worker-child@example.test>\n\nGrandchild reply\n"
+        )
+        self.ledger.record_parsed_message(grandchild)
+        self.ledger.record_parsed_message(child)
         destination = self.api.base_url + "repos/o/r#7"
         manual = self.ledger.enqueue(
             reply.message_id,
@@ -524,9 +840,18 @@ class SeriesSyncTests(unittest.TestCase):
             )
 
         def queue(*arguments, **options):
-            assert reply.message_id
+            selected = arguments[6][0]
+            if selected in (child, grandchild):
+                parent = selected.in_reply_to[0]
+                self.assertTrue(
+                    all(
+                        effect.write_state == "complete"
+                        for effect in self.ledger.comment_effects(parent, destination)
+                        if effect.id != manual
+                    )
+                )
             self.ledger.enqueue(
-                reply.message_id,
+                selected.message_id,
                 "IMPORT_REVIEW",
                 destination,
                 "worker-effect",
@@ -584,7 +909,7 @@ class SeriesSyncTests(unittest.TestCase):
             )
         self.assertEqual((first.considered, first.published), (1, 1))
         self.assertEqual((second.considered, second.published), (1, 0))
-        self.assertEqual((first.delivered, second.delivered), (1, 0))
+        self.assertEqual((first.delivered, second.delivered), (3, 0))
         self.assertEqual([effect.id for effect in self.ledger.pending()], [manual])
         self.assertIn("Pre-existing", first.diagnostics[0])
         with closing(sqlite3.connect(state)) as schedule:
@@ -1210,9 +1535,9 @@ class SeriesSyncTests(unittest.TestCase):
             f"Revision: v{preview.plan.revision}\nPatches: {self.revision.expected_patch_count}"
         )
         legacy_digest = replace(preview.plan, body=legacy_body).approval_digest()
-        self.transport.pulls[0]["body"] = (
-            f"{legacy_body}\n\n{_series_marker(self.revision.series_key)}"
-        )
+        self.transport.pulls[0][
+            "body"
+        ] = f"{legacy_body}\n\n{_series_marker(self.revision.series_key)}"
         with self.ledger._connection() as connection:
             connection.execute(
                 "UPDATE publications SET approval_digest = ?", (legacy_digest,)

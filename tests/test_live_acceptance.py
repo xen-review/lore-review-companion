@@ -21,6 +21,11 @@ from lore_review_companion.forge_comments import ForgeCommentPublisher
 from lore_review_companion.forge_pulls import ForgePullPublisher, PullRequestConflict
 from lore_review_companion.ingest import sync_public_inbox
 from lore_review_companion.import_worker import run_import_worker_round
+from lore_review_companion.import_refresh import (
+    apply_import_refresh,
+    plan_import_refresh,
+    refresh_digest,
+)
 from lore_review_companion.ledger import Ledger, PublicationConflict
 from lore_review_companion.mail_parser import parse_mbox, parse_message
 from lore_review_companion.outbox import (
@@ -847,7 +852,8 @@ class ImportedWorkflowAcceptanceTests(unittest.TestCase):
                 "```rust\n> ---\n```\nCommit description feedback.", conversation_body
             )
             self.assertIn(
-                "> --- a/review-fixture.c\n> +++ b/review-fixture.c", conversation_body
+                "```c\n--- a/review-fixture.c\n+++ b/review-fixture.c",
+                conversation_body,
             )
             self.assertNotIn("~Reviewer", conversation_body)
             self.assertEqual(
@@ -1382,7 +1388,7 @@ class ImportedWorkflowAcceptanceTests(unittest.TestCase):
                 refresh_source=False,
             )
             self.assertEqual(worker_round.published, 0)
-            self.assertEqual(worker_round.delivered, 2)
+            self.assertEqual(worker_round.delivered, 2, worker_round)
             self.assertEqual({effect.id for effect in ledger.pending()}, manual_pending)
             replay_round = run_import_worker_round(
                 ledger,
@@ -1401,6 +1407,38 @@ class ImportedWorkflowAcceptanceTests(unittest.TestCase):
             self.assertEqual(
                 second_reviews[0]["review_import"]["participant_name"],
                 "Scheduled Reviewer",
+            )
+            refresh = plan_import_refresh(
+                ledger,
+                reader,
+                second_index,
+                second_revision,
+                second_published.plan.request,
+                reason="Exercise complete retained-source presentation rebuild",
+            )
+            self.assertEqual(len(refresh["request"]["effects"]), 2)
+            self.assertEqual(len(refresh["request"]["comments"]), 3)
+            for _ in range(2):
+                refreshed = apply_import_refresh(
+                    ledger, writer, refresh, approved_digest=refresh_digest(refresh)
+                )
+                self.assertEqual(refreshed["pull_index"], second_index)
+            self.assertEqual(
+                writer.import_pull(second_published.plan.request).remote_object[
+                    "pull_index"
+                ],
+                second_index,
+            )
+            self.assertEqual({effect.id for effect in ledger.pending()}, manual_pending)
+            self.assertEqual(
+                git(
+                    "ls-remote",
+                    "--heads",
+                    remote,
+                    f"refs/heads/{published.plan.head_branch}",
+                    f"refs/heads/{published.plan.base_branch}",
+                ),
+                original_refs,
             )
             unavailable = parse_message(
                 (

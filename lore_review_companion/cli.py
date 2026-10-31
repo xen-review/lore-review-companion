@@ -37,7 +37,7 @@ from lore_review_companion.forge_comments import (
     DeliveryUncertainError,
     ForgeCommentPublisher,
 )
-from lore_review_companion.forge_imports import ForgeImportClient
+from lore_review_companion.forge_imports import ForgeImportClient, ImportDeliveryResult
 from lore_review_companion.forge_pulls import (
     ForgePullPublisher,
     PullRequestConflict,
@@ -74,6 +74,12 @@ from lore_review_companion.mail_parser import parse_mbox
 from lore_review_companion.coordinator import plan_imported_sync
 from lore_review_companion.import_policy import read_import_policy
 from lore_review_companion.import_worker import run_import_worker_round
+from lore_review_companion.import_refresh import (
+    apply_import_refresh,
+    plan_import_refresh,
+    refresh_digest,
+    save_refresh_plan,
+)
 from lore_review_companion.nntp_source import (
     DEFAULT_GROUP,
     DEFAULT_HOST,
@@ -831,6 +837,21 @@ def main(argv: list[str] | None = None) -> int:
     imported_series.add_argument("--write", action="store_true")
     imported_series.add_argument("--approve")
     imported_series.add_argument("--retry-uncertain", action="store_true")
+    refresh_import = commands.add_parser(
+        "refresh-import", help="Preview or apply an audited in-place full-PR rebuild"
+    )
+    refresh_import.add_argument("--ledger", type=Path, required=True)
+    refresh_import.add_argument("--api-url", required=True)
+    refresh_import.add_argument("--owner", required=True)
+    refresh_import.add_argument("--repo", required=True)
+    refresh_import.add_argument("--inbox-url", default=DEFAULT_INBOX)
+    refresh_import.add_argument("--pull-index", type=int, required=True)
+    refresh_import.add_argument("--plan-file", type=Path, required=True)
+    refresh_import.add_argument("--publication-plan", type=Path)
+    refresh_import.add_argument("--reason")
+    refresh_import.add_argument("--token-file", type=Path, required=True)
+    refresh_import.add_argument("--write", action="store_true")
+    refresh_import.add_argument("--approve")
     sync_plan = commands.add_parser(
         "plan-sync",
         help="Plan bounded source recovery, publication and replies without writes",
@@ -888,6 +909,45 @@ def main(argv: list[str] | None = None) -> int:
                 credentials,
                 refresh_source=not args.no_refresh_source,
             )
+        elif args.command == "refresh-import":
+            if bool(args.write) != bool(args.approve):
+                raise ValueError("--write and --approve must be supplied together")
+            ledger = Ledger(args.ledger, read_only=not args.write)
+            client = ForgeImportClient(
+                ForgeAPI(args.api_url, token=read_private_token(args.token_file)),
+                args.owner,
+                args.repo,
+                source_url=args.inbox_url,
+                write_enabled=args.write,
+            )
+            if args.write:
+                plan = json.loads(args.plan_file.read_text())
+                if plan.get("pull_index") != args.pull_index:
+                    raise ValueError("Retained refresh plan targets another PR")
+                result = ImportDeliveryResult(
+                    apply_import_refresh(
+                        ledger, client, plan, approved_digest=args.approve
+                    )
+                )
+            else:
+                if args.publication_plan is None or not args.reason:
+                    raise ValueError("Preview requires --publication-plan and --reason")
+                publication = json.loads(args.publication_plan.read_text())["plan"]
+                revision = ledger.series_revision(
+                    publication["series_key"], publication["revision"]
+                )
+                if revision is None:
+                    raise ValueError("Publication plan has no retained revision")
+                plan = plan_import_refresh(
+                    ledger,
+                    client,
+                    args.pull_index,
+                    revision,
+                    publication["request"],
+                    reason=args.reason,
+                )
+                save_refresh_plan(args.plan_file, plan)
+                result = RetentionPreview(plan, refresh_digest(plan))
         elif args.command in (
             "queue-imports",
             "recreate-import",
@@ -945,9 +1005,11 @@ def main(argv: list[str] | None = None) -> int:
                         approved_digest=args.approve,
                         limit=args.limit,
                         retry_uncertain=args.retry_uncertain,
-                        delivery_ids=tuple(args.delivery_id)
-                        if args.delivery_id is not None
-                        else None,
+                        delivery_ids=(
+                            tuple(args.delivery_id)
+                            if args.delivery_id is not None
+                            else None
+                        ),
                     )
                 else:
                     plan = plan_import_delivery(
@@ -957,9 +1019,11 @@ def main(argv: list[str] | None = None) -> int:
                         event_type,
                         limit=args.limit,
                         retry_uncertain=args.retry_uncertain,
-                        delivery_ids=tuple(args.delivery_id)
-                        if args.delivery_id is not None
-                        else None,
+                        delivery_ids=(
+                            tuple(args.delivery_id)
+                            if args.delivery_id is not None
+                            else None
+                        ),
                     )
                     result = RetentionPreview(plan, plan.approval_digest())
         elif args.command == "plan-sync":
@@ -1590,9 +1654,11 @@ def main(argv: list[str] | None = None) -> int:
                         args.reason,
                         approved_digest=args.approve,
                         limit=args.limit,
-                        scoped_delivery_ids=tuple(args.scoped_delivery_id)
-                        if args.scoped_delivery_id is not None
-                        else None,
+                        scoped_delivery_ids=(
+                            tuple(args.scoped_delivery_id)
+                            if args.scoped_delivery_id is not None
+                            else None
+                        ),
                     )
                 else:
                     plan = plan_legacy_migration(
@@ -1601,9 +1667,11 @@ def main(argv: list[str] | None = None) -> int:
                         args.pull_index,
                         args.reason,
                         limit=args.limit,
-                        scoped_delivery_ids=tuple(args.scoped_delivery_id)
-                        if args.scoped_delivery_id is not None
-                        else None,
+                        scoped_delivery_ids=(
+                            tuple(args.scoped_delivery_id)
+                            if args.scoped_delivery_id is not None
+                            else None
+                        ),
                     )
                     result = MigrationPreview(plan, plan.approval_digest())
             elif args.command == "queue-b4-drafts":

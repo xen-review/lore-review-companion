@@ -739,6 +739,9 @@ class NNTPSourceTests(unittest.TestCase):
         )
         self.assertFalse(first.thread_coverage_verified)
         self.assertEqual(
+            first.message_ids, ("mail@example.test", "older-sibling@example.test")
+        )
+        self.assertEqual(
             self.ledger.pending_nntp_messages(discovery.checkpoint.source),
             ("older-sibling@example.test",),
         )
