@@ -22,9 +22,21 @@ automatically. Credentials alone remain secret.
   experimental runtime data from `xen-project/xen` if useful. Never delete the
   upstream mirror or unrelated repositories. A rebuild is not mandatory when
   current data can be used for the development checks.
+- The development fork was rebuilt from that mirror as repository ID 3. Its
+  target and default branch are `staging`, pinned at
+  `8803b82ab2c95da09c837482cbcac11d7f3853e5`. The temporary administrator token
+  used for bootstrap was revoked and its local file removed.
+- Deployed Forgejo `dc5d6dd6c55e0673046acfe0803bbbeecc986c44` and companion
+  `fb9d52795590c843e2b51f282e53f1a7a78710cf`. Forgejo is active and the
+  companion timer is waiting. The installed policy matches the committed source.
+- Bounded bootstrap imported 3 PRs and 15 discussion effects (9 conversations,
+  2 reviews, 4 replies). This is not a completeness claim: other candidates were
+  incomplete or failed patch preflight, and one quoted reply did not uniquely
+  identify an accepted inline comment. Inspect retained source and diagnostics
+  before claiming all replies delivered.
 - The implementation/review notes below are historical evidence, not permission
   gates. In particular, old instructions to preserve a latch or wait for private
-  policy recovery are invalid. Current deployment results will be recorded here.
+  policy recovery are invalid.
 
 Status captured 2026-10-31. Recheck live state before any write.
 

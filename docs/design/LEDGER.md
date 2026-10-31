@@ -23,7 +23,27 @@ This is an early pre-alpha experiment with disposable development fixtures.
   the scoped Forgejo API suite passes with disposable real-companion acceptance
   enabled. Three deployer tests cover dry-run, pushed-source enforcement and
   secret-preserving configuration. Touched-file diagnostics and whitespace
-  checks pass. Actual deployment results are recorded separately after running.
+  checks pass.
+
+### Rebuilt Staging Fixture: 2026-10-31
+
+- Explicit rebuild recreated only `xen-review/xen` from the existing
+  `xen-project/xen` mirror. The new repository ID is 3, and the committed
+  profile pins `staging` at `8803b82ab2c95da09c837482cbcac11d7f3853e5`.
+  Forgejo's fork endpoint has no default-branch option, so setup applies and
+  verifies the committed branch with the repository-edit API after creation.
+- Deployed Forgejo `dc5d6dd6c55e0673046acfe0803bbbeecc986c44` and companion
+  `fb9d52795590c843e2b51f282e53f1a7a78710cf`. The live API reports repository
+  3's default branch as `staging`; Forgejo is active and the companion timer is
+  enabled/waiting. The temporary administrator token was revoked and its local
+  file removed.
+- Bounded bootstrap imported 3 PRs and 15 discussion effects: 9 conversations,
+  2 reviews, and 4 replies. This is not complete source coverage. Other
+  candidates were incomplete or failed patch preflight against the pinned base;
+  one quoted reply could not be uniquely anchored and was safely deferred.
+- The full companion suite passed 398 tests (four expected skips) at `8ccd48f`.
+  Focused setup/API tests passed after the later repository-ID, trusted-base and
+  staging-default changes. The final committed package and policy were deployed.
 
 Updated: 2026-10-30. Design and boundaries: [PLAN.md](PLAN.md).
 
