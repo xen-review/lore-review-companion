@@ -178,6 +178,12 @@ New `mail-text-v4` effects render a direct reply's source-verified non-code
 submission quotes in Rust fenced blocks, preserving quote markers and using a
 fence long enough for embedded backticks. Quotes in actual patch code, ambiguous
 or unmatched material, and replies to other review messages are not converted.
+New `mail-text-v6` effects render matched or patch-like diff quotes in clean C
+fences, recognizing both `diff --git` and generic `diff a/... b/...` headers as
+well as unified `---`/`+++` file headers. Email quote markers are removed from
+those code blocks. Nested replies retain only the immediate-parent quote in a
+Rust fence before the reply prose; approval reconstructs this presentation from
+the retained source. Earlier formats and completed effects remain unchanged.
 The last standalone sender-name sign-off is omitted from new imported comment
 bodies without removing the only remaining content. Approval reconstructs the
 presentation from the retained source and recorded immediate parent; new inline

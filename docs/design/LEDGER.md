@@ -130,6 +130,32 @@ files, source snapshots and nested repositories are not part of these commits.
   reports 458 diagnostics in the concurrent worktree, still a failing type gate,
   not a claimed improvement over the historical 564 baseline.
 
+- Local ingestion/presentation follow-up (committed, not installed):
+  `fetch-nntp --message-id` now queues one normalized ID after an NNTP checkpoint
+  exists and validates its ARTICLE response against the requested ID and group.
+  The Xen `recover` command fetches an unreceived seed before thread discovery
+  and refuses to bypass the worker incident latch. Batch fetching defers only
+  ARTICLE 430 responses, reports them, and retains those queue rows; an
+  instrumented temporary-ledger probe confirmed the live 430 is from ARTICLE,
+  after group-validity checks. The worker incident latch remains set.
+- New `mail-text-v6` diff quotes recognize `diff --git`, generic
+  `diff a/... b/...`, and unified file headers; nested replies retain immediate
+  quote blocks in Rust fences before prose. The retained PR 5 source
+  `a3c4926f-9e69-441b-bb4e-0f8324e17f02@suse.com` reconstructs three v6 quote
+  blocks and passes the approval payload validator in memory. Its four stored
+  v3 effects remain untouched.
+- PR 6 comment 45 has a pending, append-only v6 recreation in the operational
+  ledger as delivery 42. Its original operation and source are bound to the new
+  effect; the current public comment body was verified against the original.
+  The effect requires explicit ID selection and manual digest approval, and has
+  not been delivered. Existing comment 45 and its child remain unchanged.
+- Verification: 387 companion tests, four expected skips; 45 NNTP tests, six
+  Xen setup/recovery tests and 16 presentation tests pass. Editor diagnostics and
+  `git diff --check` pass. Repository-wide formatting still reports unrelated
+  existing differences. No service restart, deployment, remote comment
+  recreation, or notification/hook count query was performed. T02-T05 remain
+  `IN PROGRESS`; browser and deployed verification gates remain open.
+
 ## Remark-Level Threading Follow-up
 
 The first storage foundation is implemented but not deployed; all user-facing

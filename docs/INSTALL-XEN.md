@@ -167,10 +167,13 @@ REVISION=13
 .venv/bin/python contrib/import-xen-thread.py --seed "$SEED" --revision "$REVISION" plan
 ```
 
-If dependencies are missing, initialize/fetch the recent NNTP queue as described
-in the README. `recover` can then discover/fetch a bounded thread whose anchor
-was already received from that group. Recovery writes local ingestion state,
-not PRs; upstream HTTPS unavailability remains an explicit blocker.
+Initialize an NNTP checkpoint as described in the README. `recover` queues and
+fetches the exact `--seed` Message-ID first, verifies it against the configured
+group, then records bounded Lore thread candidates and runs one bounded queue
+fetch. It changes local ingestion state only; it does not create or edit PRs.
+The worker incident latch blocks this command too: inspect durable publication
+and outbox state before any explicit recovery. Upstream HTTPS unavailability
+remains an explicit blocker.
 
 The plan runs against a private ledger snapshot and prints the full publication
 request and its `approval_digest`. Inspect it, then supply that exact digest:

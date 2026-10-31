@@ -111,12 +111,19 @@ Date, and does not establish verified receipt-time or complete thread coverage.
 Fetched messages queue missing older parents recursively, outside the initial
 window. `repair-nntp-parents` repairs dependencies in retained messages, and
 `discover-nntp-thread --message-id MESSAGE_ID` queues bounded thread candidates
-for subsequent group-verified NNTP fetch. `fetch-nntp --message-id MESSAGE_ID`
-retries one pending item without letting an unavailable earlier item hide it.
-Unavailable messages remain pending; they are not treated as source deletions.
-Partial downloads never acknowledge the current item. Group renumbering,
-validity changes, retention gaps and Message-ID conflicts halt discovery
-instead of guessing. Byte/disk/batch limits remain explicit command options.
+for subsequent group-verified NNTP fetch. With an initialized checkpoint,
+`fetch-nntp --message-id MESSAGE_ID` queues and fetches exactly that ID, even if
+it was not found by the recent-window scan. The returned article must match the
+requested Message-ID and group. A single-ID 430 remains an explicit failure and
+the ID stays pending.
+
+Batch fetches defer only an unavailable `ARTICLE` response (430), report the
+count, and continue with later queued IDs. Deferred IDs remain pending; they are
+not treated as source deletions. Other protocol, group-identity and content
+validation failures stop the batch. Partial downloads never acknowledge the
+current item. Group renumbering, validity changes, retention gaps and Message-ID
+conflicts halt discovery instead of guessing. Byte/disk/batch limits remain
+explicit command options.
 
 ## Scoped Imports
 
@@ -143,6 +150,18 @@ private token file. These commands do not use the ordinary comment APIs:
   --ledger state.sqlite3 --api-url https://forge.example/api/v1/ \
   --owner review --repo xen --pull-index 7 --token-file /private/import-token \
   --kind review
+
+.venv/bin/lore-review-companion recreate-import \
+  --ledger state.sqlite3 --api-url https://forge.example/api/v1/ \
+  --owner review --repo xen --pull-index 7 --token-file /private/import-token \
+  --message-id reply@example.test \
+  --original-effect-key imported-full-message-v1 \
+  --reason "Correct quoted diff presentation"
+
+.venv/bin/lore-review-companion deliver-imports \
+  --ledger state.sqlite3 --api-url https://forge.example/api/v1/ \
+  --owner review --repo xen --pull-index 7 --token-file /private/import-token \
+  --kind conversation --delivery-id 42
 ```
 
 Publication previews a separate PR per revision, with immutable revision base
@@ -155,6 +174,11 @@ Queueing requires the recorded completed publication and pinned b4 runtime;
 it verifies reassembly and exact historical patch diffs before adding effects.
 The delivery command above is read-only and prints its plan/digest. After
 reviewing it, supply paired `--write --approve DIGEST` for that exact batch.
+Presentation corrections are queued as new effects; the completed original is
+retained. Use `recreate-import` only for an existing completed conversation,
+then preview its exact ID with `deliver-imports --kind conversation
+--delivery-id ID`. Repeating `--delivery-id` selects a bounded explicit batch.
+Approval remains bound to the returned digest and that exact selection.
 Use `--kind conversation` to plan complete-message imports independently.
 Use `--kind reply` for responses to existing imported inline comments. Queue
 the parent email's review first and deliver it before queueing its responses.
