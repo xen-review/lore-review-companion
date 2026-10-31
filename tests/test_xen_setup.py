@@ -12,6 +12,7 @@ from lore_review_companion.forge_api import ForgeAPI
 from lore_review_companion.nntp_source import NNTPFetch, NNTPThreadDiscovery
 from lore_review_companion.import_policy import DEFAULT_POLICY_PATH
 from lore_review_companion.xen_setup import (
+    SAFETY,
     main,
     provision_xen,
     rebuild_development_fork,
@@ -275,6 +276,7 @@ class XenSetupTests(unittest.TestCase):
             "mirror": False,
             "parent": {"id": 10},
             "clone_url": "https://forge.test/xen-review/xen.git",
+            "default_branch": "staging",
         }
 
         def transport(request, timeout):
@@ -335,7 +337,7 @@ class XenSetupTests(unittest.TestCase):
                         "unattended_allowed": True,
                     },
                 )
-            if path.endswith("/branches/master"):
+            if path.endswith("/branches/staging"):
                 return FakeResponse(200, {"commit": {"id": "a" * 40}})
             return FakeResponse(200, {})
 
@@ -412,6 +414,14 @@ class XenSetupTests(unittest.TestCase):
                 self.assertEqual(
                     body["repositories"], [{"owner": "xen-review", "name": "xen"}]
                 )
+        self.assertIn(
+            (
+                "PATCH",
+                "repos/xen-review/xen",
+                {**SAFETY, "has_pull_requests": True, "default_branch": "staging"},
+            ),
+            requests,
+        )
 
     def test_preview_does_not_read_admin_token_or_call_api(self):
         with patch("lore_review_companion.xen_setup.ForgeAPI") as api:

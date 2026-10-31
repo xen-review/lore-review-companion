@@ -228,8 +228,15 @@ def provision_xen(
     api.request_json(
         "repos/xen-review/xen",
         method="PATCH",
-        payload={**SAFETY, "has_pull_requests": True},
+        payload={
+            **SAFETY,
+            "has_pull_requests": True,
+            "default_branch": policy["target_branch"],
+        },
     )
+    review = api.request_json("repos/xen-review/xen")
+    if review.get("default_branch") != policy["target_branch"]:
+        raise ValueError("Review fork default branch differs from committed policy")
     api.request_json(
         f"repos/xen-review/xen/review-import-grants/{IMPORTER}",
         method="PUT",
