@@ -99,6 +99,16 @@ files, source snapshots and nested repositories are not part of these commits.
   18 new PRs and 5 exact-Message-ID blocking issues, including Lore links and
   concrete missing-parent/cover reasons, while the 240-hour NNTP bootstrap was
   still draining. This is not an exhaustive archive-coverage claim.
+- Assembly resilience follow-up is pushed as companion `0dd6110` and `bff0015`:
+  source-specific b4 assembly failures, including invalid in-body author
+  metadata, now become idempotent exact-Message-ID blocking issues while the
+  worker continues with later revisions; pinned-runtime failures still abort.
+  The final full suite passes 433 tests with four expected skips, and the b4
+  adapter suite passes 13 tests with two expected skips. The current deployment
+  is companion `bff0015`; since its 2026-10-31 23:33:41 restart no new worker
+  application error has been observed. The active NNTP bootstrap snapshot has
+  45 PRs, 15 blocking issues, and durable cursors `0|0|60`; see the dated
+  [NNTP handoff](HANDOFF-20261031-NNTP.md) for continuation details.
 - Submission quote presentation: companion `bb97957` and real-Forgejo fixture
   `362c7b6` are pushed. The installed wheel is stamped
   `362c7b66ff34/test-verify-submission-quote-formatting-against-forgejo`.
