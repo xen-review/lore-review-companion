@@ -277,16 +277,22 @@ def sync_imported_series_revision(
                 and retained.approval_digest
                 != replace(plan, retry_uncertain=False).approval_digest()
             ):
-                candidates = (
-                    replace(
-                        plan,
-                        request={
+                presentations = (
+                    request,
+                    *(
+                        {
                             **request,
                             "body": old_body,
                             "title": f"[v{revision.revision}] {revision.title}",
-                        },
-                    )
-                    for old_body in (previous_body, legacy_body)
+                        }
+                        for old_body in (previous_body, legacy_body)
+                    ),
+                )
+                targets = (target_branch, "master") if target_branch == "staging" else (target_branch,)
+                candidates = (
+                    replace(plan, target_branch=target, request=presentation)
+                    for target in targets
+                    for presentation in presentations
                 )
                 compatible = next(
                     (

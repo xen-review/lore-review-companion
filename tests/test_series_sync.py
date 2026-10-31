@@ -156,7 +156,7 @@ class SeriesSyncTests(unittest.TestCase):
                 "HEAD",
                 self.remote,
                 client,
-                target_branch="main",
+                target_branch=kwargs.pop("target_branch", "main"),
                 ledger=self.ledger,
                 credentials=GitHttpCredentials("mirror-bot", "synthetic-git-token"),
                 **kwargs,
@@ -1115,6 +1115,28 @@ class SeriesSyncTests(unittest.TestCase):
         )
         assert publication
         self.assertEqual((publication.status, publication.pull_index), ("complete", 7))
+
+    def test_imported_publication_replays_historical_target_after_staging_correction(self):
+        self.api.transport = lambda request, timeout: FakeResponse(
+            200,
+            {"version": 1, "repository_id": 1, "importer_id": 5,
+             "importer_login": "mirror-bot", "source_url": "https://lore.kernel.org/xen-devel/",
+             "operations": ["pull"]},
+        )
+        preview = self.imported_sync(target_branch="master")
+        self.ledger.record_series_revision(self.revision)
+        plan = preview.plan
+        self.ledger.begin_publication(
+            self.api.base_url + "repos/o/r", self.revision.series_key, 1,
+            replace(plan, retry_uncertain=False).approval_digest(),
+            plan.base_commit, plan.head_branch, plan.head_commit,
+        )
+        replay = self.imported_sync(target_branch="staging")
+        self.assertEqual(replay.plan.request, preview.plan.request)
+        self.assertEqual(replay.approval_digest, preview.approval_digest)
+        self.assertEqual(replay.plan.head_commit, preview.plan.head_commit)
+        with self.assertRaisesRegex(PublicationConflict, "supported presentation"):
+            self.imported_sync(target_branch="unrelated")
 
     def test_imported_publication_retains_both_previous_presentations(self):
         self.api.transport = lambda request, timeout: FakeResponse(
