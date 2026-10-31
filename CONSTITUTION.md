@@ -53,6 +53,33 @@ their retained review replies. Accept parents before their children, retain
 complete source conversations, and never guess inline anchors. A confirmed PR
 alone is not proof of complete discussion delivery.
 
+- Never defer or silently omit a source comment because inline placement is
+  unavailable or ambiguous. Post an unanchored remark as a standalone PR
+  comment. When quoted text matches multiple accepted comments, select the
+  match with the latest source timestamp strictly before the reply's own
+  timestamp. When disambiguation is needed, unknown times, equal-time ties or
+  no earlier match require a standalone comment, not a guessed anchor.
+- If comment creation fails, the last resort is a PR comment authored by the
+  companion itself, not by the source sender. Include the original source
+  reply link, the attempted API method/path and sanitized request details, and
+  the failure returned. Retain durable, idempotent retry state for both the
+  original effect and the diagnostic comment. API unavailability is not
+  successful delivery: report it as a blocker and retry without duplicating
+  uncertain writes. Never include credentials in diagnostic comments.
+
+## Reporting Contract
+
+- Establish the exact entity before using shorthand such as "candidate",
+  "reply", "incomplete" or "blocked". Distinguish submission revision/PR
+  creation from source-email import, quoted-remark placement and API delivery.
+- Report each specific incomplete or blocked instance, with its title,
+  revision, Message-ID/source link, failed operation and concrete cause. Counts
+  or unnamed aggregate warnings are not an adequate report. Distinguish
+  observed snapshots from current or exhaustive coverage.
+- End every user-facing turn with the remaining blockers and affected
+  instances, or explicitly state that there are no known blockers. Do not
+  claim unfinished, untested, uncommitted or undeployed work is complete.
+
 Use 240 hours as the initial source-lookback default, not a fixed rule. Keep it
 overridable in committed policy and CLI options. Preserve truthful distinctions
 between retained source, archive discovery and verified coverage.
