@@ -131,6 +131,35 @@ No source patches were rewritten and no alternative base was guessed.
 The published PSCI, VPT and nested VMX branches were independently reassembled
 from retained mail; each reconstructed head exactly matched the live PR head.
 
+### Remaining Retained-Source Gaps
+
+These are observations from the scheduled revisions, not a complete audit of
+all mail. Fetching more source messages may change the results.
+
+- OCaml ARM bindings v1: two different cover bodies share a subject, and both
+  patches name an absent parent. The [detailed investigation](design/ocaml-arm-cover-investigation.md)
+  links all four messages and identifies the missing Message-ID.
+- [libxenstat v2 cover](https://lore.kernel.org/xen-devel/1792831909.8631fc262581453bbf619ec5b2062170.1a16d1bed9a000f79f@vates.tech/)
+  declares three patches, but the retained revision contains only its cover.
+  Recover patch indices 1, 2 and 3 before publishing.
+- The rule 11.1 series retains [patch 4/4](https://lore.kernel.org/xen-devel/b30f9a03-ebbc-4ff6-8c3d-c9becbca6406@suse.com/)
+  and a [reply with subject `Ping: [PATCH 4/4]`](https://lore.kernel.org/xen-devel/a8fac9fb-5dd3-4b37-9f5e-f1a4ddd65d79@suse.com/).
+  The parser currently treats the ping as a second patch 4; patches 1 through 3
+  are also absent from the retained revision. Fix ping recognition and recover
+  the missing messages before publishing.
+- [The xenheap singleton](https://lore.kernel.org/xen-devel/ca7cc14c-e860-4626-9d20-820796a91024@suse.com/)
+  has a [reply with subject `Ping: [PATCH]`](https://lore.kernel.org/xen-devel/e802a84b-4528-42ed-9f16-0e503273a5cc@suse.com/).
+  The parser currently treats both as patch 1/1; fix ping recognition before
+  publishing, rather than selecting one by guesswork.
+- The [OCaml ARM bindings v2 cover](https://lore.kernel.org/xen-devel/1793369135.8631fc262581453bbf619ec5b2062170.1a18d215a7f000cae1@vates.tech/)
+  declares v2 and four patches. The retained [patch 1](https://lore.kernel.org/xen-devel/1793369332.8631fc262581453bbf619ec5b2062170.1a18d245cab000cae1@vates.tech/),
+  [patch 2](https://lore.kernel.org/xen-devel/1793369333.8631fc262581453bbf619ec5b2062170.1a18d245f17000cae1@vates.tech/),
+  [patch 3](https://lore.kernel.org/xen-devel/1793369334.8631fc262581453bbf619ec5b2062170.1a18d24619c000cae1@vates.tech/), and
+  [patch 4](https://lore.kernel.org/xen-devel/1793369334.8631fc262581453bbf619ec5b2062170.1a18d24641a000cae1@vates.tech/)
+  each reply to that cover but omit `v2` from their subjects. The importer
+  blocks the inferred v1 grouping and the incomplete v2 grouping until their
+  version can be reconciled without guessing.
+
 ### Quoted Remarks Without A Parent Match
 
 The retired fixture's PR #6 retained complete source-conversation imports for
