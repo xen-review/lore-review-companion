@@ -501,7 +501,7 @@ def assemble_local_series(
             if body.startswith("From: "):
                 _, author = parseaddr(body.split("\n", 1)[0][6:])
                 if not author:
-                    raise B4AssemblyError(
+                    raise B4SourceError(
                         "Source patch contains an invalid in-body author"
                     )
             _, separator, diff = body.partition("diff --git ")
