@@ -90,6 +90,26 @@ class DiscoverSeriesTests(unittest.TestCase):
         self.assertTrue(revision.complete)
         self.assertFalse(revision.conflicts)
 
+    def test_missing_direct_parent_does_not_produce_complete_series(self):
+        cover = message("cover@example.test", "[PATCH 0/1] xen: example")
+        patch_message = message(
+            "patch@example.test", "[PATCH 1/1] xen: example",
+            headers="References: <cover@example.test>\nIn-Reply-To: <missing@example.test>\n",
+        )
+        (revision,) = discover_series((cover, patch_message))
+        self.assertFalse(revision.complete)
+        self.assertIn("patch patch@example.test references missing parent missing@example.test", revision.conflicts)
+        self.assertIn("cover cover@example.test has no directly linked patches", revision.conflicts)
+
+    def test_missing_parent_without_cover_is_not_a_valid_singleton(self):
+        patch_message = message(
+            "patch@example.test", "[PATCH 1/1] xen: example",
+            headers="In-Reply-To: <missing@example.test>\n",
+        )
+        (revision,) = discover_series((patch_message,))
+        self.assertFalse(revision.complete)
+        self.assertIn("patch patch@example.test references missing parent missing@example.test", revision.conflicts)
+
     def test_same_subject_without_shared_thread_roots_stays_separate(self):
         first = message("one@example.test", "[PATCH 1/1] xen: same title")
         second = message("two@example.test", "[PATCH 1/1] xen: same title")

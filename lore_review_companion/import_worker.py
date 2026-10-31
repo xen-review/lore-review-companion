@@ -13,8 +13,9 @@ import stat
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote
 
-from lore_review_companion.forge_api import ForgeAPI
+from lore_review_companion.forge_api import ForgeAPI, ForgeAPIError
 from lore_review_companion.forge_imports import ForgeImportClient
 from lore_review_companion.git_branches import GitHttpCredentials
 from lore_review_companion.import_policy import ImportPolicy, read_import_policy
@@ -160,6 +161,41 @@ def _allowed_replies(messages):
         message for message in messages
         if message.kind == "reply" and message.message_id not in excluded
     )
+
+
+def _message_issue_exists(client, message_id):
+    page = 1
+    while True:
+        issues = client.api.request_json(
+            f"{client.repository_path}/issues",
+            params={"state": "all", "type": "issues", "q": message_id, "limit": 50, "page": page},
+        )
+        if not isinstance(issues, list):
+            raise ValueError("Forgejo returned an invalid issue list")
+        if any(isinstance(issue, dict) and issue.get("title") == message_id for issue in issues):
+            return True
+        if len(issues) < 50:
+            return False
+        page += 1
+
+
+def _ensure_message_issue(client, message_id, reasons):
+    if _message_issue_exists(client, message_id):
+        return False
+    client.capabilities()
+    source = f"{client.source_url}{quote(message_id, safe='@')}/"
+    body = f"Import failed for [source message]({source}).\n\n" + "\n".join(
+        f"- {reason}" for reason in reasons
+    )
+    try:
+        client.api.request_json(
+            f"{client.repository_path}/issues", method="POST",
+            payload={"title": message_id, "body": body},
+        )
+    except ForgeAPIError:
+        if not _message_issue_exists(client, message_id):
+            raise
+    return True
 
 
 def _recover_submission_thread(ledger, policy, seed):
@@ -422,17 +458,14 @@ def _run_import_worker_round(
                     "Worker revision no longer has one unambiguous retained source mapping"
                 )
             current = revisions[0]
-            if not current.complete or current.conflicts:
-                diagnostics.append(
-                    f"Incomplete submission revision; PR creation blocked: {current.title} "
-                    f"[{current.series_key} v{current.revision}]; "
-                    f"source: {policy.source_url}{seed}/; "
-                    f"cause: {'; '.join(current.conflicts) or 'missing submission members'}"
-                )
-                continue
             previous = ledger.publication(
                 destination, current.series_key, current.revision
             )
+            if previous is None and all(
+                _message_issue_exists(reader, message.message_id)
+                for message in current.messages if message.message_id
+            ):
+                continue
             if refresh_source and previous is None:
                 if not _recover_submission_thread(ledger, policy, seed):
                     diagnostics.append(
@@ -445,14 +478,28 @@ def _run_import_worker_round(
                 )
                 if not recovered:
                     continue
-                if len(recovered) != 1 or not recovered[0].complete or recovered[0].conflicts:
-                    diagnostics.append(
-                        f"Source recovery changed submission membership; PR creation blocked: "
-                        f"{current.title} [{current.series_key} v{current.revision}]; "
-                        f"source: {policy.source_url}{seed}/"
-                    )
-                    continue
+                if len(recovered) != 1:
+                    raise ValueError("Recovered submission mapping is ambiguous")
                 current = recovered[0]
+            if not current.complete or current.conflicts:
+                for message in current.messages:
+                    if message.message_id:
+                        _ensure_message_issue(
+                            writer, message.message_id,
+                            current.conflicts or ("Submission members are missing",),
+                        )
+                diagnostics.append(
+                    f"Incomplete submission revision; PR creation blocked: {current.title} "
+                    f"[{current.series_key} v{current.revision}]; "
+                    f"source: {policy.source_url}{seed}/; "
+                    f"cause: {'; '.join(current.conflicts) or 'missing submission members'}"
+                )
+                continue
+            if previous is None and any(
+                _message_issue_exists(reader, message.message_id)
+                for message in current.messages if message.message_id
+            ):
+                continue
             if (
                 previous is not None
                 and previous.status in ("pr_pending", "uncertain")
@@ -483,6 +530,7 @@ def _run_import_worker_round(
                     details[0] if details else type(error).__name__,
                 )
                 files = "; ".join(line for line in details if line.startswith("error:"))
+                _ensure_message_issue(writer, seed, tuple(part for part in (failure, files) if part))
                 diagnostics.append(
                     f"Preflight blocked: PR creation for {current.title} "
                     f"[{current.series_key} v{current.revision}]; "

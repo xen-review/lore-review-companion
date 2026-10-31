@@ -60,6 +60,11 @@ files, source snapshots and nested repositories are not part of these commits.
 
 ## Current Iteration
 
+- Assigned Forgejo issue [#35](https://review-forge.be.free.or.at/xen-review/xen/issues/35)
+  is pending: require the appropriate author Signed-off-by and create a blocking
+  import issue when it is missing; stop PR descriptions at a real diffstat;
+  remove a trailing standalone `---` delimiter. Validate the diffstat pattern
+  against the example in the issue and preserve existing publication replay.
 - Submission quote presentation: companion `bb97957` and real-Forgejo fixture
   `362c7b6` are pushed. The installed wheel is stamped
   `362c7b66ff34/test-verify-submission-quote-formatting-against-forgejo`.

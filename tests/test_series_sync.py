@@ -20,6 +20,8 @@ from lore_review_companion.coordinator import plan_imported_sync
 from lore_review_companion.import_worker import (
     _allowed_replies,
     _ancestry_order,
+    _ensure_message_issue,
+    _message_issue_exists,
     _deliver_reply_batch,
     _recover_submission_thread,
     run_import_worker_round,
@@ -113,6 +115,28 @@ class SeriesSyncTests(unittest.TestCase):
         allowed = message("allowed@example.test", "Re: patch", headers="In-Reply-To: <patch@example.test>\n")
         self.assertEqual(_allowed_replies((grandchild, allowed, child, excluded)), (allowed,))
 
+    def test_import_issues_use_exact_message_id_and_include_closed_issues(self):
+        calls = []
+        existing = {"title": "patch@example.test", "state": "closed"}
+
+        def request(path, **options):
+            calls.append((path, options))
+            if options.get("method") == "POST":
+                return {"number": 1}
+            return [existing, {"title": "other@example.test"}]
+
+        client = SimpleNamespace(api=SimpleNamespace(request_json=request), repository_path="repos/o/r",
+                                 source_url="https://lore.kernel.org/xen-devel/", capabilities=lambda: {})
+        self.assertTrue(_message_issue_exists(client, "patch@example.test"))
+        self.assertFalse(_ensure_message_issue(client, "patch@example.test", ("broken parent",)))
+        self.assertTrue(_ensure_message_issue(client, "new@example.test", ("missing parent other@example.test",)))
+        posts = [options for _, options in calls if options.get("method") == "POST"]
+        self.assertEqual(len(posts), 1)
+        self.assertEqual(posts[0]["payload"]["title"], "new@example.test")
+        self.assertIn("https://lore.kernel.org/xen-devel/new@example.test/", posts[0]["payload"]["body"])
+        self.assertIn("missing parent other@example.test", posts[0]["payload"]["body"])
+        self.assertTrue(all(options.get("params", {}).get("state") == "all" for _, options in calls if "params" in options))
+
     def test_worker_rechecks_exclusion_after_thread_recovery(self):
         policy = {
             "version": 1, "enabled": True, "expires_at": "2099-01-01T00:00:00+00:00",
@@ -134,7 +158,9 @@ class SeriesSyncTests(unittest.TestCase):
             "operations": ["pull", "conversation", "review", "review-reply"],
             "max_inline_lines": 50, "unattended_allowed": True,
         }
-        self.api.transport = lambda _request, _timeout: FakeResponse(200, capabilities)
+        self.api.transport = lambda request, _timeout: FakeResponse(
+            200, [] if "/issues?" in request.full_url else capabilities
+        )
         source = message("patch@example.test", "[PATCH 1/1] xen: change",
                          headers="In-Reply-To: <cover@example.test>\n")
         cover = message("cover@example.test", "[PATCH 0/1] xen: change",
@@ -802,7 +828,11 @@ class SeriesSyncTests(unittest.TestCase):
         }
 
         def transport(request, _timeout):
+            if request.get_method() == "POST" and request.full_url.endswith("/issues"):
+                return FakeResponse(201, {"number": 42})
             self.assertEqual(request.get_method(), "GET")
+            if "/issues?" in request.full_url:
+                return FakeResponse(200, [])
             return FakeResponse(200, capabilities)
 
         self.api.transport = transport
@@ -1705,11 +1735,12 @@ class SeriesSyncTests(unittest.TestCase):
             headers="In-Reply-To: <parent@example.test>\n",
         )
         self.revision = discover_series((child,))[0]
-        with self.assertRaisesRegex(PublicationConflict, "ancestry is incomplete"):
+        with self.assertRaisesRegex(ValueError, "complete, unambiguous"):
             self.sync(ForgePullPublisher(self.api, "o", "r"))
         self.assertEqual(self.branch_writes, [])
         parent = message("parent@example.test", "older discussion")
         self.ledger.record_parsed_message(parent)
+        self.revision = discover_series((child,), available_message_ids=(parent.message_id,))[0]
         preview = self.sync(ForgePullPublisher(self.api, "o", "r"))
         self.assertTrue(preview.pull_request.planned)
 

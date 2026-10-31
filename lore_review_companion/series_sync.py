@@ -484,7 +484,19 @@ def sync_series_revision(
     retry_uncertain: bool = False,
 ) -> SeriesSyncResult:
     """Preview publication or apply the exact independently reviewed plan."""
-    natural = discover_series(revision.messages)
+    available_parents = []
+    if ledger is not None:
+        parents = {
+            parent for message in revision.messages if message.kind == "patch"
+            for parent in (message.in_reply_to or message.references[-1:])
+        }
+        for parent in parents:
+            try:
+                ledger.messages_by_id((parent,))
+            except ValueError:
+                continue
+            available_parents.append(parent)
+    natural = discover_series(revision.messages, available_message_ids=available_parents)
     if not revision.complete or revision.conflicts or len(natural) != 1:
         raise ValueError(
             "Only one complete, unambiguous series revision can be published"

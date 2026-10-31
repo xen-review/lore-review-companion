@@ -57,13 +57,16 @@ def has_invalid_change_id_claims(revision: SeriesRevision) -> bool:
     )
 
 
-def discover_series(messages: Iterable[ParsedMessage]) -> tuple[SeriesRevision, ...]:
+def discover_series(
+    messages: Iterable[ParsedMessage], *, available_message_ids: Iterable[str] = ()
+) -> tuple[SeriesRevision, ...]:
     candidates = [
         message
         for message in messages
         if message.message_id and message.kind in ("cover", "patch")
     ]
     by_id = {message.message_id: message for message in candidates}
+    available_ids = set(available_message_ids) | set(by_id)
     id_counts: dict[str, int] = defaultdict(int)
     for message in candidates:
         id_counts[message.message_id] += 1
@@ -148,6 +151,19 @@ def discover_series(messages: Iterable[ParsedMessage]) -> tuple[SeriesRevision, 
         covers = [message for message in members if message.kind == "cover"]
         patches = [message for message in members if message.kind == "patch"]
         conflicts: list[str] = sorted(ancestry_errors[(root_id, revision)])
+        for patch in patches:
+            parents = patch.in_reply_to or patch.references[-1:]
+            for parent in parents:
+                if parent not in available_ids:
+                    conflicts.append(
+                        f"patch {patch.message_id} references missing parent {parent}"
+                    )
+        for cover in covers:
+            if not any(
+                cover.message_id in (patch.in_reply_to or patch.references[-1:])
+                for patch in patches
+            ):
+                conflicts.append(f"cover {cover.message_id} has no directly linked patches")
         expected_counts = {
             message.series_size
             for message in members

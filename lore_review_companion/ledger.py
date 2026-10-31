@@ -1175,7 +1175,22 @@ class Ledger:
                 for message, row in zip(messages, rows)
             ):
                 raise ValueError("Stored message does not match its Message-ID")
-            revisions = discover_series(messages)
+            parents = tuple(sorted({
+                parent
+                for message in messages if message.kind == "patch"
+                for parent in (message.in_reply_to or message.references[-1:])
+            }))
+            available_parents = set()
+            for offset in range(0, len(parents), 500):
+                subset = parents[offset : offset + 500]
+                placeholders = ",".join("?" for _ in subset)
+                available_parents.update(
+                    row[0] for row in connection.execute(
+                        f"SELECT message_id FROM messages WHERE message_id IN ({placeholders})",
+                        subset,
+                    )
+                )
+            revisions = discover_series(messages, available_message_ids=available_parents)
             if not apply_links:
                 return revisions
             linked = []
