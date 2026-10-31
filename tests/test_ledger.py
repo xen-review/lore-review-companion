@@ -174,12 +174,12 @@ class LedgerTests(unittest.TestCase):
                 999,
             )
 
-    def test_nntp_bootstrap_freezes_148_hours_in_utc_across_restarts(self):
+    def test_nntp_bootstrap_freezes_default_hours_in_utc_across_restarts(self):
         source = "nntps://nntp.lore.kernel.org/org.xenproject.lists.xen-devel"
         started = datetime(2026, 10, 28, 12, tzinfo=timezone(timedelta(hours=1)))
         checkpoint = self.ledger.begin_nntp_bootstrap(source, started)
         self.assertEqual(checkpoint.bootstrap_at, "2026-10-28T11:00:00+00:00")
-        self.assertEqual(checkpoint.cutoff, "2026-10-22T07:00:00+00:00")
+        self.assertEqual(checkpoint.cutoff, "2026-10-18T11:00:00+00:00")
         self.assertEqual(checkpoint.checked_through, checkpoint.cutoff)
         reopened = Ledger(self.ledger.path)
         self.assertEqual(

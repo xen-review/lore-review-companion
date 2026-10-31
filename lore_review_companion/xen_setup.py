@@ -249,7 +249,7 @@ def provision_xen(
         "message_limit": 32,
         "revision_limit": 2,
         "max_inline_lines": min(50, capabilities["max_inline_lines"]),
-        "lookback_hours": 148,
+        "lookback_hours": 240,
         "notifications": "disabled",
         "identity_rule": "isolated-unverified",
         "retry_uncertain": False,

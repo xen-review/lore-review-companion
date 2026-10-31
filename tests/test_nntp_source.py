@@ -114,7 +114,7 @@ class NNTPSourceTests(unittest.TestCase):
 
     def test_discovery_uses_fixed_cutoff_and_overlap_without_duplicates(self):
         first = discover_nntp(self.ledger, client_factory=self.factory)
-        self.assertEqual(first.checkpoint.cutoff, "2026-10-22T07:00:00+00:00")
+        self.assertEqual(first.checkpoint.cutoff, "2026-10-18T11:00:00+00:00")
         self.assertEqual((first.discovered, first.newly_queued), (1, 1))
         self.assertFalse(first.receipt_time_coverage_verified)
         self.assertIn("sender Date", first.timestamp_basis)
@@ -126,7 +126,7 @@ class NNTPSourceTests(unittest.TestCase):
         second = discover_nntp(self.ledger, client_factory=self.factory)
         self.assertEqual(second.newly_queued, 0)
         self.assertEqual(
-            self.since, [datetime(2026, 10, 22, 7), datetime(2026, 10, 28, 10, 59)]
+            self.since, [datetime(2026, 10, 18, 11), datetime(2026, 10, 28, 10, 59)]
         )
         self.assertEqual(second.checkpoint.bootstrap_at, first.checkpoint.bootstrap_at)
         self.assertEqual(
@@ -138,7 +138,7 @@ class NNTPSourceTests(unittest.TestCase):
         """An explicit extension backfills older IDs without rewinding progress."""
         from lore_review_companion.nntp_source import extend_nntp_window
 
-        initial = discover_nntp(self.ledger, client_factory=self.factory)
+        initial = discover_nntp(self.ledger, hours=148, client_factory=self.factory)
         self.discovery_bytes = b"<older@example.test>\r\n<mail@example.test>\r\n"
         self.fail_response = True
         with self.assertRaises(NNTPSourceError):
@@ -170,7 +170,7 @@ class NNTPSourceTests(unittest.TestCase):
         """Extension cannot commit malformed discoveries or stale evidence."""
         from lore_review_companion.nntp_source import extend_nntp_window
 
-        initial = discover_nntp(self.ledger, client_factory=self.factory)
+        initial = discover_nntp(self.ledger, hours=148, client_factory=self.factory)
         self.discovery_bytes = b"not-an-id\r\n"
         with self.assertRaises(ValueError):
             extend_nntp_window(self.ledger, hours=240, client_factory=self.factory)
@@ -179,7 +179,7 @@ class NNTPSourceTests(unittest.TestCase):
         )
         self.now += timedelta(hours=1)
         self.discovery_bytes = b"<new@example.test>\r\n"
-        current = discover_nntp(self.ledger, client_factory=self.factory)
+        current = discover_nntp(self.ledger, hours=148, client_factory=self.factory)
         with self.assertRaises(ArchiveCheckpointConflict):
             self.ledger.extend_nntp_bootstrap(
                 initial.checkpoint, 240, ("older@example.test",)
@@ -196,7 +196,7 @@ class NNTPSourceTests(unittest.TestCase):
         """The extension command forwards a selected new window to discovery."""
         from lore_review_companion.nntp_source import extend_nntp_window
 
-        discover_nntp(self.ledger, client_factory=self.factory)
+        discover_nntp(self.ledger, hours=148, client_factory=self.factory)
 
         def extend(ledger, **options):
             """Use the synthetic NNTP server for the CLI test."""
@@ -224,8 +224,8 @@ class NNTPSourceTests(unittest.TestCase):
         self,
     ):
         cases = (
-            (b"Date: Thu, 22 Oct 2026 07:00:00 +0000\r\n", "inside", "date"),
-            (b"Date: Thu, 22 Oct 2026 06:59:59 +0000\r\n", "before", "date"),
+            (b"Date: Sun, 18 Oct 2026 11:00:00 +0000\r\n", "inside", "date"),
+            (b"Date: Sun, 18 Oct 2026 10:59:59 +0000\r\n", "before", "date"),
             (
                 b"Received: from relay; Wed, 28 Oct 2026 13:00:00 +0200\r\n",
                 "inside",
@@ -361,7 +361,7 @@ class NNTPSourceTests(unittest.TestCase):
         self.assertEqual(result, 0)
         summary = json.loads(output.getvalue())
         self.assertEqual(summary["newly_queued"], 1)
-        self.assertEqual(summary["checkpoint"]["window_hours"], 148)
+        self.assertEqual(summary["checkpoint"]["window_hours"], 240)
 
     def test_configured_cli_lookback_is_durable_and_cannot_silently_change(self):
         def discover(ledger, **options):

@@ -37,9 +37,9 @@ running service is deterministic software, not an LLM agent.
   from the length of the reviewer's remark.
 - Import reviews as non-voting `COMMENT` reviews, never approvals or requested
   changes inferred from prose or trailers.
-- Start with a configurable recent window, preserving the 148-hour default as
-  an initial guideline rather than a coverage limit. Support explicit increases,
-  including to 240 hours or further within the supported range, by backfilling
+- Start with a configurable recent window, using 240 hours as the default,
+  not a fixed rule or coverage limit. Override it with `--lookback-hours` or
+  the worker policy's `lookback_hours`. Support explicit increases by backfilling
   the newly included period without resetting forward cursors or discarding
   mail. Retrieve older dependencies or selected threads on demand.
 - Support incoming email to web reviews first. Draft export, reverse sync, and

@@ -33,7 +33,7 @@ from lore_review_companion.public_inbox import (
 DEFAULT_HOST = "nntp.lore.kernel.org"
 DEFAULT_GROUP = "org.xenproject.lists.xen-devel"
 DEFAULT_INBOX = "https://lore.kernel.org/xen-devel/"
-DEFAULT_LOOKBACK_HOURS = 148
+DEFAULT_LOOKBACK_HOURS = 240
 MAX_DISCOVERY_BYTES = 8 * 1024 * 1024
 MAX_ARTICLE_BYTES = 8 * 1024 * 1024
 MAX_BATCH_BYTES = 32 * 1024 * 1024

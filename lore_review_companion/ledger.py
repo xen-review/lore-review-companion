@@ -2494,7 +2494,7 @@ class Ledger:
             )
 
     def begin_nntp_bootstrap(
-        self, source: str, now: datetime, *, hours: int = 148
+        self, source: str, now: datetime, *, hours: int = 240
     ) -> NNTPCheckpoint:
         if (
             not isinstance(source, str)
