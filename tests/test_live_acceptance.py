@@ -143,6 +143,7 @@ class LiveAcceptanceTests(unittest.TestCase):
             (revision,) = discover_series(parse_mbox(mailbox_path))
             self.assertTrue(revision.complete)
             patch_message = revision.messages[0]
+            assert patch_message.message_id is not None
             diff = git(
                 "-C", str(checkout), "diff", "--no-ext-diff", f"{base}..HEAD"
             ).decode()
@@ -536,6 +537,7 @@ class LiveAcceptanceTests(unittest.TestCase):
                 )
             )
             (second_patch,) = parse_mbox(second_mailbox)
+            assert second_patch.message_id is not None
             ledger.record_parsed_message(second_patch)
             (unlinked,) = ledger.discover_related_series(second_patch.message_id)
             self.assertNotEqual(unlinked.series_key, revision.series_key)
@@ -776,6 +778,7 @@ class ImportedWorkflowAcceptanceTests(unittest.TestCase):
                     "Please clarify the new context.\nThe name needs an explanation.\n\n~Reviewer\n"
                 ).encode()
             )
+            assert root.message_id is not None
             ledger.record_parsed_message(root)
             queued = queue_imported_replies(
                 ledger,
@@ -1223,6 +1226,7 @@ class ImportedWorkflowAcceptanceTests(unittest.TestCase):
                 )
             )
             (second_revision,) = discover_series(parse_mbox(mailbox_path))
+            assert second_revision.messages[0].message_id is not None
             for message in second_revision.messages:
                 ledger.record_parsed_message(message)
             linking = [

@@ -176,6 +176,7 @@ class SeriesSyncTests(unittest.TestCase):
         client = ForgeImportClient(
             self.api, "o", "r", source_url="https://lore.kernel.org/xen-devel/"
         )
+        assert self.revision.messages[0].message_id is not None
         arguments: ImportedSyncOptions = {
             "series_seed": self.revision.messages[0].message_id,
             "target_branch": "main",
@@ -190,6 +191,7 @@ class SeriesSyncTests(unittest.TestCase):
         self.assertFalse(result.remote_writes or result.ledger_writes)
         self.assertEqual(self.transport.requests, [])
         incomplete = message("partial@example.test", "[PATCH 1/2] xen: partial")
+        assert incomplete.message_id is not None
         self.ledger.record_parsed_message(incomplete)
         arguments["series_seed"] = incomplete.message_id
         result = plan_imported_sync(
@@ -222,6 +224,7 @@ class SeriesSyncTests(unittest.TestCase):
             "lore_review_companion.coordinator.sync_imported_series_revision",
             side_effect=preview,
         ):
+            assert self.revision.messages[0].message_id is not None
             result = plan_imported_sync(
                 self.ledger,
                 client,
@@ -271,6 +274,7 @@ class SeriesSyncTests(unittest.TestCase):
             ) as numbers,
             patch("lore_review_companion.coordinator.fetch_nntp", side_effect=fetch),
         ):
+            assert self.revision.messages[0].message_id is not None
             result = plan_imported_sync(
                 self.ledger,
                 client,
@@ -302,6 +306,7 @@ class SeriesSyncTests(unittest.TestCase):
         client = ForgeImportClient(
             self.api, "o", "r", source_url="https://lore.kernel.org/xen-devel/"
         )
+        assert self.revision.messages[0].message_id is not None
         options: ImportedSyncOptions = {
             "series_seed": self.revision.messages[0].message_id,
             "target_branch": "main",

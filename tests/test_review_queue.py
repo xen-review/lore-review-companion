@@ -113,6 +113,7 @@ class ReviewQueueTests(unittest.TestCase):
             b"In-Reply-To: <patch@example.test>\n\n"
             b"First point.\nSecond point.\n"
         )
+        assert parent.message_id is not None
         arguments: PatchArguments = {
             "patch_commits": (PatchCommit("patch@example.test", "b" * 40, "a" * 40),),
             "patch_diffs": {},
@@ -291,6 +292,7 @@ class ReviewQueueTests(unittest.TestCase):
             b"Subject: [PATCH 1/1] change\n\nCommit explanation.\n"
             b"diff --git a/file.c b/file.c\n+new\n"
         )
+        assert parent.message_id is not None
         (revision,) = discover_series((parent,))
         self.ledger.record_parsed_message(parent)
         self.ledger.record_series_revision(revision)
@@ -398,6 +400,8 @@ class ReviewQueueTests(unittest.TestCase):
             b"From: Author <author@example.test>\nMessage-ID: <second@example.test>\n"
             b"Subject: [PATCH 2/2] xen: second\nIn-Reply-To: <first@example.test>\n\nSecond patch\n"
         )
+        assert first.message_id is not None
+        assert second.message_id is not None
         (revision,) = discover_series((first, second))
         self.assertTrue(revision.complete)
         for source in revision.messages:
@@ -417,6 +421,7 @@ class ReviewQueueTests(unittest.TestCase):
             b"> --- a/src/sample.c\n> +++ b/src/sample.c\n"
             b"> +new_call();\n> +duplicate();\nPlease change both lines.\n"
         )
+        assert reply.message_id is not None
         (match,) = match_thread_replies(
             (*revision.messages, reply), (revision,)
         ).matched
@@ -730,6 +735,7 @@ class ReviewQueueTests(unittest.TestCase):
             b"First line of review.\nSecond line of review.\nLast line of review.\n\n~Reviewer\n\n"
             b"> +duplicate();\nAnother parent remark.\nA final sentence.\n"
         )
+        assert parent.message_id is not None
         commits = (PatchCommit("patch@example.test", "b" * 40, "a" * 40),)
         snapshot = {
             "head_commit": "a" * 40,
@@ -949,6 +955,7 @@ class ReviewQueueTests(unittest.TestCase):
             source_url="https://lore.kernel.org/xen-devel/",
         )
         source = self.match.message
+        assert source.message_id is not None
         self.ledger.record_parsed_message(source)
         destination = self.api.base_url + client.repository_path + "#7"
         effect_key = "imported-full-message-v1"
@@ -1037,6 +1044,7 @@ class ReviewQueueTests(unittest.TestCase):
         self.assertEqual(queue.call_args.args[1].max_inline_lines, 50)
 
     def test_cli_import_queue_and_delivery_use_protected_scoped_client(self):
+        assert self.match.message.message_id is not None
         self.ledger.record_parsed_message(self.match.message)
         token_path = Path(self.tempdir.name) / "token"
         token_path.write_text("synthetic-token")
@@ -1099,6 +1107,7 @@ class ReviewQueueTests(unittest.TestCase):
             b"> +first();\n> @@ -9,1 +10,3 @@\n>  later\n"
             b"> +log_start();\n> +log_finish();\nSecond remark.\n"
         )
+        assert reply.message_id is not None
         match = replace(self.match, message=reply)
         client = ForgeImportClient(
             self.api,
@@ -1846,6 +1855,7 @@ class ReviewQueueTests(unittest.TestCase):
         self.assertEqual(self.ledger.pending(), [])
 
     def test_legacy_migration_requires_mapping_review_and_untouched_state(self):
+        assert self.match.message.message_id is not None
         self.ledger.record_parsed_message(self.match.message)
         legacy = "xen-project/xen#7"
         delivery_id = self.ledger.enqueue(
@@ -1903,6 +1913,7 @@ class ReviewQueueTests(unittest.TestCase):
         )
 
     def test_old_queued_reply_without_thread_provenance_is_not_delivered(self):
+        assert self.match.message.message_id is not None
         self.ledger.record_parsed_message(self.match.message)
         destination = self.api.base_url + self.publisher.repository_path + "#7"
         delivery_id = self.ledger.enqueue(
@@ -1975,6 +1986,7 @@ class ReviewQueueTests(unittest.TestCase):
         plan_comment_delivery(self.ledger, self.publisher, 7, "ISSUE_COMMENT")
 
     def test_legacy_migration_rejects_changed_pull_uncertain_rows_and_collisions(self):
+        assert self.match.message.message_id is not None
         self.ledger.record_parsed_message(self.match.message)
         legacy = "xen-project/xen#7"
         destination = self.api.base_url + self.publisher.repository_path + "#7"
@@ -2092,6 +2104,7 @@ class ReviewQueueTests(unittest.TestCase):
         self.assertEqual(self.ledger.pending(), [])
 
     def test_quarantined_reply_cannot_be_queued_on_original_replay(self):
+        assert self.match.message.message_id is not None
         self.ledger.record_parsed_message(self.match.message)
         with self.assertRaises(MessageConflictError):
             self.ledger.record_message(
@@ -2216,6 +2229,7 @@ class ReviewQueueTests(unittest.TestCase):
         "lore_review_companion.review_queue.extract_quoted_comments", return_value=()
     )
     def test_cli_queues_replies_selected_from_the_archive_ledger(self, _extract):
+        assert self.match.message.message_id is not None
         self.ledger.record_parsed_message(self.match.message)
         arguments = [
             "queue-comments",

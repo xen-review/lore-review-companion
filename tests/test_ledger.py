@@ -345,6 +345,8 @@ class LedgerTests(unittest.TestCase):
         second = parse_message(
             b"Message-ID: <patch-2@example.test>\nSubject: [PATCH 2/2] second\n\nPatch two.\n"
         )
+        assert first.message_id is not None
+        assert second.message_id is not None
         self.ledger.record_parsed_message(first)
         self.ledger.record_parsed_message(second)
         page = self.ledger.list_messages(kind="patch", limit=1)
@@ -380,6 +382,7 @@ class LedgerTests(unittest.TestCase):
             b"From: Author <author@example.test>\nMessage-ID: <v2@example.test>\n"
             b"Subject: [PATCH v2 1/1] change\n\nchange-id: stable-change\n"
         )
+        assert second.message_id is not None
         for item in (first, second):
             self.ledger.record_parsed_message(item)
         canonical = discover_series((first,))[0]
@@ -415,6 +418,7 @@ class LedgerTests(unittest.TestCase):
         competing = parse_message(
             b"Message-ID: <competing@example.test>\nSubject: [PATCH v2 1/1] other\n\nchange-id: stable-change\n"
         )
+        assert competing.message_id is not None
         self.ledger.record_parsed_message(competing)
         with self.assertRaisesRegex(PublicationConflict, "already linked"):
             self.ledger.plan_revision_link(
@@ -441,6 +445,7 @@ class LedgerTests(unittest.TestCase):
             b"Message-ID: <second@example.test>\nSubject: [PATCH v2 1/1] change\n\n"
             b"change-id: stable\nchange-id: bad value\n"
         )
+        assert second.message_id is not None
         for item in (first, second):
             self.ledger.record_parsed_message(item)
         with self.assertRaises(MessageConflictError):
@@ -477,6 +482,7 @@ class LedgerTests(unittest.TestCase):
                 f"Message-ID: <candidate-{index}@example.test>\nSubject: [PATCH v{index} 1/1] change\n\n".encode()
                 + body
             )
+            assert candidate.message_id is not None
             self.ledger.record_parsed_message(candidate)
             with self.subTest(body=body), self.assertRaises(PublicationConflict):
                 self.ledger.plan_revision_link(
@@ -504,6 +510,7 @@ class LedgerTests(unittest.TestCase):
         assigned = parse_message(
             b"Message-ID: <assigned@example.test>\nSubject: [PATCH v5 1/1] change\n\nchange-id: stable\n"
         )
+        assert assigned.message_id is not None
         self.ledger.record_parsed_message(assigned)
         self.ledger.record_series_revision(discover_series((assigned,))[0])
         with self.assertRaisesRegex(PublicationConflict, "already assigned"):
@@ -518,6 +525,7 @@ class LedgerTests(unittest.TestCase):
         second = parse_message(
             b"Message-ID: <v2@example.test>\nSubject: [PATCH v2 1/1] change\n\nchange-id: different\n"
         )
+        assert second.message_id is not None
         for item in (first, second):
             self.ledger.record_parsed_message(item)
         canonical = discover_series((first,))[0]
@@ -593,6 +601,7 @@ class LedgerTests(unittest.TestCase):
                 f"Message-ID: <candidate-{index}@example.test>\nSubject: [PATCH v2 1/1] change\n\n".encode()
                 + second_body
             )
+            assert second.message_id is not None
             for item in (first, second):
                 self.ledger.record_parsed_message(item)
             canonical = discover_series((first,))[0]
@@ -630,6 +639,7 @@ class LedgerTests(unittest.TestCase):
         second = parse_message(
             b"Message-ID: <v2@example.test>\nSubject: [PATCH v2 1/1] change\n\nchange-id: stable\n"
         )
+        assert second.message_id is not None
         for item in (first, second):
             self.ledger.record_parsed_message(item)
         canonical = discover_series((first,))[0]
@@ -1026,6 +1036,7 @@ class LedgerTests(unittest.TestCase):
             b"Message-ID: <parent@example.test>\nSubject: older discussion\n"
             b"References: <grandparent@example.test>\n\nParent.\n"
         )
+        assert parent.message_id is not None
         grandparent = parse_message(
             b"Message-ID: <grandparent@example.test>\n\nGrandparent.\n"
         )
@@ -1066,6 +1077,7 @@ class LedgerTests(unittest.TestCase):
                 item = parse_message(
                     f"Message-ID: <node-{index}@example.test>\nIn-Reply-To: <{parent}>\n\nBody.\n".encode()
                 )
+                assert item.message_id is not None
                 connection.execute(
                     "INSERT INTO messages (message_id, sha256, raw_message, metadata_json, received_at) VALUES (?, ?, ?, ?, ?)",
                     (
@@ -1098,6 +1110,8 @@ class LedgerTests(unittest.TestCase):
         unrelated = parse_message(
             b"Message-ID: <other@example.test>\nSubject: [PATCH 1/1] first\n\nPatch.\n"
         )
+        assert first.message_id is not None
+        assert second.message_id is not None
         self.ledger.record_parsed_message(second)
         self.assertFalse(
             self.ledger.discover_related_series(second.message_id)[0].complete
@@ -1127,6 +1141,7 @@ class LedgerTests(unittest.TestCase):
         cover = parse_message(
             b"Message-ID: <cover@example.test>\nSubject: [PATCH 0/1] series\n\nCover.\n"
         )
+        assert cover.message_id is not None
         self.ledger.record_parsed_message(cover)
         with self.ledger._connection() as connection:
             for index in range(1, 1051):
@@ -1134,6 +1149,7 @@ class LedgerTests(unittest.TestCase):
                     f"Message-ID: <patch-{index:04}@example.test>\nSubject: [PATCH v{index} 1/1] series\n"
                     "References: <cover@example.test>\n\nPatch.\n".encode()
                 )
+                assert item.message_id is not None
                 connection.execute(
                     "INSERT INTO messages (message_id, sha256, raw_message, metadata_json, received_at) VALUES (?, ?, ?, ?, ?)",
                     (
@@ -1163,6 +1179,7 @@ class LedgerTests(unittest.TestCase):
         patch = parse_message(
             b"Message-ID: <patch@example.test>\nSubject: [PATCH 1/1] series\n\nPatch.\n"
         )
+        assert patch.message_id is not None
         self.ledger.record_parsed_message(patch)
         with self.ledger._connection() as connection:
             for index in range(1050):
@@ -1170,6 +1187,7 @@ class LedgerTests(unittest.TestCase):
                     f"Message-ID: <reply-{index:04}@example.test>\nSubject: Re: series\n"
                     "In-Reply-To: <patch@example.test>\n\nReview.\n".encode()
                 )
+                assert item.message_id is not None
                 connection.execute(
                     "INSERT INTO messages (message_id, sha256, raw_message, metadata_json, received_at) VALUES (?, ?, ?, ?, ?)",
                     (
