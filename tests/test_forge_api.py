@@ -99,7 +99,7 @@ class GiteaAPITests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 client.lookup_operation(key)
 
-    def test_unattended_policy_is_private_identity_bound_and_rechecked_before_writes(
+    def test_unattended_policy_is_public_identity_bound_and_rechecked_before_writes(
         self,
     ):
         policy_value = {
@@ -195,9 +195,13 @@ class GiteaAPITests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "revoked"):
                 read_import_policy(link)
             path.chmod(0o644)
-            with self.assertRaisesRegex(ValueError, "private"):
+            self.assertEqual(read_import_policy(path), policy)
+            path.write_text(json.dumps({**policy_value, "expires_at": None}))
+            self.assertIsNone(read_import_policy(path).expires_at)
+            path.chmod(0o666)
+            with self.assertRaisesRegex(ValueError, "write permission"):
                 read_import_policy(path)
-            path.chmod(0o600)
+            path.chmod(0o644)
             path.unlink()
             with self.assertRaisesRegex(ValueError, "revoked"):
                 client.import_conversation(2, {"operation_key": "preview"})
@@ -378,11 +382,11 @@ class GiteaAPITests(unittest.TestCase):
                         "comment_id": 20,
                         "review_id": 0 if ordinary_reply else 21,
                         "code_comment_ids": [] if is_reply else inline_ids,
-                        "type": "pull"
-                        if is_pull
-                        else "review-reply"
-                        if is_reply
-                        else "review",
+                        "type": (
+                            "pull"
+                            if is_pull
+                            else "review-reply" if is_reply else "review"
+                        ),
                         "operation_key": sent["operation_key"],
                         "message_id": sent["message_id"],
                         "message_sha256": sent["message_sha256"],

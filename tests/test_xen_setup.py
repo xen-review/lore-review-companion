@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 
 from lore_review_companion.forge_api import ForgeAPI
 from lore_review_companion.nntp_source import NNTPFetch, NNTPThreadDiscovery
+from lore_review_companion.import_policy import DEFAULT_POLICY_PATH
 from lore_review_companion.xen_setup import main, provision_xen
 from lore_review_companion.xen_import import main as import_main
 from test_forge_comments import FakeResponse
@@ -265,6 +266,19 @@ class XenSetupTests(unittest.TestCase):
             patch("lore_review_companion.xen_setup.ForgeAPI", side_effect=factory),
         ):
             root = Path(temporary)
+            public_policy = json.loads(DEFAULT_POLICY_PATH.read_text())
+            public_policy.update(
+                {
+                    "api_url": "https://forge.test/api/v1/",
+                    "repository_id": 20,
+                    "importer_id": 5,
+                    "base_commit": "a" * 40,
+                    "git_remote": "https://forge.test/xen-review/xen.git",
+                }
+            )
+            policy_path = root / "public-policy.json"
+            policy_path.write_text(json.dumps(public_policy))
+            policy_path.chmod(0o644)
             policy = provision_xen(
                 ForgeAPI(
                     "https://forge.test/api/v1",
@@ -275,6 +289,7 @@ class XenSetupTests(unittest.TestCase):
                 root / "state",
                 email="operator@example.test",
                 enable_policy=True,
+                policy_path=policy_path,
             )
             self.assertTrue(policy["enabled"])
             self.assertEqual(policy["base_commit"], "a" * 40)
@@ -282,9 +297,10 @@ class XenSetupTests(unittest.TestCase):
                 "initial-password",
                 "import-token",
                 "git-token",
-                "import-policy.json",
             ):
                 self.assertEqual((root / "config" / name).stat().st_mode & 0o777, 0o600)
+            self.assertFalse((root / "config" / "import-policy.json").exists())
+            self.assertEqual(json.loads(policy_path.read_text()), public_policy)
         (migration,) = [
             body for method, path, body in requests if path == "repos/migrate"
         ]

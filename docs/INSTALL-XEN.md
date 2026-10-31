@@ -2,6 +2,10 @@
 
 # Install And Bootstrap Xen Reviews
 
+Read [../CONSTITUTION.md](../CONSTITUTION.md) first. This is early pre-alpha,
+not production. The development fork and runtime data are disposable. Follow
+[DEVELOPMENT.md](DEVELOPMENT.md) for the current committed-policy deployment.
+
 This example creates a read-only upstream mirror and a separate writable review
 fork, then imports recent `xen-devel` submissions and discussion from lore. Each
 complete revision becomes an immutable PR authored by its mapped submitting
@@ -85,8 +89,10 @@ Add `--apply` to provision. The script performs these API operations:
 5. Creates **separate repository-selected** API-import and Git tokens, writes
    them mode 0600, checks their effective permissions, clones a bare assembly
    repository and records the current full mirror commit as the trusted base.
-6. Writes a private seven-day policy with budgets of 32 messages and two
-  revisions per round, a configurable 240-hour initial lookback and uncertain retry disabled.
+6. Validates the committed public Xen policy against the bootstrap identities.
+  It never creates a private policy copy. The default profile has a configurable
+  240-hour lookback, same-key uncertain retries enabled and no arbitrary expiry.
+  For a different deployment, commit a profile and pass `--policy-file`.
 
 Owners membership grants the integration account organization-wide authority.
 The generated runtime tokens are still restricted to `xen-review/xen`; do not
@@ -102,7 +108,7 @@ that named token in Forgejo before regenerating it. No history is force-pushed.
 
 ## Bootstrap Recent Submissions
 
-On a **fresh deployment**, authorize the expiring policy and run a finite number
+On a **fresh development deployment**, use the committed policy and run a finite number
 of rounds in the same provisioning invocation:
 
 ```sh
@@ -120,22 +126,21 @@ PRs with all retained replies imported automatically in parent-first order.
 Source recovery defers new publication until discovered mail is retained. Eight
 rounds are a bounded start, **not a promise of full thread/window coverage**.
 
-Existing policies are deliberately preserved on rerun, including disabled state,
-expiry and trusted base. If you first provisioned without `--enable-policy`,
-review and explicitly edit the private policy to enable it before running the
-worker. Do not silently renew an expired policy. A changed policy digest requires
-reviewed scheduling-state reset; never erase the authoritative mail ledger.
+Policies must be edited, committed and pushed in the repository, then installed
+with the package. Setup does not independently change policy. A different
+bootstrap repository/importer ID must be reflected in the committed profile.
+Changed policy digests automatically reconcile scheduling cursors while retaining
+effect enrollment. There is no private policy or persistent incident latch.
 The 240-hour default is a variable, not a fixed rule or permanent coverage
 limit. Override `lookback_hours` in policy or `--lookback-hours` for discovery.
 Use `extend-nntp-window --lookback-hours 336` as documented in the README
-to backfill an existing checkpoint. Reconcile the worker policy and its recorded
-policy digest separately before resuming; do not bypass an incident latch.
+to backfill an existing checkpoint. The installed public profile is the only
+runtime policy authority; restart normally after updating it.
 
 Run additional bounded rounds using only the generated runtime tokens:
 
 ```sh
 .venv/bin/lore-review-companion run-import-worker \
-  --policy-file "$HOME/.config/lore-review-companion/import-policy.json" \
   --ledger "$HOME/.local/state/lore-review-companion/mail.sqlite3" \
   --repository "$HOME/.local/state/lore-review-companion/xen.git" \
   --state "$HOME/.local/state/lore-review-companion/worker.sqlite3" \
@@ -159,7 +164,7 @@ normal account administration. Do not publish it with setup output.
 ## Import One Thread On Demand
 
 `contrib/import-xen-thread.py` (console equivalent `lore-review-import-xen`)
-replaces ad hoc operator Python snippets. It uses the private deployment config
+replaces ad hoc operator Python snippets. It uses the committed public profile
 and separate runtime tokens, but **manual writes are authorized individually by
 digest**, not by enabling a timer. Use this for bootstrap inspection and testing
 only in the destination you intend to modify. Automated tests use fake APIs or
@@ -177,9 +182,8 @@ Initialize an NNTP checkpoint as described in the README. `recover` queues and
 fetches the exact `--seed` Message-ID first, verifies it against the configured
 group, then records bounded Lore thread candidates and runs one bounded queue
 fetch. It changes local ingestion state only; it does not create or edit PRs.
-The worker incident latch blocks this command too: inspect durable publication
-and outbox state before any explicit recovery. Upstream HTTPS unavailability
-remains an explicit blocker.
+No incident marker blocks this command. Upstream HTTPS unavailability remains
+an explicit per-attempt error that can be retried.
 
 The plan runs against a private ledger snapshot and prints the full publication
 request and its `approval_digest`. Inspect it, then supply that exact digest:
@@ -211,12 +215,12 @@ directory, verify with `systemd-analyze --user verify`, reload the user manager,
 and enable the timer explicitly. User lingering may require administrator setup.
 
 Stop scheduling with `systemctl --user disable --now lore-review-companion.timer`
-and revoke the source grant to stop future writes. A worker incident latch is
-intentional: inspect uncertain publication/outbox state before clearing it. Back
-up `mail.sqlite3` and `worker.sqlite3` together with the worker idle/locked; use
-SQLite's backup API, not a copy of a live database file. Also back up Forgejo's
-configuration, database and repository storage. Keep off-host backups, monitor
-disk space and policy expiry, and retain raw-mail/conflict evidence.
+and revoke the source grant to stop future writes. There is no persistent
+incident latch: a later invocation retries normally with retained identity and
+uncertain-write checks. Scheduling state reconciles with committed policy.
+For optional diagnostics, use SQLite's backup API rather than copying an active
+database. Full rebuilds of the designated development fork/state are permitted;
+see the constitution and development guide.
 
 ## Developer Checks
 

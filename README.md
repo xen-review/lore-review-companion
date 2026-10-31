@@ -1,5 +1,9 @@
 # Lore Review Companion
 
+**Read first:** [CONSTITUTION.md](CONSTITUTION.md). This is a disposable early
+pre-alpha experiment, with no production deployment or users. Policies and
+deployment instructions are public committed source; only credentials are secret.
+
 Mirror mailing-list patch series and review discussions into a dedicated
 Forgejo repository, starting with `xen-devel` on lore.kernel.org. The companion
 is deterministic Python software; it does not require a runtime LLM.
@@ -19,7 +23,7 @@ bounded read-only coordination and explicitly authorized unattended rounds are a
 Native exact multiline quote matching and versioned range delivery pass the
 isolated real-Forgejo/b4 workflow, including V1/V2, late replies and bounded
 worker replay. Initial real Xen PRs and reviews are published, and the bounded
-production worker runs under a separately authorized expiring policy. Read the
+development worker uses the committed public Xen profile, without an incident latch. Read the
 [implementation plan](docs/design/PLAN.md) and [task ledger](docs/design/LEDGER.md)
 for scope, current results, and next steps.
 
@@ -115,8 +119,8 @@ The extension scans from the earlier cutoff and atomically queues the returned
 IDs without resetting the forward cursor or removing retained data. A failed
 scan leaves the checkpoint unchanged. The supported range is 1 through 8760
 hours; only increases are accepted. Normal discovery still refuses a different
-duration, so updating an unattended worker also requires a separately reviewed
-policy and scheduling-state reconciliation. Do not bypass an incident latch.
+duration; commit policy changes before deploying them. Scheduling cursors
+reconcile automatically without dropping effect enrollment. There is no latch.
 Discovery uses server index time, which may depend on sender Date, and does not
 establish verified receipt-time or complete thread coverage.
 
@@ -349,7 +353,7 @@ PR preview does not invent an index to plan replies against.
 ## Unattended Policy
 
 Unattended mode requires two independent opt-ins: a repository administrator's
-review import grant with `allow_unattended: true`, and a private, expiring local
+review import grant with `allow_unattended: true`, and the committed public
 policy. Changing an existing grant requires explicit revocation and regrant.
 The server accepts unattended grants only for review-only repositories: Actions,
 active repository/inherited/system hooks, repository/owner secrets, merge/manual
@@ -359,12 +363,15 @@ and the server rechecks settings, grant, scope and permissions for each request.
 The worker never changes these repository settings itself.
 
 [contrib/import-policy.example.json](contrib/import-policy.example.json) is a
-disabled, non-operational example. The actual mode-0600 policy must be owned by
-the running user, bind numeric repository/importer IDs, exact API/Git/lore/NNTP
+disabled, non-operational example. The actual policy is
+[lore_review_companion/policies/xen-development.json](lore_review_companion/policies/xen-development.json),
+included in the installed package. It binds numeric repository/importer IDs, exact API/Git/lore/NNTP
 destinations, a full trusted base commit, identity/notification rules and bounded
 budgets. No tokens belong in it. New revisions use the pinned policy base; old
 ones keep their recorded base. A changed base or identity needs a newly reviewed
-policy, not a silent switch. Expiry, deletion, disabling, identity/capability
+committed policy, not an untracked override. `expires_at: null` disables expiry
+for this pre-alpha fixture; explicit future expiries remain supported.
+Deletion, disabling, identity/capability
 drift or grant revocation prevents further writes. Checks run before Git ref
 publication as well as API writes. Direct administrative changes during an
 in-flight Git push are not an atomic transaction with HTTP authorization;
@@ -372,7 +379,7 @@ keep review-only settings fixed while scheduling work.
 
 ```sh
 .venv/bin/lore-review-companion run-import-worker \
-  --policy-file /private/import-policy.json --ledger state.sqlite3 \
+  --ledger state.sqlite3 \
   --repository /path/to/xen --state worker.sqlite3 \
   --token-file /private/import-token --git-token-file /private/git-token
 ```
@@ -405,14 +412,12 @@ revisions can proceed without changing the trusted base or guessing an anchor.
 Failures involving a retained publication, source integrity, authorization or
 uncertain writes still stop the round.
 
-Stopping failures create a private `worker.sqlite3.incident` latch and return nonzero.
-Subsequent timer rounds stop before doing work. Inspect the ledger and original
-exception first; resolve uncertainty with explicit same-operation replay, or
-authorize bounded same-key retry in policy. Never create a new operation key to
-bypass uncertainty. Then explicitly remove only the incident marker. A policy
-digest change also requires reviewing/resetting the scheduling database; do not
-delete the mail ledger or its publication/outbox history. Restore the worker
-database along with the ledger to retain enrollment across restarts.
+Failures return nonzero with diagnostic evidence; they never create or enforce
+an incident latch. The next round can try again. Old `.incident` files are
+ignored. Same-key uncertain-write reconciliation remains enforced; the committed
+development profile enables it. Never invent a new key to bypass uncertainty.
+Policy digest changes automatically rewind scheduling cursors while preserving
+enrolled effects. Mail from a different ledger is never silently mixed in.
 
 Git refs and SQL cannot commit atomically. A crash after a pull ref is created
 but before SQL commit may leave a collision. Stop and inspect the exact ref,
@@ -425,21 +430,19 @@ and [contrib/lore-review-companion.timer](contrib/lore-review-companion.timer)
 are user-level templates, not installed services. Review paths, precreate private
 state/config directories and provision read-only local source access before
 installation. They request no privilege escalation or SSH-key changes. A failed
-round is not automatically restarted; periodic invocations still honor the latch.
+round is retried by the next periodic invocation, without a persistent latch.
 
 [contrib/forgejo-review.service](contrib/forgejo-review.service) is the matching
 user-level server unit for the operator's checkout layout. Service examples must
 be reviewed for each deployment; they are not implicitly activated by pip.
 
-## Production Upgrade And Recovery
+## Development Deployment And Rebuilds
 
-Identify the exact process, binary, configuration, database and all storage
-paths first. Check space and current health. Preserve the running executable
-before replacing it, then stop only that instance and take a private cold
-backup of configuration and all data/repositories. Retain companion ledger and
-worker state together if they already exist. Validate archive integrity and
-SQLite integrity, and rehearse restoration into a private scratch directory.
-An on-host rollback snapshot is not a substitute for off-host disaster recovery.
+There is no production environment or user data. Deploy committed source with
+`contrib/deploy-development.py`; see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+The development fork and import/scheduler state may be rebuilt when useful for
+bootstrap testing. Do not delete the upstream mirror or unrelated repositories.
+Diagnostic backups are optional, not an incident-recovery gate.
 
 Build the tested Forgejo commit with `make TAGS="sqlite sqlite_unlock_notify" build`.
 Start with the original work path/configuration, allow normal startup migrations,
@@ -452,9 +455,9 @@ Provision separate repository-selected Git and import tokens directly into
 owner-only files; never show their values or put them in shell arguments. Verify
 the integration account, target repository, source grant and trusted base. Check
 existing work before changing review-only settings. A read-only plan must pass
-before an explicit expiring policy is enabled. Run and inspect one bounded round
-before enabling the user timer. Disable the timer and revoke the grant to stop
-future work; inspect uncertainty before clearing any incident latch.
+before running a worker round. Install the public committed profile, run and
+inspect a bounded round, then resume the user timer. Disable the timer and revoke
+the grant to stop future work. No persistent incident latch exists.
 
 Tokens do not bypass account activation or mandatory password changes. If
 Forgejo returns `403` requiring a password change, the account owner must finish

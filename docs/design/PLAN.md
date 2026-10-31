@@ -1,5 +1,9 @@
 # Lore Review Companion: Implementation Plan
 
+Read [../../CONSTITUTION.md](../../CONSTITUTION.md) first. This is early pre-alpha
+with disposable development fixtures and no production users. Public committed
+policy and no-incident-latch rules supersede older operational assumptions.
+
 This is living documentation. [LEDGER.md](LEDGER.md) records task status,
 dependencies, acceptance criteria, checks, and implementation commits. Update it
 when a step is verified; do not turn historical test reports into current results.
@@ -308,11 +312,12 @@ Keep existing conflict stops, worker locking, immutable revision membership,
 uncertain-write reconciliation, and explicit association policies. Renaming must
 not rewrite delivered effect IDs, markers, or old commit-generation identities.
 
-Production build, backup, restart/migration, scoped credential provisioning and
-review-only deployment are now explicitly authorized and tracked as P01-P08,
-including a bounded initial population of actual Xen threads and live review.
-Do not silently adopt historical pending writes or change shared SSH files.
-Back up the exact instance before migration and stop on failed safety gates.
+Development build, restart/migration and scoped credential provisioning are
+normal authorized work. There is no production deployment or mandatory backup
+ceremony. The designated `xen-review/xen` fork/state may be rebuilt from the
+upstream mirror to test current bootstrap source. Never delete unrelated
+repositories or expose credentials. Failures must not create persistent incident
+latches. Commit public policy changes and reconcile scheduling automatically.
 Disposable fixtures need independent
 HOME, database, repository and SSH roots, outbound mail disabled/captured,
 `DISABLE_SSH=true`, and `SSH_CREATE_AUTHORIZED_KEYS_FILE=false`.

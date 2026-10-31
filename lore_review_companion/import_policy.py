@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
-"""Explicit private authorization for a bounded unattended import worker."""
+"""Public, source-controlled configuration for the development import worker."""
 
 from __future__ import annotations
 
@@ -13,12 +13,14 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+DEFAULT_POLICY_PATH = Path(__file__).with_name("policies") / "xen-development.json"
+
 
 @dataclass(frozen=True)
 class ImportPolicy:
     version: int
     enabled: bool
-    expires_at: str
+    expires_at: str | None
     api_url: str
     owner: str
     repository: str
@@ -82,12 +84,11 @@ def read_import_policy(path: Path) -> ImportPolicy:
             info = os.fstat(descriptor)
             if (
                 not stat.S_ISREG(info.st_mode)
-                or info.st_uid != os.geteuid()
-                or info.st_mode & 0o077
+                or info.st_mode & 0o022
                 or not 1 <= info.st_size <= 16384
             ):
                 raise ValueError(
-                    "Import policy must be a private regular file owned by this user"
+                    "Import policy must be a regular file without group/world write permission"
                 )
             raw = os.read(descriptor, 16385)
         finally:
@@ -106,7 +107,11 @@ def read_import_policy(path: Path) -> ImportPolicy:
     try:
         value = json.loads(raw, object_pairs_hook=unique_object)
         policy = ImportPolicy(**value)
-        expires = datetime.fromisoformat(policy.expires_at)
+        expires = (
+            datetime.fromisoformat(policy.expires_at)
+            if policy.expires_at is not None
+            else None
+        )
     except (TypeError, UnicodeError, json.JSONDecodeError, ValueError) as error:
         raise ValueError("Import policy has an invalid schema") from error
     if (
@@ -115,7 +120,9 @@ def read_import_policy(path: Path) -> ImportPolicy:
         or policy.enabled is not True
     ):
         raise ValueError("Import policy is disabled or unsupported")
-    if expires.tzinfo is None or expires <= datetime.now(timezone.utc):
+    if expires is not None and (
+        expires.tzinfo is None or expires <= datetime.now(timezone.utc)
+    ):
         raise ValueError(
             "Import policy expiry must be an explicit future timezone-aware time"
         )

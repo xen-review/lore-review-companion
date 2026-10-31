@@ -1,5 +1,30 @@
 # Implementation Ledger
 
+Read [../../CONSTITUTION.md](../../CONSTITUTION.md) first. Historical production,
+private-policy and incident-latch restrictions in this ledger are superseded.
+This is an early pre-alpha experiment with disposable development fixtures.
+
+## Pre-Alpha Runtime Correction
+
+- Added agent-first constitutions in both repositories and explicitly documented
+  that this experiment has no production users or production deployment.
+- Removed worker and on-demand incident latches (`64dc519`). Failed attempts
+  report errors and later invocations retry. Changed policy digests reconcile
+  cursors automatically while preserving effect enrollment.
+- Added the public packaged Xen development profile: 240-hour overridable
+  lookback, no arbitrary expiry, idempotent same-key uncertain retry enabled.
+  Setup validates it instead of writing a private configuration copy. Tokens
+  and credential-bearing server configuration remain secret.
+- Added a committed development deployer with clean/pushed-source checks,
+  matched server assets, packaged-profile verification and service/worker
+  checks. Scoped fork/state rebuilds are authorized when useful; no upstream
+  mirror or unrelated repository may be deleted.
+- Checks before deployment: 396 companion tests pass, four expected skips;
+  the scoped Forgejo API suite passes with disposable real-companion acceptance
+  enabled. Three deployer tests cover dry-run, pushed-source enforcement and
+  secret-preserving configuration. Touched-file diagnostics and whitespace
+  checks pass. Actual deployment results are recorded separately after running.
+
 Updated: 2026-10-30. Design and boundaries: [PLAN.md](PLAN.md).
 
 Statuses: `TODO`, `IN PROGRESS`, `DONE`, `BLOCKED`, `DEFERRED`. `DONE` requires

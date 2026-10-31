@@ -1,8 +1,34 @@
 # Import Work Handoff
 
+Read [../../CONSTITUTION.md](../../CONSTITUTION.md) first. This is an early
+pre-alpha experiment: no production deployment and no users. The constitution
+supersedes every historical production/private-policy/incident-recovery rule
+below. The worker no longer creates or honors incident latch files. Policy is
+public, committed and installed with the package; scheduling reconciles it
+automatically. Credentials alone remain secret.
+
+## Current Development Operations
+
+- No-latch worker/recovery behavior and automatic policy-cursor reconciliation
+  are pushed as `64dc519`. Constitutions/agent entry points are pushed in both
+  repositories (`dc5d6dd6c5` in Forgejo, `9f76a96` in the companion).
+- The authoritative Xen policy is
+  [../../lore_review_companion/policies/xen-development.json](../../lore_review_companion/policies/xen-development.json),
+  with a configurable 240-hour lookback, no arbitrary expiry and same-key
+  uncertain-write retries. Do not create or restore a private policy copy.
+- Deploy and test with [../../contrib/deploy-development.py](../../contrib/deploy-development.py)
+  as described in [../DEVELOPMENT.md](../DEVELOPMENT.md). Commit/push first.
+- The user explicitly permits a full rebuild of `xen-review/xen` and its
+  experimental runtime data from `xen-project/xen` if useful. Never delete the
+  upstream mirror or unrelated repositories. A rebuild is not mandatory when
+  current data can be used for the development checks.
+- The implementation/review notes below are historical evidence, not permission
+  gates. In particular, old instructions to preserve a latch or wait for private
+  policy recovery are invalid. Current deployment results will be recorded here.
+
 Status captured 2026-10-31. Recheck live state before any write.
 
-## Current Implementation And Review
+## Historical Implementation And Review
 
 This section supersedes the earlier implementation limitations below.
 

@@ -7,7 +7,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import stat
 from dataclasses import asdict
 from pathlib import Path
 
@@ -16,6 +15,7 @@ from lore_review_companion.forge_api import ForgeAPI, read_private_token
 from lore_review_companion.forge_imports import ForgeImportClient
 from lore_review_companion.git_branches import GitHttpCredentials
 from lore_review_companion.ledger import Ledger
+from lore_review_companion.import_policy import DEFAULT_POLICY_PATH, read_import_policy
 from lore_review_companion.nntp_source import (
     discover_nntp_thread,
     fetch_nntp,
@@ -26,20 +26,8 @@ from lore_review_companion.review_queue import queue_imported_replies
 from lore_review_companion.series_sync import sync_imported_series_revision
 
 
-def read_deployment(config: Path) -> dict:
-    descriptor = os.open(config / "import-policy.json", os.O_RDONLY | os.O_NOFOLLOW)
-    with os.fdopen(descriptor) as stream:
-        info = os.fstat(stream.fileno())
-        if (
-            not stat.S_ISREG(info.st_mode)
-            or info.st_uid != os.geteuid()
-            or info.st_mode & 0o077
-            or info.st_size > 16384
-        ):
-            raise ValueError(
-                "Deployment configuration must be a private regular file owned by this user"
-            )
-        deployment = json.load(stream)
+def read_deployment(policy_path: Path = DEFAULT_POLICY_PATH) -> dict:
+    deployment = asdict(read_import_policy(policy_path))
     if deployment.get("source_url") != "https://lore.kernel.org/xen-devel/":
         raise ValueError("This script is for the Xen lore deployment")
     return deployment
@@ -56,6 +44,7 @@ def main(arguments=None) -> int:
         type=Path,
         default=Path.home() / ".local/state/lore-review-companion",
     )
+    parser.add_argument("--policy-file", type=Path, default=DEFAULT_POLICY_PATH)
     parser.add_argument(
         "--seed",
         required=True,
@@ -81,7 +70,7 @@ def main(arguments=None) -> int:
     if options.approve and options.command not in ("publish", "deliver"):
         parser.error("--approve is only accepted for publish/deliver")
     try:
-        deployment = read_deployment(options.config_dir)
+        deployment = read_deployment(options.policy_file)
         ledger = Ledger(
             options.state_dir / "mail.sqlite3",
             read_only=options.command in ("plan", "plan-delivery"),

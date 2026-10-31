@@ -23,3 +23,6 @@ lore-review-import-xen = "lore_review_companion.xen_import:main"
 
 [tool.setuptools]
 packages = ["lore_review_companion"]
+
+[tool.setuptools.package-data]
+lore_review_companion = ["policies/*.json"]

@@ -10,7 +10,7 @@ import os
 import secrets
 import stat
 import subprocess
-from datetime import datetime, timedelta, timezone
+from dataclasses import asdict
 from pathlib import Path
 
 from lore_review_companion.forge_api import ForgeAPI, ForgeAPIError, read_private_token
@@ -18,7 +18,7 @@ from lore_review_companion.forge_imports import ForgeImportClient
 from lore_review_companion.git_branches import GitHttpCredentials
 from lore_review_companion.import_worker import run_import_worker_round
 from lore_review_companion.ledger import Ledger
-
+from lore_review_companion.import_policy import DEFAULT_POLICY_PATH, read_import_policy
 
 SOURCE = "https://lore.kernel.org/xen-devel/"
 UPSTREAM = "https://github.com/xen-project/xen.git"
@@ -73,8 +73,17 @@ def optional(api: ForgeAPI, path: str):
 
 
 def provision_xen(
-    api: ForgeAPI, config: Path, state: Path, *, email: str, enable_policy: bool = False
+    api: ForgeAPI,
+    config: Path,
+    state: Path,
+    *,
+    email: str,
+    enable_policy: bool = False,
+    policy_path: Path = DEFAULT_POLICY_PATH,
 ) -> dict:
+    policy = asdict(read_import_policy(policy_path))
+    if policy["api_url"] != api.base_url:
+        raise ValueError("Setup API differs from the committed deployment policy")
     private_directory(config)
     private_directory(state)
     administrator = api.request_json("user")
@@ -229,10 +238,7 @@ def provision_xen(
         ["git", "--git-dir", str(repository), "cat-file", "-e", base + "^{commit}"],
         check=True,
     )
-    policy = {
-        "version": 1,
-        "enabled": enable_policy,
-        "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+    expected = {
         "api_url": api.base_url,
         "owner": "xen-review",
         "repository": "xen",
@@ -244,32 +250,22 @@ def provision_xen(
         "nntp_group": "org.xenproject.lists.xen-devel",
         "git_remote": review["clone_url"],
         "git_username": IMPORTER,
-        "base_commit": base,
-        "target_branch": branch,
-        "message_limit": 32,
-        "revision_limit": 2,
-        "max_inline_lines": min(50, capabilities["max_inline_lines"]),
-        "lookback_hours": 240,
-        "notifications": "disabled",
-        "identity_rule": "isolated-unverified",
-        "retry_uncertain": False,
     }
-    policy_path = config / "import-policy.json"
-    if policy_path.exists():
-        retained = json.loads(policy_path.read_text())
-        if any(
-            retained.get(key) != policy[key]
-            for key in (
-                "api_url",
-                "repository_id",
-                "importer_id",
-                "source_url",
-                "git_remote",
-            )
-        ):
-            raise ValueError("Existing policy belongs to another deployment")
-        return retained
-    write_private(policy_path, json.dumps(policy, indent=2) + "\n")
+    if any(policy.get(key) != value for key, value in expected.items()):
+        raise ValueError(
+            f"Bootstrap identities differ from committed policy; update and commit {policy_path}: {json.dumps(expected, sort_keys=True)}"
+        )
+    subprocess.run(
+        [
+            "git",
+            "--git-dir",
+            str(repository),
+            "cat-file",
+            "-e",
+            policy["base_commit"] + "^{commit}",
+        ],
+        check=True,
+    )
     return policy
 
 
@@ -288,6 +284,7 @@ def main(arguments=None) -> int:
         type=Path,
         default=Path.home() / ".local/state/lore-review-companion",
     )
+    parser.add_argument("--policy-file", type=Path, default=DEFAULT_POLICY_PATH)
     parser.add_argument(
         "--apply",
         action="store_true",
@@ -296,7 +293,7 @@ def main(arguments=None) -> int:
     parser.add_argument(
         "--enable-policy",
         action="store_true",
-        help="Authorize bounded imports for seven days; does not enable a timer",
+        help="Run imports using the enabled committed policy; does not enable a timer",
     )
     parser.add_argument(
         "--bootstrap-rounds",
@@ -311,7 +308,7 @@ def main(arguments=None) -> int:
         parser.error("Bootstrap requires --enable-policy and 0..32 rounds")
     if not options.apply:
         print(
-            "Plan: create review-companion; xen-project/Xen GitHub mirror with server defaults; xen-review Owners membership and fork; review-only grant; private selected-repo tokens, assembly clone and seven-day policy. Add --apply to provision; no requests made."
+            "Plan: create review-companion; xen-project/Xen GitHub mirror with server defaults; xen-review Owners membership and fork; review-only grant; secret selected-repo tokens and assembly clone; validate committed public policy. Add --apply to provision; no requests made."
         )
         return 0
     try:
@@ -327,6 +324,7 @@ def main(arguments=None) -> int:
             options.state_dir,
             email=options.email,
             enable_policy=options.enable_policy,
+            policy_path=options.policy_file,
         )
         print(
             json.dumps(
@@ -346,7 +344,7 @@ def main(arguments=None) -> int:
             result = run_import_worker_round(
                 Ledger(options.state_dir / "mail.sqlite3"),
                 options.state_dir / "xen.git",
-                options.config_dir / "import-policy.json",
+                options.policy_file,
                 options.state_dir / "worker.sqlite3",
                 runtime,
                 GitHttpCredentials(

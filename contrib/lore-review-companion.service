@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 [Unit]
-Description=Bounded policy-authorized lore review import
+Description=Pre-alpha lore review import with committed public policy
 
 [Service]
 Type=oneshot
 WorkingDirectory=%h/.local/share/lore-review-companion
-ExecStart=%h/.local/share/lore-review-companion/.venv/bin/lore-review-companion run-import-worker --policy-file %h/.config/lore-review-companion/import-policy.json --ledger %h/.local/state/lore-review-companion/mail.sqlite3 --repository %h/.local/state/lore-review-companion/xen.git --state %h/.local/state/lore-review-companion/worker.sqlite3 --token-file %h/.config/lore-review-companion/import-token --git-token-file %h/.config/lore-review-companion/git-token
+ExecStart=%h/.local/share/lore-review-companion/.venv/bin/lore-review-companion run-import-worker --ledger %h/.local/state/lore-review-companion/mail.sqlite3 --repository %h/.local/state/lore-review-companion/xen.git --state %h/.local/state/lore-review-companion/worker.sqlite3 --token-file %h/.config/lore-review-companion/import-token --git-token-file %h/.config/lore-review-companion/git-token
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
