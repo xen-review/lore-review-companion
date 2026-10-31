@@ -65,6 +65,19 @@ files, source snapshots and nested repositories are not part of these commits.
   import issue when it is missing; stop PR descriptions at a real diffstat;
   remove a trailing standalone `---` delimiter. Validate the diffstat pattern
   against the example in the issue and preserve existing publication replay.
+- Issue #35 source implementation is now pushed in companion `6814f37`
+  (quoted new PR descriptions and diffstat/trailing-delimiter handling),
+  `8feb442` (per-patch Signed-off-by blocking and Message-ID issue reporting),
+  and `46a723c` (continuous backlog draining followed by ten-minute Lore polls).
+  The complete companion suite passes 432 tests with four expected skips, and
+  `git diff --check` is clean. The disposable fork rebuild and deployment are
+  still pending, so these changes are not yet claimed as live behavior.
+- The `review-companion` account is already in the `xen-review` Owners team;
+  provisioning continues to verify that invariant but does not treat membership
+  as the cause of the prior 403. The failed unattended capability check was
+  caused by the missing explicit `review-import-grants/review-companion` grant
+  and stale repository safety settings; rebuild/setup must apply and verify
+  those settings before imports resume.
 - Submission quote presentation: companion `bb97957` and real-Forgejo fixture
   `362c7b6` are pushed. The installed wheel is stamped
   `362c7b66ff34/test-verify-submission-quote-formatting-against-forgejo`.
