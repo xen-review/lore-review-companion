@@ -794,7 +794,10 @@ class ImportedWorkflowAcceptanceTests(unittest.TestCase):
                 checkout,
                 (root,),
             )
-            self.assertEqual((queued.inline_count, queued.unresolved_count), (2, 1))
+            self.assertEqual(
+                (queued.inline_count, queued.unresolved_count, queued.standalone_count),
+                (2, 0, 1),
+            )
             review_plan = plan_import_delivery(
                 ledger, writer, pull_index, "IMPORT_REVIEW"
             )
@@ -845,9 +848,16 @@ class ImportedWorkflowAcceptanceTests(unittest.TestCase):
             conversation_plan = plan_import_delivery(
                 ledger, writer, pull_index, "IMPORT_CONVERSATION"
             )
-            conversation_body = conversation_plan.deliveries[0].payload["request"][
-                "body"
-            ]
+            conversation_body = next(
+                effect.payload["request"]["body"]
+                for effect in conversation_plan.deliveries
+                if effect.effect_key == "imported-full-message-v1"
+            )
+            standalone = next(
+                effect for effect in conversation_plan.deliveries
+                if effect.effect_key.startswith("quoted-remark-standalone-v1:")
+            )
+            self.assertEqual(standalone.payload["request"]["body"], "Commit description feedback.")
             self.assertIn(
                 "```rust\n> ---\n```\nCommit description feedback.", conversation_body
             )
@@ -864,8 +874,12 @@ class ImportedWorkflowAcceptanceTests(unittest.TestCase):
                     "IMPORT_CONVERSATION",
                     approved_digest=conversation_plan.approval_digest(),
                 ).delivered,
-                1,
+                2,
             )
+            standalone_remote = reader.lookup_operation(standalone.payload["request"]["operation_key"])
+            self.assertEqual(standalone_remote["type"], "conversation")
+            self.assertEqual(standalone_remote["message_id"], root.message_id)
+            self.assertGreater(standalone_remote["comment_id"], 0)
             ordinary_root = parse_message(
                 (
                     "From: Reviewer <reviewer@example.test>\nMessage-ID: <ordinary-root@example.test>\n"
