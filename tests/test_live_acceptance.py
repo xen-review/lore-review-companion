@@ -817,6 +817,26 @@ class ImportedWorkflowAcceptanceTests(unittest.TestCase):
                 review_request["comments"][0]["after_commit"],
                 review_request["head_commit"],
             )
+            with patch.object(writer, "import_review", side_effect=ForgeAPIError(422, "synthetic rejected review")):
+                failed = deliver_approved_imports(
+                    ledger, writer, pull_index, "IMPORT_REVIEW",
+                    approved_digest=review_plan.approval_digest(),
+                )
+            self.assertEqual((failed.delivered, failed.failed), (0, 1))
+            reports = [
+                comment for comment in ForgeAPI(api_url).request_json(
+                    f"repos/{owner}/{repo}/issues/{pull_index}/comments"
+                )
+                if "Companion import failure report" in comment.get("body", "")
+            ]
+            self.assertEqual(len(reports), 1)
+            self.assertEqual(reports[0]["user"]["login"], "user2")
+            self.assertIsNone(reports[0].get("review_import"))
+            self.assertIn("synthetic rejected review", reports[0]["body"])
+            self.assertIn(root.message_id, reports[0]["body"])
+            review_plan = plan_import_delivery(
+                ledger, writer, pull_index, "IMPORT_REVIEW", retry_uncertain=True
+            )
             transport = api.transport
             accepted_requests = []
 
@@ -841,6 +861,7 @@ class ImportedWorkflowAcceptanceTests(unittest.TestCase):
                     pull_index,
                     "IMPORT_REVIEW",
                     approved_digest=review_plan.approval_digest(),
+                    retry_uncertain=True,
                 )
             self.assertEqual((outcome.delivered, outcome.failed), (1, 0))
             self.assertEqual(len(accepted_requests), 2)
