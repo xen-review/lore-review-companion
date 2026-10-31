@@ -16,7 +16,11 @@ from lore_review_companion.forge_api import ForgeAPI, read_private_token
 from lore_review_companion.forge_imports import ForgeImportClient
 from lore_review_companion.git_branches import GitHttpCredentials
 from lore_review_companion.ledger import Ledger
-from lore_review_companion.nntp_source import discover_nntp_thread, fetch_nntp
+from lore_review_companion.nntp_source import (
+    discover_nntp_thread,
+    fetch_nntp,
+    nntp_source,
+)
 from lore_review_companion.outbox import deliver_approved_imports, plan_import_delivery
 from lore_review_companion.review_queue import queue_imported_replies
 from lore_review_companion.series_sync import sync_imported_series_revision
@@ -42,6 +46,7 @@ def read_deployment(config: Path) -> dict:
 
 
 def main(arguments=None) -> int:
+    """Run an explicitly scoped Xen import or recovery command."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--config-dir", type=Path, default=Path.home() / ".config/lore-review-companion"
@@ -82,6 +87,25 @@ def main(arguments=None) -> int:
             read_only=options.command in ("plan", "plan-delivery"),
         )
         if options.command == "recover":
+            incident = options.state_dir / "worker.sqlite3.incident"
+            if incident.exists():
+                raise ValueError(
+                    "Worker incident is latched; inspect the ledger before explicitly clearing its incident file"
+                )
+            source = nntp_source(deployment["nntp_host"], deployment["nntp_group"])
+            if not ledger.nntp_message_received(source, options.seed):
+                print(
+                    json.dumps(
+                        asdict(
+                            fetch_nntp(
+                                ledger,
+                                host=deployment["nntp_host"],
+                                group=deployment["nntp_group"],
+                                message_id=options.seed,
+                            )
+                        )
+                    )
+                )
             result = discover_nntp_thread(
                 ledger,
                 options.seed,

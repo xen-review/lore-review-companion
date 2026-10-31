@@ -1,12 +1,15 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
+import io
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from lore_review_companion.forge_api import ForgeAPI
+from lore_review_companion.nntp_source import NNTPFetch, NNTPThreadDiscovery
 from lore_review_companion.xen_setup import main, provision_xen
 from lore_review_companion.xen_import import main as import_main
 from test_forge_comments import FakeResponse
@@ -20,6 +23,119 @@ class XenSetupTests(unittest.TestCase):
                     ["--seed", "cover@example.test", "--revision", "1", command]
                 )
             self.assertEqual(error.exception.code, 2)
+
+    def test_on_demand_recovery_fetches_the_seed_before_thread_discovery(self):
+        """Fetch an unknown seed before attempting to discover its thread."""
+        deployment = {
+            "nntp_host": "nntp.lore.kernel.org",
+            "nntp_group": "org.xenproject.lists.xen-devel",
+            "source_url": "https://lore.kernel.org/xen-devel/",
+        }
+        events = []
+        ledger_instance = Mock()
+        ledger_instance.nntp_message_received.return_value = False
+        fetch_result = NNTPFetch(
+            "nntps://nntp.lore.kernel.org/org.xenproject.lists.xen-devel",
+            1,
+            0,
+            128,
+            0,
+            False,
+        )
+        thread_result = NNTPThreadDiscovery(fetch_result.source, 1, 0, 64, 128)
+
+        def fetch(ledger, **options):
+            """Record fetch ordering for the recovery test."""
+            events.append(("fetch", options.get("message_id")))
+            return fetch_result
+
+        def discover(ledger, message_id, **options):
+            """Record thread discovery ordering for the recovery test."""
+            events.append(("discover", message_id))
+            return thread_result
+
+        with tempfile.TemporaryDirectory() as temporary:
+            state_dir = Path(temporary) / "state"
+            state_dir.mkdir()
+            with (
+                patch(
+                    "lore_review_companion.xen_import.read_deployment",
+                    return_value=deployment,
+                ),
+                patch(
+                    "lore_review_companion.xen_import.Ledger",
+                    return_value=ledger_instance,
+                ),
+                patch("lore_review_companion.xen_import.fetch_nntp", side_effect=fetch),
+                patch(
+                    "lore_review_companion.xen_import.discover_nntp_thread",
+                    side_effect=discover,
+                ),
+                redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(
+                    import_main(
+                        [
+                            "--config-dir",
+                            str(Path(temporary) / "config"),
+                            "--state-dir",
+                            str(state_dir),
+                            "--seed",
+                            "cover@example.test",
+                            "--revision",
+                            "1",
+                            "recover",
+                        ]
+                    ),
+                    0,
+                )
+
+        self.assertEqual(
+            events,
+            [
+                ("fetch", "cover@example.test"),
+                ("discover", "cover@example.test"),
+                ("fetch", None),
+            ],
+        )
+
+    def test_on_demand_recovery_does_not_bypass_worker_incident_latch(self):
+        """Keep on-demand recovery blocked while a worker incident is latched."""
+        deployment = {
+            "nntp_host": "nntp.lore.kernel.org",
+            "nntp_group": "org.xenproject.lists.xen-devel",
+            "source_url": "https://lore.kernel.org/xen-devel/",
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            state_dir = Path(temporary) / "state"
+            state_dir.mkdir()
+            incident = state_dir / "worker.sqlite3.incident"
+            incident.write_text("latched\n")
+            with (
+                patch(
+                    "lore_review_companion.xen_import.read_deployment",
+                    return_value=deployment,
+                ),
+                patch("lore_review_companion.xen_import.Ledger", return_value=Mock()),
+                patch("lore_review_companion.xen_import.fetch_nntp") as fetch,
+                redirect_stdout(io.StringIO()),
+            ):
+                result = import_main(
+                    [
+                        "--config-dir",
+                        str(Path(temporary) / "config"),
+                        "--state-dir",
+                        str(state_dir),
+                        "--seed",
+                        "cover@example.test",
+                        "--revision",
+                        "1",
+                        "recover",
+                    ]
+                )
+                self.assertEqual(result, 1)
+                self.assertTrue(incident.exists())
+                fetch.assert_not_called()
 
     def test_on_demand_plan_has_no_write_client_and_exposes_digest(self):
         deployment = {

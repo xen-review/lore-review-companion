@@ -2604,6 +2604,23 @@ class Ledger:
             raise ValueError("Selected Message-ID is not pending for this NNTP source")
         return row["message_id"]
 
+    def queue_nntp_message(self, source: str, message_id: str) -> int:
+        """Queue one normalized article only after source initialization."""
+        normalized = _normalize_nntp_message_id(message_id)
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            checkpoint = connection.execute(
+                "SELECT 1 FROM nntp_checkpoints WHERE source = ?", (source,)
+            ).fetchone()
+            if not checkpoint:
+                raise ValueError("Run discover-nntp before queuing a selected article")
+            before = connection.total_changes
+            connection.execute(
+                "INSERT INTO nntp_message_queue (source, message_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
+                (source, normalized),
+            )
+            return connection.total_changes - before
+
     def nntp_message_received(self, source: str, message_id: str) -> bool:
         message_id = _normalize_nntp_message_id(message_id)
         with self._connection() as connection:

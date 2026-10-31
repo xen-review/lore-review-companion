@@ -42,6 +42,22 @@ MIN_FREE_BYTES = 256 * 1024 * 1024
 class NNTPSourceError(RuntimeError):
     """An NNTP operation failed without safely acknowledging its contents."""
 
+    def __init__(self, message: str, *, response_code: int | None = None):
+        """Retain the server response code alongside the safe error message."""
+        super().__init__(message)
+        self.response_code = response_code
+
+
+def _nntp_error(error: Exception) -> NNTPSourceError:
+    """Convert a library error into a bounded, typed source error."""
+    match = re.match(r"([1-5][0-9]{2})(?: |$)", str(error))
+    response_code = int(match.group(1)) if match else None
+    status = f" ({response_code})" if response_code is not None else ""
+    return NNTPSourceError(
+        f"NNTP server rejected a request{status}; pending work retained",
+        response_code=response_code,
+    )
+
 
 class _BoundedBuffer(io.BytesIO):
     def __init__(self, limit: int):
@@ -78,6 +94,7 @@ class NNTPFetch:
     has_more: bool
     receipt_times_verified: bool = False
     timeout_retries: int = 0
+    unavailable: int = 0
 
 
 @dataclass(frozen=True)
@@ -117,6 +134,7 @@ class NNTPWindowInspection:
 
 @contextmanager
 def _client(host: str):
+    """Open an NNTP client with bounded and typed protocol handling."""
     try:
         library = importlib.import_module("nntplib")
     except ImportError as error:
@@ -126,6 +144,13 @@ def _client(host: str):
 
     class UTCReader(library.NNTP_SSL):
         """The library's NEWNEWS helper omits the protocol's UTC selector."""
+
+        def article(self, message_spec, *, file=None):
+            """Fetch an article while preserving NNTP rejection codes."""
+            try:
+                return super().article(message_spec, file=file)
+            except library.NNTPError as error:
+                raise _nntp_error(error) from None
 
         def newnews(self, group, date, *, file=None):
             command = f"NEWNEWS {group} {date:%Y%m%d %H%M%S} GMT"
@@ -164,11 +189,7 @@ def _client(host: str):
         )
         yield connection
     except library.NNTPError as error:
-        match = re.match(r"([1-5][0-9]{2})(?: |$)", str(error))
-        status = f" ({match.group(1)})" if match else ""
-        raise NNTPSourceError(
-            f"NNTP server rejected a request{status}; pending work retained"
-        ) from None
+        raise _nntp_error(error) from None
     finally:
         if connection is not None:
             connection._close()
@@ -482,6 +503,7 @@ def fetch_nntp(
     timeout_retries: int = 0,
     client_factory: Callable = _client,
 ) -> NNTPFetch:
+    """Fetch bounded queued articles or one selected Message-ID safely."""
     source = nntp_source(host, group)
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 1000:
         raise ValueError("NNTP batch limit must be between 1 and 1000")
@@ -523,12 +545,15 @@ def fetch_nntp(
             )
         if ledger.nntp_checkpoint(source) is None:
             raise ValueError("Run discover-nntp before fetching queued articles")
+        single_message = message_id is not None
+        if single_message:
+            ledger.queue_nntp_message(source, message_id)
         pending = (
             (ledger.pending_nntp_message(source, message_id),)
             if message_id is not None
             else ledger.pending_nntp_messages(source, limit=limit, after=after)
         )
-        ingested = replayed = received = dependencies = retries_used = 0
+        ingested = replayed = received = dependencies = retries_used = unavailable = 0
         if pending:
             try:
                 with ExitStack() as connections:
@@ -539,6 +564,7 @@ def fetch_nntp(
                     for message_id in pending:
                         if batch_bytes - received < article_bytes:
                             break
+                        unavailable_item = False
                         while True:
                             if (
                                 shutil.disk_usage(ledger.path.parent).free
@@ -552,6 +578,12 @@ def fetch_nntp(
                                     response, article = client.article(
                                         f"<{message_id}>", file=output
                                     )
+                                except NNTPSourceError as error:
+                                    if single_message or error.response_code != 430:
+                                        raise
+                                    unavailable += 1
+                                    unavailable_item = True
+                                    break
                                 except (ValueError, IndexError):
                                     raise NNTPSourceError(
                                         "NNTP ARTICLE returned malformed data; item retained"
@@ -577,8 +609,12 @@ def fetch_nntp(
                                     )
                                     continue
                                 data = output.getvalue()
+                            if unavailable_item:
+                                break
                             received += len(data)
                             break
+                        if unavailable_item:
+                            continue
                         parsed = parse_message(data)
                         headers = BytesHeaderParser(policy=policy.default).parsebytes(
                             data
@@ -650,6 +686,7 @@ def fetch_nntp(
             dependencies,
             bool(ledger.pending_nntp_messages(source, limit=1)),
             timeout_retries=retries_used,
+            unavailable=unavailable,
         )
 
 

@@ -567,6 +567,31 @@ class NNTPSourceTests(unittest.TestCase):
                 )
         self.assertEqual(len(closed), len(cases))
 
+    def test_library_article_adapter_preserves_response_code(self):
+        """Preserve server response codes through the NNTP adapter."""
+        class FakeNNTPError(Exception):
+            pass
+
+        class LibraryClient:
+            def __init__(self, host, **options):
+                pass
+
+            def _close(self):
+                pass
+
+            def article(self, message_id, *, file=None):
+                raise FakeNNTPError("430 unavailable")
+
+        library = SimpleNamespace(NNTP_SSL=LibraryClient, NNTPError=FakeNNTPError)
+        with patch(
+            "lore_review_companion.nntp_source.importlib.import_module",
+            return_value=library,
+        ):
+            with _client("nntp.lore.kernel.org") as client:
+                with self.assertRaises(NNTPSourceError) as error:
+                    client.article("<missing@example.test>", file=io.BytesIO())
+        self.assertEqual(error.exception.response_code, 430)
+
     def test_source_rejects_command_injection_and_group_wildcards(self):
         for host, group in (
             ("host\r\nQUIT", "group"),
@@ -1094,6 +1119,32 @@ class NNTPSourceTests(unittest.TestCase):
                 )
                 self.assertEqual(self.ledger.status().messages, 0)
 
+    def test_fetch_by_new_message_id_queues_and_verifies_only_that_article(self):
+        """Fetch an explicit new message without consuming other queued articles."""
+        with self.assertRaisesRegex(ValueError, "discover-nntp"):
+            fetch_nntp(
+                self.ledger,
+                message_id="selected@example.test",
+                client_factory=self.factory,
+            )
+        discovery = discover_nntp(self.ledger, client_factory=self.factory)
+        self.additional_articles["<selected@example.test>"] = (
+            self.article_bytes.replace(b"mail@example.test", b"selected@example.test")
+        )
+
+        result = fetch_nntp(
+            self.ledger,
+            message_id="<selected@example.test>",
+            client_factory=self.factory,
+        )
+
+        self.assertEqual((result.ingested, result.has_more), (1, True))
+        self.assertEqual(
+            self.ledger.pending_nntp_messages(discovery.checkpoint.source),
+            ("mail@example.test",),
+        )
+        self.assertEqual(self.fetch_count, 1)
+
     def test_fetch_checks_article_number_in_selected_group(self):
         discovery = discover_nntp(self.ledger, client_factory=self.factory)
         cases = (
@@ -1200,6 +1251,45 @@ class NNTPSourceTests(unittest.TestCase):
         self.assertEqual(
             self.ledger.pending_nntp_messages(discovery.checkpoint.source), ()
         )
+
+    def test_batch_fetch_defers_unavailable_articles_but_explicit_fetch_raises(self):
+        """Keep unavailable batch articles pending and report explicit failures."""
+        self.discovery_bytes = (
+            b"<unavailable@example.test>\r\n<available@example.test>\r\n"
+        )
+        discovery = discover_nntp(self.ledger, client_factory=self.factory)
+        self.additional_articles["<available@example.test>"] = (
+            self.article_bytes.replace(b"mail@example.test", b"available@example.test")
+        )
+        client = self.factory("nntp.lore.kernel.org")
+        original_article = client.article
+
+        def unavailable_article(message_id, *, file):
+            if message_id == "<unavailable@example.test>":
+                raise NNTPSourceError(
+                    "NNTP server rejected a request (430); pending work retained",
+                    response_code=430,
+                )
+            return original_article(message_id, file=file)
+
+        with patch.object(client, "article", side_effect=unavailable_article):
+            result = fetch_nntp(
+                self.ledger, limit=2, client_factory=lambda host: client
+            )
+            self.assertEqual(
+                (result.ingested, result.unavailable, result.has_more), (1, 1, True)
+            )
+            self.assertEqual(
+                self.ledger.pending_nntp_messages(discovery.checkpoint.source),
+                ("unavailable@example.test",),
+            )
+            with self.assertRaisesRegex(NNTPSourceError, r"\(430\)"):
+                fetch_nntp(
+                    self.ledger,
+                    message_id="unavailable@example.test",
+                    client_factory=lambda host: client,
+                )
+        self.assertEqual(self.ledger.status().messages, 1)
 
     def test_fetch_reconnects_only_uncommitted_article_after_timeout(self):
         self.discovery_bytes = b"<mail@example.test>\r\n<second@example.test>\r\n"
@@ -1442,15 +1532,23 @@ class NNTPSourceTests(unittest.TestCase):
         with self.assertRaisesRegex(PublicationConflict, "ancestry is incomplete"):
             self.ledger.assert_message_ancestry_available((parse_message(later),))
         fetch_count = self.fetch_count
-        for selected in ("later@example.test", "unknown@example.test"):
-            with (
-                self.subTest(selected=selected),
-                self.assertRaisesRegex(ValueError, "not pending"),
-            ):
-                fetch_nntp(
-                    self.ledger, message_id=selected, client_factory=self.factory
-                )
-        self.assertEqual(self.fetch_count, fetch_count)
+        with self.assertRaisesRegex(ValueError, "not pending"):
+            fetch_nntp(
+                self.ledger,
+                message_id="later@example.test",
+                client_factory=self.factory,
+            )
+        with self.assertRaisesRegex(NNTPSourceError, "did not match"):
+            fetch_nntp(
+                self.ledger,
+                message_id="unknown@example.test",
+                client_factory=self.factory,
+            )
+        self.assertEqual(self.fetch_count, fetch_count + 1)
+        self.assertEqual(
+            self.ledger.pending_nntp_messages(discovery.checkpoint.source),
+            ("mail@example.test", "unknown@example.test"),
+        )
 
     def test_fetch_after_cursor_retains_earlier_pending_messages(self):
         self.discovery_bytes = (
