@@ -193,7 +193,7 @@ def _message_issue_exists(client, issue_title):
     while True:
         issues = client.api.request_json(
             f"{client.repository_path}/issues",
-            params={"state": "all", "type": "issues", "q": issue_title, "limit": 50, "page": page},
+            params={"state": "all", "type": "issues", "limit": 50, "page": page},
         )
         if not isinstance(issues, list):
             raise ValueError("Forgejo returned an invalid issue list")
