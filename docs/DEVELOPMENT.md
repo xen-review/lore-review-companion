@@ -65,6 +65,9 @@ The single worker continues through the persisted scheduling cursors without a
 per-run message limit. Before work and Forgejo writes it waits while the one-minute
 load average exceeds online CPUs or the filesystem containing Forgejo has less
 than 1 GB free. It rechecks after ten seconds while either condition persists.
+After a drained round or a failed round, it waits ten minutes before trying again;
+backlog pages run without that delay. See [the worker guide](worker.rst) for the
+round lifecycle, monitoring, and authorization troubleshooting.
 
 ## Disposable Fork Rebuild
 

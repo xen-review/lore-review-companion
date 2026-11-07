@@ -4,6 +4,10 @@
 pre-alpha experiment, with no production deployment or users. Policies and
 deployment instructions are public committed source; only credentials are secret.
 
+The [developer documentation](docs/index.rst) includes the worker lifecycle,
+monitoring guidance, and Python API reference. It can be built locally or hosted
+on Read the Docs.
+
 Mirror mailing-list patch series and review discussions into a dedicated
 Forgejo repository, starting with `xen-devel` on lore.kernel.org. The companion
 is deterministic Python software; it does not require a runtime LLM.
