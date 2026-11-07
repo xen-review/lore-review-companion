@@ -43,6 +43,7 @@ from lore_review_companion.series_sync import sync_imported_series_revision
 
 PAGE_SIZE = 1000
 REVISION_PAGE_SIZE = 1000
+POLL_INTERVAL_SECONDS = 600
 
 
 def wait_for_resources(forge_path: Path) -> None:
@@ -414,11 +415,11 @@ def run_import_worker(
                               "delivered": result.delivered, "diagnostics": result.diagnostics}), flush=True)
             poll_source = False
             if not result.backlog_pending:
-                time.sleep(600)
+                time.sleep(POLL_INTERVAL_SECONDS)
                 poll_source = True
         except Exception as error:
             print(json.dumps({"error_type": type(error).__name__, "error": str(error)}), flush=True)
-            time.sleep(1)
+            time.sleep(POLL_INTERVAL_SECONDS)
 
 
 def _run_import_worker_round(

@@ -145,6 +145,21 @@ class SeriesSyncTests(unittest.TestCase):
         self.assertEqual([call.kwargs["poll_source"] for call in run.call_args_list], [True, False, False, True])
         self.assertIsNotNone(self.api.before_write)
 
+    def test_continuous_worker_delays_failures_and_retries(self):
+        idle = SimpleNamespace(considered=0, published=0, delivered=0, diagnostics=(), backlog_pending=False)
+        output = StringIO()
+        with (
+            patch("lore_review_companion.import_worker.run_import_worker_round", side_effect=[RuntimeError("unavailable"), RuntimeError("unavailable"), idle, KeyboardInterrupt]) as run,
+            patch("lore_review_companion.import_worker.time.sleep") as sleeper,
+            redirect_stdout(output),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            run_import_worker(self.ledger, self.repository, self.repository / "policy",
+                              self.repository / "state", self.api, object(), forge_path=self.repository)
+        self.assertEqual(sleeper.call_args_list, [unittest.mock.call(600)] * 3)
+        self.assertEqual([call.kwargs["poll_source"] for call in run.call_args_list], [True] * 4)
+        self.assertEqual([json.loads(line).get("error") for line in output.getvalue().splitlines()[:2]], ["unavailable"] * 2)
+
     def test_forge_api_checks_resources_before_each_write(self):
         guard_calls = []
         api = ForgeAPI("https://gitea.test/api/v1/", transport=lambda _request, _timeout: FakeResponse(200, {}),
