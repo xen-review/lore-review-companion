@@ -12,7 +12,6 @@ from lore_review_companion.forge_api import ForgeAPI
 from lore_review_companion.nntp_source import NNTPFetch, NNTPThreadDiscovery
 from lore_review_companion.import_policy import DEFAULT_POLICY_PATH
 from lore_review_companion.xen_setup import (
-    SAFETY,
     main,
     provision_xen,
     rebuild_development_fork,
@@ -419,7 +418,6 @@ class XenSetupTests(unittest.TestCase):
                 "PATCH",
                 "repos/xen-review/xen",
                 {
-                    **SAFETY,
                     "has_issues": True,
                     "has_pull_requests": True,
                     "default_branch": "staging",

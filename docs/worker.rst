@@ -88,13 +88,14 @@ the retry interval described here.
 
 A Forgejo capabilities HTTP 403 blocks the round before source refresh. Check
 the response and the repository's import grant, importer permissions, policy
-identity, and review-only settings. For unattended import Forgejo also requires
-Actions to be disabled, code and pull requests to be enabled, merge and
-maintainer-edit options to be disabled, and no applicable active webhooks or
-secrets. Do not weaken these checks or silently change a repository's settings
-to hide the error. Restore the intended grant and review-only configuration
-only after reviewing the impact, then wait for the next retry or restart the
-service. Other authorization failures can have different causes.
+identity, and server safety policy. Current Forgejo requires code and pull
+requests enabled and no applicable active webhooks or repository/owner secrets.
+Actions and merge, rebase, update and maintainer-edit settings do not prevent
+unattended imports. Earlier Forgejo revisions may impose additional restrictions.
+Do not silently change repository settings to hide an error; review the impact
+before changing a grant, webhook or secret. Wait for the next retry or restart
+the service after resolving the cause. Other authorization failures can have
+different causes.
 
 Source/archive errors and uncertain writes require their own diagnostics;
 they are not resolved merely by restarting the worker. Keep tokens out of shell

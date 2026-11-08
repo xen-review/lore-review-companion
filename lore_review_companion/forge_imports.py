@@ -91,7 +91,7 @@ class ForgeImportClient:
             )
         if self.unattended and result.get("unattended_allowed") is not True:
             raise ValueError(
-                "Unattended review imports are disabled or the repository is not review-only"
+                "Unattended review imports are not permitted by the server's grant or repository safety policy"
             )
         if self.capability_guard is not None:
             self.capability_guard(result)

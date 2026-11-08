@@ -25,9 +25,11 @@ profiles nor their source addresses gain login credentials or permissions.
   clone, retained raw mail and recovery snapshots. Budget multiple GiB and
   monitor growth; this is not a full-history archive deployment.
 - No active global/inherited/system hooks or owner/repository secrets on the
-  review destination. The script disables its Actions and merge/update/head-edit
-  settings. The server refuses unattended grants if other hazards remain; the
-  script does not silently delete hooks or secrets.
+  review destination. The script leaves Actions and merge/update/head-edit
+  settings unchanged. The server refuses unattended grants if the required
+  safety conditions are not met; the script does not delete hooks or secrets.
+  This requires a Forgejo revision supporting unattended imports with those
+  settings enabled.
 
 Install from the companion checkout:
 

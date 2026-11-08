@@ -23,21 +23,6 @@ from lore_review_companion.import_policy import DEFAULT_POLICY_PATH, read_import
 SOURCE = "https://lore.kernel.org/xen-devel/"
 UPSTREAM = "https://github.com/xen-project/xen.git"
 IMPORTER = "review-companion"
-SAFETY = {
-    name: False
-    for name in (
-        "has_actions",
-        "allow_merge_commits",
-        "allow_rebase",
-        "allow_rebase_explicit",
-        "allow_squash_merge",
-        "allow_fast_forward_only_merge",
-        "allow_manual_merge",
-        "autodetect_manual_merge",
-        "allow_rebase_update",
-        "default_allow_maintainer_edit",
-    )
-}
 
 
 def private_directory(path: Path) -> None:
@@ -228,7 +213,6 @@ def provision_xen(
         "repos/xen-review/xen",
         method="PATCH",
         payload={
-            **SAFETY,
             "has_issues": True,
             "has_pull_requests": True,
             "default_branch": policy["target_branch"],
@@ -388,7 +372,7 @@ def main(arguments=None) -> int:
             )
             return 0
         print(
-            "Plan: create review-companion; xen-project/Xen GitHub mirror with server defaults; xen-review Owners membership and fork; review-only grant; secret selected-repo tokens and assembly clone; validate committed public policy. Add --apply to provision; no requests made."
+            "Plan: create review-companion; xen-project/Xen GitHub mirror with server defaults; xen-review Owners membership and fork; source-bound unattended grant; secret selected-repo tokens and assembly clone; validate committed public policy. Add --apply to provision; no requests made."
         )
         return 0
     try:
